@@ -14,6 +14,7 @@
 #include "MassObserverNotificationTypes.h"
 #include "Components/SplineMeshComponent.h"
 
+// TODO 传送带参数可以进一步丰富，比如宽度(常量)、材质、速度等
 FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
 {
     if (ControlPoints.Num() < 2) return FZoneGraphDataHandle();
@@ -103,21 +104,33 @@ FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& C
     return RegisteredHandle;
 }
 
-void UMassDspManager::SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, UMassEntityConfigAsset* ItemConfig, int32 Count)
+bool UMassDspManager::SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, UMassEntityConfigAsset* ItemConfig)
 {
-    if (!ItemConfig) return;
+    if (!ItemConfig) return false;
     UWorld* World = GetWorld();
     UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
     UZoneGraphSubsystem* ZGSubsystem = World->GetSubsystem<UZoneGraphSubsystem>();
     const AZoneGraphData* ZoneDataActor = ZGSubsystem->GetZoneGraphData(DataHandle);
-    if (!ZoneDataActor) return;
+    if (!ZoneDataActor) return false;
     const FZoneGraphStorage* StoragePtr = &ZoneDataActor->GetStorage();
 
-    MassSubsystem->GetMutableEntityManager().Defer().PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, Count, DataHandle, StoragePtr](FMassEntityManager& InEntityManager) {
+    // 检查这条车道的最后一个物品是否还在0附近
+    auto Items = LaneRegistry.Find(FZoneGraphLaneHandle(0, DataHandle));
+    if (Items && Items->Entities.Num() > 0) {
+        const FBeltItemFragment& Item = MassSubsystem->GetEntityManager().GetFragmentDataChecked<FBeltItemFragment>(Items->Entities[0]);
+        const float HalfLength = Item.HalfLength;
+        const float MinSpacing = 20.0f;
+        // TODO 这俩参数后面都放mgr里做常量
+        if (Item.DistanceAlongBelt <= HalfLength * 2 + MinSpacing) {
+            return false;
+        }
+    }
+
+    MassSubsystem->GetMutableEntityManager().Defer().PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, DataHandle, StoragePtr](FMassEntityManager& InEntityManager) {
         const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
         TArray<FMassEntityHandle> NewEntities;
 
-        auto CreationContext = InEntityManager.BatchCreateEntities(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues(), Count, NewEntities);
+        auto CreationContext = InEntityManager.BatchCreateEntities(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues(), 1, NewEntities);
         InEntityManager.BatchSetEntityFragmentValues(CreationContext->GetEntityCollections(InEntityManager), EntityTemplate.GetInitialFragmentValues());
 
         for (int32 i = 0; i < NewEntities.Num(); ++i)
@@ -135,4 +148,6 @@ void UMassDspManager::SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, UMassEnt
             LaneRegistry.FindOrAdd(LaneLoc.LaneHandle).Entities.Add(Entity);
         }
         });
+
+    return true;
 }

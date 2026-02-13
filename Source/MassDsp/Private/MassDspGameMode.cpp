@@ -16,5 +16,5 @@ void AMassDspGameMode::BeginPlay()
     CurvePoints.Add(FVector(5000, 0, 100));
 
     FZoneGraphDataHandle Handle = DysonSub->CreateRuntimeBelt(CurvePoints, ConveyorMesh);
-    DysonSub->SpawnItemsOnBelt(Handle, BeltItemConfigAsset, 10);
+    DysonSub->SpawnItemsOnBelt(Handle, BeltItemConfigAsset);
 }
