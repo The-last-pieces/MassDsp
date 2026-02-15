@@ -35,13 +35,17 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
     }
 
     // 1. 创建一个新的实体
-    // 注意：在实际生产中，应该使用 Archetype (ArchetypeHandle) 来创建实体以提高性能
-    // 这里为了通用性和演示，我们动态添加 Fragments
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-    FMassEntityHandle EntityHandle = EntityManager.CreateEntity(FMassArchetypeHandle());
+    
+    // 直接创建包含所需 Fragment 的 Archetype
+    const FMassArchetypeHandle ArchetypeHandle = EntityManager.CreateArchetype({
+        FMassDspBuildingFragment::StaticStruct(),
+        FMassDspBuildingSlotsFragment::StaticStruct()
+    });
 
-    // 2. 添加建筑基础 Fragment
-    EntityManager.AddFragmentToEntity(EntityHandle, FMassDspBuildingFragment::StaticStruct());
+    FMassEntityHandle EntityHandle = EntityManager.CreateEntity(ArchetypeHandle);
+
+    // 2. 初始化建筑基础 Fragment
     FMassDspBuildingFragment* BuildingFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingFragment>(EntityHandle);
     if (BuildingFragment)
     {
@@ -50,7 +54,7 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
     }
 
     // 3. 处理槽口信息并添加到 Fragment
-    EntityManager.AddFragmentToEntity(EntityHandle, FMassDspBuildingSlotsFragment::StaticStruct());
+    // 不需要再 AddFragmentFromEntity 了，因为 Entity 已经有了
     FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EntityHandle);
     
     if (SlotsFragment)
