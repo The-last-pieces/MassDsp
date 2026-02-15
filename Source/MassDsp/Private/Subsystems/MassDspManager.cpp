@@ -4,6 +4,10 @@
 #include "Subsystems/MassDspManager.h"
 #include "Fragments/BeltItemFragment.h"
 
+// 引入新定义的类
+#include "Actors/MassDspBuilding.h"
+#include "Fragments/MassDspBuildingFragment.h"
+
 #include "ZoneGraphSubsystem.h"
 #include "ZoneGraphData.h"
 #include "MassEntitySubsystem.h"
@@ -13,6 +17,81 @@
 #include "MassEntityConfigAsset.h"
 #include "MassObserverNotificationTypes.h"
 #include "Components/SplineMeshComponent.h"
+#include "MassActorSubsystem.h" // 如果需要 Actor 桥接的话
+#include "MassExecutor.h" // 确保有执行上下文相关引用
+
+FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* BuildingActor)
+{
+    if (!BuildingActor)
+    {
+        return FMassEntityHandle();
+    }
+
+    // 获取 Mass 实体子系统
+    UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+    if (!EntitySubsystem)
+    {
+        return FMassEntityHandle();
+    }
+
+    // 1. 创建一个新的实体
+    // 注意：在实际生产中，应该使用 Archetype (ArchetypeHandle) 来创建实体以提高性能
+    // 这里为了通用性和演示，我们动态添加 Fragments
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    FMassEntityHandle EntityHandle = EntityManager.CreateEntity(FMassArchetypeHandle());
+
+    // 2. 添加建筑基础 Fragment
+    EntityManager.AddFragmentToEntity(EntityHandle, FMassDspBuildingFragment::StaticStruct());
+    FMassDspBuildingFragment* BuildingFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingFragment>(EntityHandle);
+    if (BuildingFragment)
+    {
+        BuildingFragment->BuildingActor = BuildingActor;
+        BuildingFragment->State = 0; // 默认闲置
+    }
+
+    // 3. 处理槽口信息并添加到 Fragment
+    EntityManager.AddFragmentToEntity(EntityHandle, FMassDspBuildingSlotsFragment::StaticStruct());
+    FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EntityHandle);
+    
+    if (SlotsFragment)
+    {
+        const FTransform ActorTransform = BuildingActor->GetActorTransform();
+        
+        for (const FBuildingSlotDef& SlotDef : BuildingActor->Slots)
+        {
+            FBuildingSlotState NewSlotState;
+            // 计算世界空间变换
+            FTransform WorldSlotTransform = SlotDef.LocalTransform * ActorTransform;
+            
+            NewSlotState.WorldLocation = WorldSlotTransform.GetLocation();
+            NewSlotState.WorldRotation = WorldSlotTransform.GetRotation();
+            NewSlotState.Type = SlotDef.SlotType;
+            NewSlotState.bConnected = false; 
+            
+            SlotsFragment->AddSlot(NewSlotState);
+        }
+    }
+
+    // 4. (可选) 如果你希望使用 MassActorSubsystem 来管理 Actor 生命周期同步
+    // EntityManager.AddFragment<FMassActorFragment>(EntityHandle); 
+    // FMassActorFragment* ActorFragment = EntityManager.GetFragmentDataPtr<FMassActorFragment>(EntityHandle);
+    // ActorFragment->Set(BuildingActor);
+
+    return EntityHandle;
+}
+
+FMassEntityHandle UMassDspManager::CreateEntityWithFragments(const FMassEntityTemplate& EntityTemplate)
+{
+    // 实现通用的创建逻辑
+    UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+    if (!EntitySubsystem) return FMassEntityHandle();
+    
+    // 这里仅作示例，实际通常是通过 Template 这里的 Archetype 来创建
+    // FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    // return EntityManager.CreateEntity(EntityTemplate.GetArchetype());
+    
+    return FMassEntityHandle();
+}
 
 // TODO 传送带参数可以进一步丰富，比如宽度(常量)、材质、速度等
 FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
