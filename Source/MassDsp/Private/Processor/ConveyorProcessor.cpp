@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+ï»¿// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "Processor/ConveyorProcessor.h"
@@ -29,13 +29,13 @@ void UConveyorProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& 
 {
     EntityQuery.AddRequirement<FBeltItemFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
-    // ĞŞ¸ÄÎª ReadWrite ÒÔ±ã¸üĞÂ»º´æ
+    // ä¿®æ”¹ä¸º ReadWrite ä»¥ä¾¿æ›´æ–°ç¼“å­˜
     EntityQuery.AddRequirement<FMassZoneGraphCachedLaneFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FMassZoneGraphLaneLocationFragment>(EMassFragmentAccess::ReadOnly);
     EntityQuery.RegisterWithProcessor(*this);
 }
 
-// ÓÅ»¯ºóµÄÇáÁ¿¼¶½á¹¹Ìå£¬ÓÃÓÚÅÅĞòºÍÂß¼­¼ÆËã
+// ä¼˜åŒ–åçš„è½»é‡çº§ç»“æ„ä½“ï¼Œç”¨äºæ’åºå’Œé€»è¾‘è®¡ç®—
 struct FBeltWorkerData
 {
     FMassEntityHandle Entity;
@@ -43,18 +43,18 @@ struct FBeltWorkerData
     float HalfLength = 0.0f;
     FBeltItemFragment* ItemFrag = nullptr;
     FTransformFragment* TransFrag = nullptr;
-    // È¥µô const£¬ÔÊĞíĞŞ¸Ä
+    // å»æ‰ constï¼Œå…è®¸ä¿®æ”¹
     FMassZoneGraphCachedLaneFragment* CachedLaneFrag = nullptr; 
 };
 
 //void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 //{
-//    // »ñÈ¡ ZoneGraphSubsystem ÓÃÓÚ¼ìË÷Êı¾İ´æ´¢
+//    // è·å– ZoneGraphSubsystem ç”¨äºæ£€ç´¢æ•°æ®å­˜å‚¨
 //    UZoneGraphSubsystem* ZoneGraphSubsystem = Context.GetWorld()->GetSubsystem<UZoneGraphSubsystem>();
 //    if (!ZoneGraphSubsystem) return;
 //
-//    // 1. ·Ö×éÊı¾İ×¼±¸ (Key ÊÇ LaneHandle, Value ÊÇ¸Ã³µµÀÉÏµÄÎïÌåÁĞ±í)
-//    // Ê¹ÓÃ TMap »º´æ£¬½¨Òé½«´Ë Map ¶¨ÒåÎªÀà³ÉÔ±ÒÔ¸´ÓÃÄÚ´æ£¬±ÜÃâÃ¿Ö¡·ÖÅä
+//    // 1. åˆ†ç»„æ•°æ®å‡†å¤‡ (Key æ˜¯ LaneHandle, Value æ˜¯è¯¥è½¦é“ä¸Šçš„ç‰©ä½“åˆ—è¡¨)
+//    // ä½¿ç”¨ TMap ç¼“å­˜ï¼Œå»ºè®®å°†æ­¤ Map å®šä¹‰ä¸ºç±»æˆå‘˜ä»¥å¤ç”¨å†…å­˜ï¼Œé¿å…æ¯å¸§åˆ†é…
 //    TMap<FZoneGraphLaneHandle, TArray<FBeltWorkerData>> LaneGroups;
 //
 //    EntityQuery.ForEachEntityChunk(Context, ([&LaneGroups](FMassExecutionContext& QueryContext) {
@@ -79,11 +79,11 @@ struct FBeltWorkerData
 //        }
 //        }));
 //
-//    // 2. ½«·Ö×é½á¹û×ªÎªÊı×é£¬·½±ã ParallelFor ´¦Àí
+//    // 2. å°†åˆ†ç»„ç»“æœè½¬ä¸ºæ•°ç»„ï¼Œæ–¹ä¾¿ ParallelFor å¤„ç†
 //    TArray<FZoneGraphLaneHandle> ActiveLanes;
 //    LaneGroups.GetKeys(ActiveLanes);
 //
-//    // 3. ²¢ĞĞ´¦ÀíÃ¿Ò»Ìõ³µµÀ (ParallelFor)
+//    // 3. å¹¶è¡Œå¤„ç†æ¯ä¸€æ¡è½¦é“ (ParallelFor)
 //    const float DeltaTime = Context.GetDeltaTimeSeconds();
 //    const float Speed = 300.0f;
 //    const float MinSpacing = 10.0f;
@@ -91,13 +91,13 @@ struct FBeltWorkerData
 //    ParallelFor(ActiveLanes.Num(), [&](int32 LaneIdx) {
 //        FZoneGraphLaneHandle LaneHandle = ActiveLanes[LaneIdx];
 //        
-//        // ¹Ø¼üµã£ºÃ¿Ìõ³µµÀÖ»»ñÈ¡Ò»´Î´æ´¢Ö¸Õë
+//        // å…³é”®ç‚¹ï¼šæ¯æ¡è½¦é“åªè·å–ä¸€æ¬¡å­˜å‚¨æŒ‡é’ˆ
 //        const FZoneGraphStorage* ZoneStorage = ZoneGraphSubsystem->GetZoneGraphStorage(LaneHandle.DataHandle);
 //        if (!ZoneStorage) return;
 //
 //        TArray<FBeltWorkerData>& ItemsOnLane = LaneGroups[LaneHandle];
 //
-//        // Ö»¶ÔÕâÒ»Ìõ³µµÀÄÚµÄÎïÌå½øĞĞÅÅĞò (N ·Ç³£Ğ¡£¬ÅÅĞò¼«¿ì)
+//        // åªå¯¹è¿™ä¸€æ¡è½¦é“å†…çš„ç‰©ä½“è¿›è¡Œæ’åº (N éå¸¸å°ï¼Œæ’åºæå¿«)
 //        ItemsOnLane.Sort([](const FBeltWorkerData& A, const FBeltWorkerData& B) {
 //            return A.Distance > B.Distance;
 //            });
@@ -106,13 +106,13 @@ struct FBeltWorkerData
 //
 //        for (FBeltWorkerData& Data : ItemsOnLane)
 //        {
-//            // ²ßÂÔµã£ºÊ¹ÓÃ½Ï´óµÄ InflateDistance (Èç 500µ¥Î») ¼õÉÙÕæÕıµÄÖØ²ÉÑù·¢ÉúÆµÂÊ
-//            // ¶ÔÓÚ´«ËÍ´ø£¬TargetDistance ¿ÉÒÔÖ±½ÓÉèÎª LaneLength (³µµÀ×Ü³¤)
+//            // ç­–ç•¥ç‚¹ï¼šä½¿ç”¨è¾ƒå¤§çš„ InflateDistance (å¦‚ 500å•ä½) å‡å°‘çœŸæ­£çš„é‡é‡‡æ ·å‘ç”Ÿé¢‘ç‡
+//            // å¯¹äºä¼ é€å¸¦ï¼ŒTargetDistance å¯ä»¥ç›´æ¥è®¾ä¸º LaneLength (è½¦é“æ€»é•¿)
 //            constexpr float InflateDistance = 1000.0f;
 //            Data.CachedLaneFrag->CacheLaneData(*ZoneStorage, LaneHandle, 
 //                Data.Distance, Data.CachedLaneFrag->LaneLength, InflateDistance);
 //
-//            // ÒµÎñÂß¼­¼ÆËã
+//            // ä¸šåŠ¡é€»è¾‘è®¡ç®—
 //            float DesiredDistance = Data.Distance + Speed * DeltaTime;
 //            float MaxPos = LastItemTail - Data.HalfLength - MinSpacing;
 //
@@ -129,7 +129,7 @@ struct FBeltWorkerData
 //
 //            LastItemTail = Data.ItemFrag->DistanceAlongBelt - Data.HalfLength;
 //
-//            // ¸üĞÂ Transform
+//            // æ›´æ–° Transform
 //            FVector OutPos, OutTangent;
 //            Data.CachedLaneFrag->GetPointAndTangentAtDistance(Data.ItemFrag->DistanceAlongBelt, OutPos, OutTangent);
 //            OutPos.Z += 20.f;
@@ -138,7 +138,7 @@ struct FBeltWorkerData
 //            TargetTransform.SetLocation(OutPos);
 //            TargetTransform.SetRotation(OutTangent.Rotation().Quaternion());
 //        }
-//        }, EParallelForFlags::None); // Èç¹ûÎïÌå¼«¶à£¬¿ªÆô´Ë²¢ĞĞ
+//        }, EParallelForFlags::None); // å¦‚æœç‰©ä½“æå¤šï¼Œå¼€å¯æ­¤å¹¶è¡Œ
 //}
 
 void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
@@ -151,15 +151,15 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
     const float Speed = 400.0f;
     const float MinSpacing = 20.0f;
 
-    // --- ÓÅ»¯ A: »ñÈ¡²¢»º´æËùÓĞ»îÔ¾³µµÀ¾ä±ú ---
+    // --- ä¼˜åŒ– A: è·å–å¹¶ç¼“å­˜æ‰€æœ‰æ´»è·ƒè½¦é“å¥æŸ„ ---
     TArray<FZoneGraphLaneHandle> ActiveLanes;
     MassDspManager->LaneRegistry.GetKeys(ActiveLanes);
 
-    // --- ÓÅ»¯ B: ²¢ĞĞ´¦Àí³µµÀ (ParallelFor) ---
+    // --- ä¼˜åŒ– B: å¹¶è¡Œå¤„ç†è½¦é“ (ParallelFor) ---
     ParallelFor(ActiveLanes.Num(), [&](int32 LaneIdx) {
         const FZoneGraphLaneHandle& LaneHandle = ActiveLanes[LaneIdx];
 
-        // ÓÉÓÚ TMap µÄ Find ÔÚ²»ĞŞ¸Ä Map Ê±ÊÇÏß³Ì°²È«µÄ
+        // ç”±äº TMap çš„ Find åœ¨ä¸ä¿®æ”¹ Map æ—¶æ˜¯çº¿ç¨‹å®‰å…¨çš„
         auto* LaneData = MassDspManager->LaneRegistry.Find(LaneHandle);
         if (!LaneData || LaneData->Entities.Num() == 0) return;
 
@@ -173,19 +173,19 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
         {
             FMassEntityHandle Entity = Entities[i];
 
-            // --- ÓÅ»¯ C: ²é±íËäÈ»ÓĞ¿ªÏú£¬µ«ÔÚ²¢ĞĞÖĞ·ÖÌ¯ÁË CPU Ñ¹Á¦ ---
+            // --- ä¼˜åŒ– C: æŸ¥è¡¨è™½ç„¶æœ‰å¼€é”€ï¼Œä½†åœ¨å¹¶è¡Œä¸­åˆ†æ‘Šäº† CPU å‹åŠ› ---
             FBeltItemFragment* Item = EntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity);
             FTransformFragment* Transform = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
             FMassZoneGraphCachedLaneFragment* CachedLane = EntityManager.GetFragmentDataPtr<FMassZoneGraphCachedLaneFragment>(Entity);
 
-            // Èç¹ûÊµÌåÔÚ´ËÊ±±»Òì²½Ïú»Ù£¬Ğè¹ıÂË
+            // å¦‚æœå®ä½“åœ¨æ­¤æ—¶è¢«å¼‚æ­¥é”€æ¯ï¼Œéœ€è¿‡æ»¤
             if (!Item || !Transform || !CachedLane) continue;
 
             if (i == 0) {
                 LastItemTail = CachedLane->LaneLength;
             }
 
-            // --- ºËĞÄ¸üĞÂÂß¼­ ---
+            // --- æ ¸å¿ƒæ›´æ–°é€»è¾‘ ---
             float DesiredDistance = Item->DistanceAlongBelt + Speed * DeltaTime;
 
             if (DesiredDistance > LastItemTail)
@@ -201,8 +201,8 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
 
             LastItemTail = Item->DistanceAlongBelt - (Item->HalfLength * 2) - MinSpacing;
 
-            // --- ÓÅ»¯ D: »º´æ¸üĞÂ¿ØÖÆ ---
-            // Ö»ÓĞµ±¾àÀë±ä»¯Ê±²Å¸üĞÂ»º´æ¡£InflateDistance µÄÉèÖÃÓ¦ÂÔ´óÓÚ Agent °ë¾¶
+            // --- ä¼˜åŒ– D: ç¼“å­˜æ›´æ–°æ§åˆ¶ ---
+            // åªæœ‰å½“è·ç¦»å˜åŒ–æ—¶æ‰æ›´æ–°ç¼“å­˜ã€‚InflateDistance çš„è®¾ç½®åº”ç•¥å¤§äº Agent åŠå¾„
             const float Inflate = Item->HalfLength * 3.f + MinSpacing;
             CachedLane->CacheLaneData(*ZoneStorage, LaneHandle, Item->DistanceAlongBelt, CachedLane->LaneLength, Inflate);
 
@@ -216,4 +216,3 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
         }
         });
 }
-

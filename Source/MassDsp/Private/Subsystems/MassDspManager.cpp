@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+ï»¿// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "Subsystems/MassDspManager.h"
@@ -14,7 +14,7 @@
 #include "MassObserverNotificationTypes.h"
 #include "Components/SplineMeshComponent.h"
 
-// TODO ´«ËÍ´ø²ÎÊı¿ÉÒÔ½øÒ»²½·á¸»£¬±ÈÈç¿í¶È(³£Á¿)¡¢²ÄÖÊ¡¢ËÙ¶ÈµÈ
+// TODO ä¼ é€å¸¦å‚æ•°å¯ä»¥è¿›ä¸€æ­¥ä¸°å¯Œï¼Œæ¯”å¦‚å®½åº¦(å¸¸é‡)ã€æè´¨ã€é€Ÿåº¦ç­‰
 FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
 {
     if (ControlPoints.Num() < 2) return FZoneGraphDataHandle();
@@ -23,7 +23,7 @@ FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& C
     UZoneGraphSubsystem* ZGSubsystem = World->GetSubsystem<UZoneGraphSubsystem>();
     if (!ZGSubsystem) return FZoneGraphDataHandle();
 
-    // 1. ÒÀÈ»ĞèÒª Spawn Ò»¸ö AZoneGraphData À´´æ´¢Êı¾İ£¬µ«ËüÏÖÔÚÓÉ Subsystem ¹ÜÀí
+    // 1. ä¾ç„¶éœ€è¦ Spawn ä¸€ä¸ª AZoneGraphData æ¥å­˜å‚¨æ•°æ®ï¼Œä½†å®ƒç°åœ¨ç”± Subsystem ç®¡ç†
     FActorSpawnParameters SpawnParams;
     AZoneGraphData* BeltDataActor = World->SpawnActor<AZoneGraphData>(AZoneGraphData::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
     if (!BeltDataActor) return FZoneGraphDataHandle();
@@ -41,7 +41,7 @@ FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& C
     TArray<float> Progressions;
     float TotalDistance = 0.0f;
 
-    // --- Catmull-Rom ²ÉÑùÂß¼­ (¼ûÖ®Ç°´úÂë£¬ÂÔ) ---
+    // --- Catmull-Rom é‡‡æ ·é€»è¾‘ (è§ä¹‹å‰ä»£ç ï¼Œç•¥) ---
     for (int i = 0; i < ControlPoints.Num() - 1; ++i)
     {
         const FVector P0 = ControlPoints[FMath::Max(i - 1, 0)];
@@ -60,7 +60,7 @@ FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& C
             SampledTangents.Add((NextPos - Pos).GetSafeNormal());
         }
     }
-    // ¿½±´×îºóÒ»µã
+    // æ‹·è´æœ€åä¸€ç‚¹
     const FVector FinalP = ControlPoints.Last();
     const FVector FinalT = SampledTangents.Last();
     Progressions.Add(TotalDistance + FVector::Dist(SampledPoints.Last(), FinalP));
@@ -81,7 +81,7 @@ FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& C
 
     FZoneGraphDataHandle RegisteredHandle = ZGSubsystem->RegisterZoneGraphData(*BeltDataActor);
 
-    // --- Spline Mesh Éú³É ---
+    // --- Spline Mesh ç”Ÿæˆ ---
     if (BeltMesh)
     {
         for (int32 i = 0; i < SampledPoints.Num() - 1; ++i)
@@ -114,13 +114,13 @@ bool UMassDspManager::SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, UMassEnt
     if (!ZoneDataActor) return false;
     const FZoneGraphStorage* StoragePtr = &ZoneDataActor->GetStorage();
 
-    // ¼ì²éÕâÌõ³µµÀµÄ×îºóÒ»¸öÎïÆ·ÊÇ·ñ»¹ÔÚ0¸½½ü
+    // æ£€æŸ¥è¿™æ¡è½¦é“çš„æœ€åä¸€ä¸ªç‰©å“æ˜¯å¦è¿˜åœ¨0é™„è¿‘
     auto Items = LaneRegistry.Find(FZoneGraphLaneHandle(0, DataHandle));
     if (Items && Items->Entities.Num() > 0) {
         const FBeltItemFragment& Item = MassSubsystem->GetEntityManager().GetFragmentDataChecked<FBeltItemFragment>(Items->Entities[0]);
         const float HalfLength = Item.HalfLength;
         const float MinSpacing = 20.0f;
-        // TODO ÕâÁ©²ÎÊıºóÃæ¶¼·ÅmgrÀï×ö³£Á¿
+        // TODO è¿™ä¿©å‚æ•°åé¢éƒ½æ”¾mgré‡Œåšå¸¸é‡
         if (Item.DistanceAlongBelt <= HalfLength * 2 + MinSpacing) {
             return false;
         }
@@ -137,14 +137,14 @@ bool UMassDspManager::SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, UMassEnt
         {
             FMassEntityHandle Entity = NewEntities[i];
 
-            // --- Âß¼­Êı¾İ³õÊ¼»¯ ---
+            // --- é€»è¾‘æ•°æ®åˆå§‹åŒ– ---
             FBeltItemFragment& Item = InEntityManager.GetFragmentDataChecked<FBeltItemFragment>(Entity);
             Item.DistanceAlongBelt = 0;
 
             FMassZoneGraphLaneLocationFragment& LaneLoc = InEntityManager.GetFragmentDataChecked<FMassZoneGraphLaneLocationFragment>(Entity);
             LaneLoc.LaneHandle = FZoneGraphLaneHandle(0, DataHandle);
 
-            // ¸üĞÂ Registry
+            // æ›´æ–° Registry
             LaneRegistry.FindOrAdd(LaneLoc.LaneHandle).Entities.Add(Entity);
         }
         });

@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+ï»¿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -15,10 +15,10 @@ public:
     UConveyorProcessor();
 
 protected:
-    // ºËĞÄ£ºÅäÖÃÕâ¸ö Processor ĞèÒªÌáÈ¡ÄÄĞ©Êı¾İÆ¬
+    // æ ¸å¿ƒï¼šé…ç½®è¿™ä¸ª Processor éœ€è¦æå–å“ªäº›æ•°æ®ç‰‡
     virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
-    // ºËĞÄ£ºÃ¿Ö¡Ö´ĞĞµÄÅú´¦ÀíÂß¼­
+    // æ ¸å¿ƒï¼šæ¯å¸§æ‰§è¡Œçš„æ‰¹å¤„ç†é€»è¾‘
     virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:

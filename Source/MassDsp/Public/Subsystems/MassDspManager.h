@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+ï»¿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -8,7 +8,7 @@
 #include "MassExecutionContext.h"
 #include "MassDspManager.generated.h"
 
-// ÎªÁËÄÜÔÚ TMap ÖĞÊ¹ÓÃ£¬°ü×°Ò»ÏÂÊı×é
+// ä¸ºäº†èƒ½åœ¨ TMap ä¸­ä½¿ç”¨ï¼ŒåŒ…è£…ä¸€ä¸‹æ•°ç»„
 USTRUCT()
 struct FBeltEntityArray
 {
@@ -23,13 +23,13 @@ class MASSDSP_API UMassDspManager : public UWorldSubsystem
     GENERATED_BODY()
 
 public:
-    // ´´½¨´«ËÍ´øÂß¼­
+    // åˆ›å»ºä¼ é€å¸¦é€»è¾‘
     FZoneGraphDataHandle CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection = 10);
 
-    // ·õ»¯Âß¼­
+    // å­µåŒ–é€»è¾‘
     bool SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, class UMassEntityConfigAsset* ItemConfig);
 
-    // ´æ´¢³µµÀÊµÌåµÄ×¢²á±í
+    // å­˜å‚¨è½¦é“å®ä½“çš„æ³¨å†Œè¡¨
     UPROPERTY()
     TMap<FZoneGraphLaneHandle, FBeltEntityArray> LaneRegistry;
 };

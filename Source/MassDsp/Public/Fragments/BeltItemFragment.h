@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+ï»¿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -11,15 +11,15 @@ struct MASSDSP_API FBeltItemFragment : public FMassFragment
 {
     GENERATED_BODY()
 
-    // ÎïÁÏÔÚµ±Ç°´«ËÍ´øÉÏµÄ½ø¶È (0.0 µ½ ´«ËÍ´ø³¤¶È)
+    // ç‰©æ–™åœ¨å½“å‰ä¼ é€å¸¦ä¸Šçš„è¿›åº¦ (0.0 åˆ° ä¼ é€å¸¦é•¿åº¦)
     UPROPERTY()
     float DistanceAlongBelt = 0.0f;
 
-    // ÎïÁÏÔÚµ±Ç°´«ËÍ´øÉÏµÄË®Æ½Æ«ÒÆÁ¿(ÒÔ´«ËÍ´øÇĞÏß·½ÏòÎª×¼,³¯ÓÒÆ«ÒÆÎªÕı)
+    // ç‰©æ–™åœ¨å½“å‰ä¼ é€å¸¦ä¸Šçš„æ°´å¹³åç§»é‡(ä»¥ä¼ é€å¸¦åˆ‡çº¿æ–¹å‘ä¸ºå‡†,æœå³åç§»ä¸ºæ­£)
     UPROPERTY()
     float CrossOffset = 0.0f;
 
-    // ÎïÌå°ë³¤£¨ÀıÈç£º100µ¥Î»³¤µÄÏä×Ó£¬´ËÖµÎª50£©
+    // ç‰©ä½“åŠé•¿ï¼ˆä¾‹å¦‚ï¼š100å•ä½é•¿çš„ç®±å­ï¼Œæ­¤å€¼ä¸º50ï¼‰
     UPROPERTY()
     float HalfLength = 50.0f;
 
