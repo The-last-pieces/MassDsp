@@ -13,10 +13,7 @@ public:
     UConveyorProcessor();
 
 protected:
-    // 核心：配置这个 Processor 需要提取哪些数据片
     virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-
-    // 核心：每帧执行的批处理逻辑
     virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:

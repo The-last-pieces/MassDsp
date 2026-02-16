@@ -1,13 +1,12 @@
 ﻿#include "Processor/ConveyorProcessor.h"
 #include "Fragments/BeltItemFragment.h"
 #include "Subsystems/MassDspManager.h"
+#include "MassDspBeltTypes.h"
 
 #include "GameConst.h"
 #include "MassCommonFragments.h"
 #include "MassExecutionContext.h"
 #include "MassCommonTypes.h"
-#include "ZoneGraphSubsystem.h"
-#include "MassZoneGraphNavigationFragments.h"
 #include "Async/ParallelFor.h"
 
 #include <algorithm>
@@ -22,56 +21,50 @@ void UConveyorProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& 
 {
     EntityQuery.AddRequirement<FBeltItemFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
-    EntityQuery.AddRequirement<FMassZoneGraphCachedLaneFragment>(EMassFragmentAccess::ReadWrite);
-    EntityQuery.AddRequirement<FMassZoneGraphLaneLocationFragment>(EMassFragmentAccess::ReadOnly);
     EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-    auto ZoneGraphSubsystem = Context.GetWorld()->GetSubsystem<UZoneGraphSubsystem>();
     auto MassDspManager = Context.GetWorld()->GetSubsystem<UMassDspManager>();
-    if (!ZoneGraphSubsystem || !MassDspManager || MassDspManager->LaneRegistry.IsEmpty()) return;
+    if (!MassDspManager || MassDspManager->BeltEntityRegistry.IsEmpty()) return;
 
     const float DeltaTime = Context.GetDeltaTimeSeconds();
-    constexpr float Speed = 400.0f; // TODO 改成传送带变量
 
     // --- 优化 A: 获取并缓存所有活跃车道句柄 ---
-    TArray<FZoneGraphLaneHandle> ActiveLanes;
-    MassDspManager->LaneRegistry.GetKeys(ActiveLanes);
+    TArray<FBeltHandle> ActiveBelts;
+    MassDspManager->BeltEntityRegistry.GetKeys(ActiveBelts);
 
     // --- 优化 B: 并行处理车道 (ParallelFor) ---
-    ParallelFor(ActiveLanes.Num(), [&](int32 LaneIdx)
+    ParallelFor(ActiveBelts.Num(), [&](int32 BeltIdx)
     {
-        const FZoneGraphLaneHandle& LaneHandle = ActiveLanes[LaneIdx];
+        const FBeltHandle& BeltHandle = ActiveBelts[BeltIdx];
 
-        // 由于 TMap 的 Find 在不修改 Map 时是线程安全的
-        auto* LaneData = MassDspManager->LaneRegistry.Find(LaneHandle);
-        if (!LaneData || LaneData->Entities.IsEmpty()) return;
+        // 获取 Trajectory
+        if (!MassDspManager->BeltTrajectories.IsValidIndex(BeltHandle.Index)) return;
+        const FBeltTrajectory& Trajectory = MassDspManager->BeltTrajectories[BeltHandle.Index];
+        if (!Trajectory.IsValid()) return;
 
-        const FZoneGraphStorage* ZoneStorage = ZoneGraphSubsystem->GetZoneGraphStorage(LaneHandle.DataHandle);
-        if (!ZoneStorage) return;
+        // 获取实体列表
+        auto* BeltData = MassDspManager->BeltEntityRegistry.Find(BeltHandle);
+        if (!BeltData || BeltData->Entities.IsEmpty()) return;
+
+        float Speed = Trajectory.Speed;
 
         float LastItemTail = -1.0f;
 
-        for (auto& Entity : LaneData->Entities)
+        for (auto& Entity : BeltData->Entities)
         {
-            // --- 优化 C: 查表虽然有开销，但在并行中分摊了 CPU 压力 ---
             FBeltItemFragment* Item = EntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity);
             FTransformFragment* Transform = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
-            FMassZoneGraphCachedLaneFragment* CachedLane = EntityManager.GetFragmentDataPtr<FMassZoneGraphCachedLaneFragment>(Entity);
 
-            if (!Item || !Transform || !CachedLane) continue;
-
-            constexpr float Inflate = FGameConst::HalfLength * 3.f + FGameConst::MinSpacing;
-            CachedLane->CacheLaneData(*ZoneStorage, LaneHandle, Item->DistanceAlongBelt, Item->DistanceAlongBelt + Speed * 2, Inflate);
+            if (!Item || !Transform) continue;
 
             if (LastItemTail < 0)
             {
-                LastItemTail = CachedLane->LaneLength - FGameConst::HalfLength;
+                LastItemTail = Trajectory.TotalLength - FGameConst::HalfLength;
             }
 
-            // --- 核心更新逻辑 ---
             if (float DesiredDistance = Item->DistanceAlongBelt + Speed * DeltaTime; DesiredDistance > LastItemTail)
             {
                 Item->DistanceAlongBelt = LastItemTail;
@@ -85,8 +78,9 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
 
             LastItemTail = Item->DistanceAlongBelt - (FGameConst::HalfLength * 2) - FGameConst::MinSpacing;
 
-            FVector OutPos, OutTangent;
-            CachedLane->GetPointAndTangentAtDistance(Item->DistanceAlongBelt, OutPos, OutTangent);
+            FVector OutPos = Trajectory.GetLocationAtDistance(Item->DistanceAlongBelt);
+            FVector OutTangent = Trajectory.GetTangentAtDistance(Item->DistanceAlongBelt);
+
             OutPos.Z += 20.f;
 
             FTransform& TargetTransform = Transform->GetMutableTransform();

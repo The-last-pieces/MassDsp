@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "MassDspBeltTypes.h"
 #include "MassEntityTypes.h"
 #include "BeltItemFragment.generated.h"
 
@@ -15,4 +16,7 @@ struct MASSDSP_API FBeltItemFragment : public FMassFragment
 
     UPROPERTY()
     bool bIsBlocked = false;
+
+    UPROPERTY()
+    FBeltHandle BeltHandle = FBeltHandle();
 };

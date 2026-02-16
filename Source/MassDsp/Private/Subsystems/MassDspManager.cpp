@@ -7,15 +7,46 @@
 #include "Actors/MassDspBuilding.h"
 #include "Fragments/MassDspBuildingFragment.h"
 
-#include "ZoneGraphSubsystem.h"
-#include "ZoneGraphData.h"
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
-#include "MassZoneGraphNavigationFragments.h"
 #include "MassEntityConfigAsset.h"
 #include "MassObserverNotificationTypes.h"
 #include "Components/SplineMeshComponent.h"
+#include "Components/SplineComponent.h"
 #include "MassExecutor.h"
+
+void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
+{
+    Super::Initialize(Collection);
+
+    // 创建一个名为 "Belts" 的隐形 Actor 来挂载所有的 SplineComponent
+    if (UWorld* World = GetWorld())
+    {
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.Name = FName(TEXT("BeltsContainer"));
+        BeltsContainerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+        if (BeltsContainerActor)
+        {
+#if WITH_EDITOR
+            BeltsContainerActor->SetActorLabel(TEXT("BeltsContainer"));
+#endif
+            USceneComponent* Root = NewObject<USceneComponent>(BeltsContainerActor, TEXT("Root"));
+            BeltsContainerActor->SetRootComponent(Root);
+            Root->RegisterComponent();
+        }
+    }
+}
+
+void UMassDspManager::Deinitialize()
+{
+    if (BeltsContainerActor)
+    {
+        BeltsContainerActor->Destroy();
+        BeltsContainerActor = nullptr;
+    }
+
+    Super::Deinitialize();
+}
 
 
 FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* BuildingActor) const
@@ -51,8 +82,6 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
     }
 
     // 3. 处理槽口信息并添加到 Fragment
-    // 不需要再 AddFragmentFromEntity 了，因为 Entity 已经有了
-
     if (FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EntityHandle))
     {
         const FTransform ActorTransform = BuildingActor->GetActorTransform();
@@ -71,113 +100,96 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
         }
     }
 
-    // 4. (可选) 如果你希望使用 MassActorSubsystem 来管理 Actor 生命周期同步
-    // EntityManager.AddFragment<FMassActorFragment>(EntityHandle); 
-    // FMassActorFragment* ActorFragment = EntityManager.GetFragmentDataPtr<FMassActorFragment>(EntityHandle);
-    // ActorFragment->Set(BuildingActor);
-
     return EntityHandle;
 }
 
-// TODO 传送带参数可以进一步丰富，比如宽度(常量)、材质、速度等
-FZoneGraphDataHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection) const
+FBeltHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
 {
-    if (ControlPoints.Num() < 2) return FZoneGraphDataHandle();
+    if (ControlPoints.Num() < 2 || !BeltsContainerActor) return FBeltHandle();
 
-    UWorld* World = GetWorld();
-    UZoneGraphSubsystem* ZGSubsystem = World->GetSubsystem<UZoneGraphSubsystem>();
-    if (!ZGSubsystem) return FZoneGraphDataHandle();
+    // --- Spline 生成 ---
+    USplineComponent* NewSpline = NewObject<USplineComponent>(BeltsContainerActor);
+    NewSpline->SetupAttachment(BeltsContainerActor->GetRootComponent());
+    NewSpline->SetClosedLoop(false);
+    NewSpline->ClearSplinePoints(false);
 
-    // 1. 依然需要 Spawn 一个 AZoneGraphData 来存储数据，但它现在由 Subsystem 管理
-    FActorSpawnParameters SpawnParams;
-    AZoneGraphData* BeltDataActor = World->SpawnActor<AZoneGraphData>(AZoneGraphData::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
-    if (!BeltDataActor) return FZoneGraphDataHandle();
-
-    USceneComponent* Root = NewObject<USceneComponent>(BeltDataActor, TEXT("Root"));
-    BeltDataActor->SetRootComponent(Root);
-    Root->SetMobility(EComponentMobility::Movable);
-    Root->RegisterComponent();
-
-    ZGSubsystem->UnregisterZoneGraphData(*BeltDataActor);
-
-    FZoneGraphStorage& Storage = BeltDataActor->GetStorageMutable();
-    TArray<FVector> SampledPoints;
-    TArray<FVector> SampledTangents;
-    TArray<float> Progressions;
-    float TotalDistance = 0.0f;
-
-    // --- Catmull-Rom 采样逻辑 (见之前代码，略) ---
-    for (int i = 0; i < ControlPoints.Num() - 1; ++i)
+    // 将 ControlPoints 添加为 SplinePoints
+    for (const FVector& Pt : ControlPoints)
     {
-        const FVector P0 = ControlPoints[FMath::Max(i - 1, 0)];
-        const FVector P1 = ControlPoints[i];
-        const FVector P2 = ControlPoints[i + 1];
-        const FVector P3 = ControlPoints[FMath::Min(i + 2, ControlPoints.Num() - 1)];
-        const FVector T1 = (P2 - P0) * 0.5f;
-        const FVector T2 = (P3 - P1) * 0.5f;
-        for (int32 j = 0; j < SegmentsPerSection; ++j)
-        {
-            float Alpha = static_cast<float>(j) / static_cast<float>(SegmentsPerSection);
-            FVector Pos = FMath::CubicInterp(P1, T1, P2, T2, Alpha);
-            if (SampledPoints.Num() > 0) TotalDistance += FVector::Dist(SampledPoints.Last(), Pos);
-            SampledPoints.Add(Pos);
-            Progressions.Add(TotalDistance);
-            FVector NextPos = FMath::CubicInterp(P1, T1, P2, T2, Alpha + 0.01f);
-            SampledTangents.Add((NextPos - Pos).GetSafeNormal());
-        }
+        NewSpline->AddSplinePoint(Pt, ESplineCoordinateSpace::World, false);
     }
-    // 拷贝最后一点
-    const FVector FinalP = ControlPoints.Last();
-    const FVector FinalT = SampledTangents.Last();
-    Progressions.Add(TotalDistance + FVector::Dist(SampledPoints.Last(), FinalP));
-    SampledPoints.Add(FinalP);
-    SampledTangents.Add(FinalT);
+    NewSpline->UpdateSpline();
+    NewSpline->RegisterComponent();
 
-    Storage.LanePoints.Append(SampledPoints);
-    Storage.LaneTangentVectors.Append(SampledTangents);
-    Storage.LanePointProgressions.Append(Progressions);
+    // --- 创建 Handle 并存储 ---
+    FBeltTrajectory NewTrajectory;
+    NewTrajectory.SplineComponent = NewSpline;
+    NewTrajectory.TotalLength = NewSpline->GetSplineLength();
+    NewTrajectory.Speed = 400.f;
 
-    FZoneLaneData NewLane;
-    NewLane.PointsBegin = 0;
-    NewLane.PointsEnd = Storage.LanePoints.Num();
-    NewLane.Width = 120.0f;
-    NewLane.Tags.Add(FZoneGraphTag(0));
-    Storage.Lanes.Add(NewLane);
-    Storage.Bounds = FBox(SampledPoints); //.ExpandBy(200.0f);
+    int32 Index = BeltTrajectories.Add(NewTrajectory);
+    FBeltHandle NewHandle;
+    NewHandle.Index = Index;
+    NewHandle.Generation = 0; // TODO Implement generation check if needed
 
-    FZoneGraphDataHandle RegisteredHandle = ZGSubsystem->RegisterZoneGraphData(*BeltDataActor);
-
-    // --- Spline Mesh 生成 ---
+    // --- Spline Mesh 生成 (为了可视化) ---
     if (BeltMesh)
     {
-        for (int32 i = 0; i < SampledPoints.Num() - 1; ++i)
+        // 我们依然沿着 Spline 采样生成 Mesh，但现在可以直接用 Spline 接口 
+        // 为了兼容旧逻辑（ControlPoints 之间生成 Mesh），我们遍历 Point
+
+        int32 NumPoints = NewSpline->GetNumberOfSplinePoints();
+        for (int32 i = 0; i < NumPoints - 1; ++i)
         {
-            USplineMeshComponent* SMC = NewObject<USplineMeshComponent>(BeltDataActor);
-            SMC->SetStaticMesh(BeltMesh);
-            SMC->SetMobility(EComponentMobility::Movable);
-            SMC->SetForwardAxis(ESplineMeshAxis::X);
-            float SegLen = FVector::Dist(SampledPoints[i], SampledPoints[i + 1]);
-            SMC->SetStartAndEnd(SampledPoints[i], SampledTangents[i] * SegLen, SampledPoints[i + 1], SampledTangents[i + 1] * SegLen);
+            // 对于每个段，我们可以在两点之间生成一个 Mesh，并使用 Start/End Tangent
+            // 细分：如果SegmentsPerSection > 1，则需要在中间再生成点。
+            // 简单起见，我们按照之前的逻辑，在 Control Points 之间做细分采样
 
-            SMC->SetStartScale(FVector2D(1.0f, 0.2f));
-            SMC->SetEndScale(FVector2D(1.0f, 0.2f));
+            // 下面的逻辑将复用 NewSpline 的插值能力
+            float DistStart = NewSpline->GetDistanceAlongSplineAtSplinePoint(i);
+            float DistEnd = NewSpline->GetDistanceAlongSplineAtSplinePoint(i + 1);
+            float SegmentLen = DistEnd - DistStart;
+            float StepLen = SegmentLen / SegmentsPerSection;
 
-            SMC->SetupAttachment(Root);
-            SMC->RegisterComponent();
+            for (int32 j = 0; j < SegmentsPerSection; ++j)
+            {
+                float D1 = DistStart + StepLen * j;
+                float D2 = DistStart + StepLen * (j + 1);
+
+                FVector P1 = NewSpline->GetLocationAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
+                FVector T1 = NewSpline->GetTangentAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
+                FVector P2 = NewSpline->GetLocationAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
+                FVector T2 = NewSpline->GetTangentAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
+
+                USplineMeshComponent* Smc = NewObject<USplineMeshComponent>(BeltsContainerActor);
+                Smc->SetStaticMesh(BeltMesh);
+                Smc->SetMobility(EComponentMobility::Movable);
+                Smc->SetForwardAxis(ESplineMeshAxis::X);
+
+                float Len = FVector::Dist(P1, P2);
+
+                Smc->SetStartAndEnd(P1, T1.GetSafeNormal() * Len, P2, T2.GetSafeNormal() * Len);
+
+                Smc->SetStartScale(FVector2D(1.0f, 0.2f));
+                Smc->SetEndScale(FVector2D(1.0f, 0.2f));
+
+                Smc->SetupAttachment(BeltsContainerActor->GetRootComponent());
+                Smc->RegisterComponent();
+            }
         }
     }
 
-    return RegisteredHandle;
+    return NewHandle;
 }
 
-bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FZoneGraphLaneHandle LaneHandle, UMassEntityConfigAsset* ItemConfig)
+bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, UMassEntityConfigAsset* ItemConfig)
 {
-    if (!ItemConfig) return false;
+    if (!ItemConfig || !BeltHandle.IsValid()) return false;
     UWorld* World = GetWorld();
     UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
 
     // 检查这条车道的最后一个物品是否还在0附近
-    if (auto Items = LaneRegistry.Find(LaneHandle); Items && !Items->Entities.IsEmpty())
+    if (auto Items = BeltEntityRegistry.Find(BeltHandle); Items && !Items->Entities.IsEmpty())
     {
         if (const FBeltItemFragment* Item = MassSubsystem->GetEntityManager().GetFragmentDataPtr<FBeltItemFragment>(Items->Entities.Last());
             Item && Item->DistanceAlongBelt <= FGameConst::HalfLength * 3 + FGameConst::MinSpacing)
@@ -186,7 +198,7 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FZone
         }
     }
 
-    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, LaneHandle](FMassEntityManager& InEntityManager)
+    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, BeltHandle](FMassEntityManager& InEntityManager)
     {
         const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
         TArray<FMassEntityHandle> NewEntities;
@@ -199,24 +211,26 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FZone
             FMassEntityHandle Entity = NewEntities[i];
 
             // --- 逻辑数据初始化 ---
-            FBeltItemFragment& Item = InEntityManager.GetFragmentDataChecked<FBeltItemFragment>(Entity);
-            Item.DistanceAlongBelt = FGameConst::HalfLength;
+            FBeltItemFragment* Item = InEntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity);
+            if (!Item)
+            {
+                continue;
+            }
 
-            FMassZoneGraphLaneLocationFragment& LaneLoc = InEntityManager.GetFragmentDataChecked<FMassZoneGraphLaneLocationFragment>(Entity);
-            LaneLoc.LaneHandle = LaneHandle;
+            Item->DistanceAlongBelt = FGameConst::HalfLength;
+            Item->BeltHandle = BeltHandle; // 设置新的 Handle
 
-            // 更新 Registry
-            LaneRegistry.FindOrAdd(LaneLoc.LaneHandle).Entities.EmplaceLast(Entity);
+            BeltEntityRegistry.FindOrAdd(BeltHandle).Entities.EmplaceLast(Entity);
         }
     });
 
     return true;
 }
 
-bool UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FZoneGraphLaneHandle LaneHandle)
+bool UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle)
 {
     // 检查注册表
-    if (FBeltEntityArray* BeltItems = LaneRegistry.Find(LaneHandle))
+    if (FBeltEntityArray* BeltItems = BeltEntityRegistry.Find(BeltHandle))
     {
         if (BeltItems->Entities.IsEmpty()) return false;
 

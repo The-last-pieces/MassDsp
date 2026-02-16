@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
-#include "ZoneGraphTypes.h" // 添加这行
+#include "MassDspBeltTypes.h"
 #include "Actors/MassDspBuilding.h"
 #include "MassDspBuildingFragment.generated.h"
 
@@ -59,9 +59,9 @@ struct FBuildingSlotState
     UPROPERTY()
     EBuildingSlotType Type = EBuildingSlotType::Input;
 
-    // 连接的 ZoneGraph 车道句柄 (缓存)
+    // 连接的传送带句柄 (缓存)
     UPROPERTY()
-    FZoneGraphLaneHandle ConnectedLaneHandle;
+    FBeltHandle ConnectedLaneHandle;
 };
 
 /**

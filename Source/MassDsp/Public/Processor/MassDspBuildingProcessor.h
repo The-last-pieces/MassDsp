@@ -29,5 +29,4 @@ private:
 
     // 缓存子系统引用
     TWeakObjectPtr<UMassDspManager> DspManager;
-    TWeakObjectPtr<UZoneGraphSubsystem> ZoneGraphSubsystem;
 };

@@ -53,10 +53,11 @@ void AMassDspGameMode::BeginPlay()
             BeltPoints.Add(EndPoint);
 
             // 创建运行时传送带
-            if (FZoneGraphDataHandle BeltHandle = DspManager->CreateRuntimeBelt(BeltPoints, ConveyorMesh); BeltHandle.IsValid())
-            {
-                FZoneGraphLaneHandle LaneHandle(0, BeltHandle);
 
+            // 使用新接口创建
+
+            if (FBeltHandle BeltHandle = DspManager->CreateRuntimeBelt(BeltPoints, ConveyorMesh); BeltHandle.IsValid())
+            {
                 FMassEntityManager& EntityManager = World->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
 
                 // 连接 Miner 的输出槽到传送带起点
@@ -66,7 +67,7 @@ void AMassDspGameMode::BeginPlay()
                     {
                         if (Slot.Type == EBuildingSlotType::Output)
                         {
-                            Slot.ConnectedLaneHandle = LaneHandle;
+                            Slot.ConnectedLaneHandle = BeltHandle;
                             break;
                         }
                     }
@@ -79,7 +80,7 @@ void AMassDspGameMode::BeginPlay()
                     {
                         if (Slot.Type == EBuildingSlotType::Input)
                         {
-                            Slot.ConnectedLaneHandle = LaneHandle;
+                            Slot.ConnectedLaneHandle = BeltHandle;
                             break;
                         }
                     }

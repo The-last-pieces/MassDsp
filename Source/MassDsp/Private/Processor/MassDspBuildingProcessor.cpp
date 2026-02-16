@@ -1,7 +1,6 @@
 ﻿#include "Processor/MassDspBuildingProcessor.h"
 #include "Fragments/MassDspBuildingFragment.h"
 #include "Subsystems/MassDspManager.h"
-#include "ZoneGraphSubsystem.h"
 #include "MassExecutionContext.h"
 #include "MassCommonTypes.h"
 #include "MassDspGameMode.h"
@@ -12,9 +11,6 @@ UMassDspBuildingProcessor::UMassDspBuildingProcessor() : BuildingQuery(*this)
 {
     // 设置处理器执行顺序
     ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::SyncWorldToMass;
-
-    // 自动注册，不需要手动添加
-    bAutoRegisterWithProcessingPhases = true;
 }
 
 void UMassDspBuildingProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
@@ -31,18 +27,14 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     if (!World) return;
 
     auto GameMode = Cast<AMassDspGameMode>(World->GetAuthGameMode());
-    if (!GameMode)return;
+    if (!GameMode) return;
 
     if (!DspManager.IsValid())
     {
         DspManager = World->GetSubsystem<UMassDspManager>();
     }
-    if (!ZoneGraphSubsystem.IsValid())
-    {
-        ZoneGraphSubsystem = World->GetSubsystem<UZoneGraphSubsystem>();
-    }
 
-    if (!DspManager.IsValid() || !ZoneGraphSubsystem.IsValid()) return;
+    if (!DspManager.IsValid()) return;
 
     // 遍历所有建筑实体
     BuildingQuery.ForEachEntityChunk(Context, [this, GameMode](FMassExecutionContext& Context)
@@ -60,11 +52,9 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
             // --- 1. 建筑本身逻辑 (生产/消耗) ---
             if (AMassDspMiner* MinerActor = Cast<AMassDspMiner>(Building.BuildingActor.Get()))
             {
-                // 矿机逻辑：持续生产
-                // 简单起见，我们直接增加 InventoryCount，直到满
                 if (Building.InventoryCount < Building.MaxInventory)
                 {
-                    Building.ProductionProgress += DeltaTime / MinerActor->ProductionInterval;
+                    Building.ProductionProgress += DeltaTime / (MinerActor->ProductionInterval > 0 ? MinerActor->ProductionInterval : 1.0f);
                     if (Building.ProductionProgress >= 1.0f)
                     {
                         Building.InventoryCount++;
@@ -90,7 +80,6 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
                     // 如果建筑有库存，且传送带口有位置
                     if (Building.InventoryCount > 0)
                     {
-                        // 简化逻辑：直接调用 Manager 尝试生成
                         if (DspManager->ProvideItemToBelt(Context.Defer(), Slot.ConnectedLaneHandle, GameMode->BeltItemConfigAsset))
                         {
                             Building.InventoryCount--;
@@ -104,9 +93,6 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
                     // 如果仓库未满
                     if (Building.InventoryCount < Building.MaxInventory)
                     {
-                        // 检查车道末端是否有物品
-                        // 同样需要访问 LaneRegistry
-                        // 简化逻辑：调用 Manager 尝试消耗末端物品
                         if (DspManager->ConsumeItemFromBelt(Context.Defer(), Slot.ConnectedLaneHandle))
                         {
                             Building.InventoryCount++;
