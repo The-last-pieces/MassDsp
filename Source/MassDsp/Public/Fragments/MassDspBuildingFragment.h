@@ -2,7 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
-#include "Actors/MassDspBuilding.h" // 引用 SlotType 枚举
+#include "ZoneGraphTypes.h" // 添加这行
+#include "Actors/MassDspBuilding.h" 
 #include "MassDspBuildingFragment.generated.h"
 
 /**
@@ -13,17 +14,25 @@ struct MASSDSP_API FMassDspBuildingFragment : public FMassFragment
 {
     GENERATED_BODY()
 
-    // 关联的 Actor 指针（如果仍然存在）- 这在混合模式下有用，纯ECS模式下可能不需要
+    // 关联的 Actor 指针
     UPROPERTY(Transient)
     TWeakObjectPtr<AMassDspBuilding> BuildingActor;
     
-    // 建筑当前的运行状态（例如：0=Idle, 1=Production, 2=Blocked）
+    // 建筑当前的运行状态
     UPROPERTY()
     uint8 State = 0;
 
     // 当前生产进度 (0.0 - 1.0)
     UPROPERTY()
     float ProductionProgress = 0.0f;
+
+    // 通用库存计数 (对于矿机是输出缓冲，对于仓库是存储量)
+    UPROPERTY()
+    int32 InventoryCount = 0;
+
+    // 最大库存/缓冲容量
+    UPROPERTY()
+    int32 MaxInventory = 50;
 };
 
 /**
@@ -49,6 +58,14 @@ struct FBuildingSlotState
     // 类型
     UPROPERTY()
     EBuildingSlotType Type = EBuildingSlotType::Input;
+
+    // 连接的 ZoneGraph 车道句柄 (缓存)
+    UPROPERTY()
+    FZoneGraphLaneHandle ConnectedLaneHandle;
+
+    // 在车道上的连接点距离 (Input通常是LaneLength, Output通常是0)
+    UPROPERTY()
+    float LaneConnectionDistance = 0.0f;
 
     // 当前占用的物品实体 (如果有)
     FMassEntityHandle OccupyingItem;

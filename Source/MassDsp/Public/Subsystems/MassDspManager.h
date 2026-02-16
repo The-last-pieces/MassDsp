@@ -30,6 +30,32 @@ public:
     // 孵化逻辑
     bool SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, class UMassEntityConfigAsset* ItemConfig);
 
+    /**
+     * 尝试在指定车道的特定距离生成一个物品
+     * @param LaneHandle 车道句柄
+     * @param Distance 生成距离
+     * @return 是否生成成功
+     */
+    bool SpawnItemOnLane(FZoneGraphLaneHandle LaneHandle, float Distance, FMassCommandBuffer& CommandBuffer);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config")
+    TObjectPtr<UMassEntityConfigAsset> DefaultItemConfig;
+
+    /**
+     * 尝试从指定车道的末端消耗一个物品
+     * @param LaneHandle 车道句柄
+     * @return 是否成功消耗
+     */
+    bool ConsumeItemFromLane(FZoneGraphLaneHandle LaneHandle, FMassCommandBuffer& CommandBuffer);
+
+    /**
+     * 建立槽口与车道的连接关系 (寻找并在 Slot 中缓存 LaneHandle)
+     * @param SlotState 槽口状态引用
+     * @param SearchRadius 搜索半径
+     * @return 是否找到并连接
+     */
+    bool FindAndConnectLaneForSlot(struct FBuildingSlotState& SlotState, float SearchRadius = 50.0f);
+
     // 存储车道实体的注册表
     UPROPERTY()
     TMap<FZoneGraphLaneHandle, FBeltEntityArray> LaneRegistry;

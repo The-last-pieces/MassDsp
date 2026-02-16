@@ -4,62 +4,118 @@
 #include "Subsystems/MassDspManager.h"
 #include "Actors/MassDspMiner.h"
 #include "Actors/MassDspStorage.h"
+#include "Fragments/MassDspBuildingFragment.h"
+#include "ZoneGraphSubsystem.h"
+#include "ZoneGraphData.h"
+#include "MassEntitySubsystem.h"
+#include "MassEntityManager.h"
+#include "Misc/CoreDelegates.h"
 
 void AMassDspGameMode::BeginPlay()
 {
-    Super::BeginPlay();
+	Super::BeginPlay();
 
-    UMassDspManager* DspManager = GetWorld()->GetSubsystem<UMassDspManager>();
-    if (!DspManager) return;
+	UWorld* World = GetWorld();
+	UMassDspManager* DspManager = World->GetSubsystem<UMassDspManager>();
+	if (!DspManager) return;
 
-    if (!MinerClass || !StorageClass)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("MinerClass or StorageClass not set in GameMode!"));
-        return;
-    }
+	// 设置 Manager 的 DefaultItemConfig，以便 Miner 可以生产物品
+	if (BeltItemConfigAsset)
+	{
+		DspManager->DefaultItemConfig = BeltItemConfigAsset;
+	}
 
-    // 1. 创建矿机
-    FVector MinerLocation(0, 0, 0);
-    // 这里使用 GetWorld()->SpawnActor 而不是直接 CreateEntity，
-    // 因为我们需要 Actor 来提供变换和 Mesh，而且 MassDspBuilding 会自动注册自己
-    AMassDspMiner* MinerActor = GetWorld()->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation, FRotator::ZeroRotator);
+	if (!MinerClass || !StorageClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MinerClass or StorageClass not set in GameMode!"));
+		return;
+	}
 
-    // 2. 创建仓库 (在 X 轴正方向 2000 单位处)
-    FVector StorageLocation(2000, 0, 0);
-    AMassDspStorage* StorageActor = GetWorld()->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator::ZeroRotator);
+	// 1. 创建并注册矿机
+	FVector MinerLocation(0, 0, 0);
+	AMassDspMiner* MinerActor = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation, FRotator::ZeroRotator);
+	FMassEntityHandle MinerEntity = DspManager->RegisterBuildingEntity(MinerActor);
 
-    // 3. 连接传送带
-    if (MinerActor && StorageActor)
-    {
-        // 确保 Actor 初始化完成，获取槽口位置
-        // 注意：在同一帧 Spawn 后立即获取 Slots 可能需要强制更新 Transforms 或直接计算
-        // 这里基于我们已知的设计，GetSlotTransformsByType 使用的是 Slot.LocalTransform * ActorTransform，这是安全的
-        
-        TArray<FTransform> MinerOutputs = MinerActor->GetSlotTransformsByType(EBuildingSlotType::Output);
-        TArray<FTransform> StorageInputs = StorageActor->GetSlotTransformsByType(EBuildingSlotType::Input);
+	// 2. 创建并注册仓库 (在 X 轴正方向 2000 单位处)
+	FVector StorageLocation(2000, 0, 0);
+	AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator::ZeroRotator);
+	FMassEntityHandle StorageEntity = DspManager->RegisterBuildingEntity(StorageActor);
 
-        if (MinerOutputs.Num() > 0 && StorageInputs.Num() > 0)
-        {
-            FVector StartPoint = MinerOutputs[0].GetLocation();
-            FVector EndPoint = StorageInputs[0].GetLocation();
-            
-            // 为了美观，添加一些控制点让传送带有些弧度，或者是直连
-            TArray<FVector> BeltPoints;
-            BeltPoints.Add(StartPoint);
-            
-            // 简单的直线插值点
-            BeltPoints.Add(FMath::Lerp(StartPoint, EndPoint, 0.33f));
-            BeltPoints.Add(FMath::Lerp(StartPoint, EndPoint, 0.66f));
-            
-            BeltPoints.Add(EndPoint);
+	// 3. 连接逻辑
+	if (MinerActor && StorageActor)
+	{
+		TArray<FTransform> MinerOutputs = MinerActor->GetSlotTransformsByType(EBuildingSlotType::Output);
+		TArray<FTransform> StorageInputs = StorageActor->GetSlotTransformsByType(EBuildingSlotType::Input);
 
-            FZoneGraphDataHandle BeltHandle = DspManager->CreateRuntimeBelt(BeltPoints, ConveyorMesh);
+		if (MinerOutputs.Num() > 0 && StorageInputs.Num() > 0)
+		{
+			FVector StartPoint = MinerOutputs[0].GetLocation();
+			FVector EndPoint = StorageInputs[0].GetLocation();
 
-            // 4. (测试用) 在传送带上生成一些物品，模拟矿机产出
-            if (BeltItemConfigAsset)
-            {
-                DspManager->SpawnItemsOnBelt(BeltHandle, BeltItemConfigAsset);
-            }
-        }
-    }
+			TArray<FVector> BeltPoints;
+			BeltPoints.Add(StartPoint);
+			BeltPoints.Add(EndPoint);
+
+			// 创建运行时传送带
+			FZoneGraphDataHandle BeltHandle = DspManager->CreateRuntimeBelt(BeltPoints, ConveyorMesh);
+
+			if (BeltHandle.IsValid())
+			{
+				FZoneGraphLaneHandle LaneHandle(0, BeltHandle);
+
+				// 获取 Lane 长度用于计算输入槽连接点
+				float LaneLength = 0.0f;
+				UZoneGraphSubsystem* ZoneGraphSubsystem = World->GetSubsystem<UZoneGraphSubsystem>();
+				if (ZoneGraphSubsystem)
+				{
+					const FZoneGraphStorage* ZoneStorage = ZoneGraphSubsystem->GetZoneGraphStorage(BeltHandle);
+					if (ZoneStorage && ZoneStorage->Lanes.Num() > 0)
+					{
+						// LaneLength = ZoneStorage->Lanes[0].LaneLength;
+						// TODO 获取CacheLane再拿长度,直接拿不到
+						//auto CacheLane = ZoneGraphSubsystem->GetCac(LaneHandle);
+					}
+				}
+				LaneLength = 2000;
+
+				FMassEntityManager& EntityManager = World->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
+
+				// 连接 Miner 的输出槽到传送带起点
+				if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(MinerEntity))
+				{
+					for (int32 i = 0; i < MinerSlots->SlotCount; ++i)
+					{
+						if (MinerSlots->Slots[i].Type == EBuildingSlotType::Output)
+						{
+							MinerSlots->Slots[i].ConnectedLaneHandle = LaneHandle;
+							MinerSlots->Slots[i].LaneConnectionDistance = 0.0f;
+							MinerSlots->Slots[i].bConnected = true;
+							break;
+						}
+					}
+				}
+
+				// 连接 Storage 的输入槽到传送带终点
+				if (FMassDspBuildingSlotsFragment* StorageSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(StorageEntity))
+				{
+					for (int32 i = 0; i < StorageSlots->SlotCount; ++i)
+					{
+						if (StorageSlots->Slots[i].Type == EBuildingSlotType::Input)
+						{
+							StorageSlots->Slots[i].ConnectedLaneHandle = LaneHandle;
+							StorageSlots->Slots[i].LaneConnectionDistance = LaneLength;
+							StorageSlots->Slots[i].bConnected = true;
+							break;
+						}
+					}
+				}
+
+				// 4. (测试用) 在传送带上生成一些初始物品
+				if (BeltItemConfigAsset)
+				{
+					DspManager->SpawnItemsOnBelt(BeltHandle, BeltItemConfigAsset);
+				}
+			}
+		}
+	}
 }

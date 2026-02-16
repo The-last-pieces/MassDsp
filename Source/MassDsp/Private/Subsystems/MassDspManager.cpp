@@ -234,3 +234,110 @@ bool UMassDspManager::SpawnItemsOnBelt(FZoneGraphDataHandle DataHandle, UMassEnt
 
     return true;
 }
+
+bool UMassDspManager::SpawnItemOnLane(FZoneGraphLaneHandle LaneHandle, float Distance, FMassCommandBuffer& CommandBuffer)
+{
+    if (!DefaultItemConfig) return false;
+
+    UWorld* World = GetWorld();
+    if (!World) return false;
+
+    // 注意：在 Command 的 Lambda 内部，DefaultItemConfig 可能已经被 GC 或者处于不安全状态
+    // 最安全的是捕获 SharedPtr 或者使用 WeakObjectPtr，但这里假设 ConfigAsset 生命周期足够长
+    // 为了线程安全，我们需要在执行 Command 时才去把 Config 转成 Template
+    // 但是 GetOrCreateEntityTemplate 只能在 GameThread 跑 (如果还没创建的话)
+    // 所以我们这里只能假设 Template 已经创建好了，或者冒险在 Command 里跑
+
+    // 更好的方式：把 EntityConfig 转换成 Template 的工作前置，或者使用 SoftObjectPath
+    // 这里为了简单，我们捕获 this，并假设 Manager 和 Config 都有效
+
+    // CommandBuffer.PushCommand 将命令放入调用者提供的安全缓冲区中
+    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, LaneHandle, Distance](FMassEntityManager& InEntityManager)
+        {
+            // 这个 Lambda 将在主线程安全点执行
+            if (!DefaultItemConfig || !World) return;
+
+            const FMassEntityTemplate& EntityTemplate = DefaultItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
+            TArray<FMassEntityHandle> NewEntities;
+
+            auto CreationContext = InEntityManager.BatchCreateEntities(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues(), 1, NewEntities);
+            InEntityManager.BatchSetEntityFragmentValues(CreationContext->GetEntityCollections(InEntityManager), EntityTemplate.GetInitialFragmentValues());
+
+            if (NewEntities.Num() > 0)
+            {
+                FMassEntityHandle NewItem = NewEntities[0];
+
+                // 设置距离
+                if (FBeltItemFragment* ItemFrag = InEntityManager.GetFragmentDataPtr<FBeltItemFragment>(NewItem))
+                {
+                    ItemFrag->DistanceAlongBelt = Distance;
+                }
+
+                // 设置 LaneLocation
+                if (FMassZoneGraphLaneLocationFragment* LaneLoc = InEntityManager.GetFragmentDataPtr<FMassZoneGraphLaneLocationFragment>(NewItem))
+                {
+                    LaneLoc->LaneHandle = LaneHandle;
+                }
+
+                // 注册到 LaneRegistry
+                // 注意：LaneRegistry 是 TMap，这是非线程安全的容器。
+                // 但因为我们是在 DeferredCommand 中（主线程串行执行），所以这里写它是安全的！
+                FBeltEntityArray& LaneData = LaneRegistry.FindOrAdd(LaneHandle);
+                LaneData.Entities.Add(NewItem);
+            }
+        });
+
+    return true;
+}
+
+bool UMassDspManager::ConsumeItemFromLane(FZoneGraphLaneHandle LaneHandle, FMassCommandBuffer& CommandBuffer)
+{
+    // 检查注册表
+    if (FBeltEntityArray* BeltItems = LaneRegistry.Find(LaneHandle))
+    {
+        if (BeltItems->Entities.Num() == 0) return false;
+
+        UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+        FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+        // 简单策略：移除第一个有效的实体 (通常是最早生成的)
+        // 更好的做法是维护排序或者是双端队列，但 TArray 在头部移除开销大。
+        // 为了演示，我们遍历找最远距离的（假设最远就是最靠近传送带末端的）。
+        
+        int32 BestIndex = -1;
+        float MaxDist = 2000 - 250; // TODO
+        
+        for (int32 i = 0; i < BeltItems->Entities.Num(); ++i)
+        {
+            FMassEntityHandle Entity = BeltItems->Entities[i];
+            if (!EntityManager.IsEntityValid(Entity)) continue;
+
+            if (FBeltItemFragment* ItemFrag = EntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity))
+            {
+                if (ItemFrag->DistanceAlongBelt > MaxDist)
+                {
+                    MaxDist = ItemFrag->DistanceAlongBelt;
+                    BestIndex = i;
+                }
+            }
+        }
+
+        if (BestIndex != -1)
+        {
+            FMassEntityHandle ItemToDestroy = BeltItems->Entities[BestIndex];
+            CommandBuffer.DestroyEntity(ItemToDestroy);
+            
+            // SwapRemove 高效，但会打乱顺序，不过我们上面每次都重新找最远的，所以顺序不重要
+            BeltItems->Entities.RemoveAt(BestIndex); 
+            
+            return true;
+        }
+    }
+    return false;
+}
+
+bool UMassDspManager::FindAndConnectLaneForSlot(FBuildingSlotState& SlotState, float SearchRadius)
+{
+    // 暂时存根，暂不实现自动空间查询连接
+    return false; 
+}
