@@ -78,14 +78,7 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
 
             LastItemTail = Item->DistanceAlongBelt - (FGameConst::HalfLength * 2) - FGameConst::MinSpacing;
 
-            FVector OutPos = Trajectory.GetLocationAtDistance(Item->DistanceAlongBelt);
-            FVector OutTangent = Trajectory.GetTangentAtDistance(Item->DistanceAlongBelt);
-
-            OutPos.Z += 20.f;
-
-            FTransform& TargetTransform = Transform->GetMutableTransform();
-            TargetTransform.SetLocation(OutPos);
-            TargetTransform.SetRotation(OutTangent.Rotation().Quaternion());
+            Trajectory.ApplyTransform(Transform, Item->DistanceAlongBelt);
         }
     });
 }

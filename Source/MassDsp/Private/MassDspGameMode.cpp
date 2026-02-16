@@ -52,10 +52,6 @@ void AMassDspGameMode::BeginPlay()
             BeltPoints.Add(StartPoint);
             BeltPoints.Add(EndPoint);
 
-            // 创建运行时传送带
-
-            // 使用新接口创建
-
             if (FBeltHandle BeltHandle = DspManager->CreateRuntimeBelt(BeltPoints, ConveyorMesh); BeltHandle.IsValid())
             {
                 FMassEntityManager& EntityManager = World->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();

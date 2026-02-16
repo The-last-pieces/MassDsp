@@ -4,6 +4,8 @@
 #include "Components/SplineComponent.h"
 #include "MassDspBeltTypes.generated.h"
 
+struct FTransformFragment;
+
 USTRUCT()
 struct MASSDSP_API FBeltHandle
 {
@@ -40,23 +42,11 @@ struct MASSDSP_API FBeltTrajectory
 
     float Speed = 400.0f; // 传送带速度，可以根据需要调整或从配置中读取
 
-    bool IsValid() const { return SplineComponent != nullptr; }
+    bool IsValid() const;
 
-    FVector GetLocationAtDistance(float Distance) const
-    {
-        if (SplineComponent)
-        {
-            return SplineComponent->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-        }
-        return FVector::ZeroVector;
-    }
+    FVector GetLocationAtDistance(float Distance) const;
 
-    FVector GetTangentAtDistance(float Distance) const
-    {
-        if (SplineComponent)
-        {
-            return SplineComponent->GetTangentAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-        }
-        return FVector::ForwardVector;
-    }
+    FVector GetTangentAtDistance(float Distance) const;
+
+    void ApplyTransform(FTransformFragment* Transform, float Distance) const;
 };

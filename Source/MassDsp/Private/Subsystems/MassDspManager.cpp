@@ -1,6 +1,7 @@
 ﻿#include "Subsystems/MassDspManager.h"
 
 #include "GameConst.h"
+#include "MassCommonFragments.h"
 
 #include "Fragments/BeltItemFragment.h"
 
@@ -200,11 +201,16 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
 
     CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, BeltHandle](FMassEntityManager& InEntityManager)
     {
+        if (!BeltTrajectories.IsValidIndex(BeltHandle.Index)) return;
+        const FBeltTrajectory& Trajectory = BeltTrajectories[BeltHandle.Index];
+
         const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
         TArray<FMassEntityHandle> NewEntities;
 
         auto CreationContext = InEntityManager.BatchCreateEntities(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues(), 1, NewEntities);
         InEntityManager.BatchSetEntityFragmentValues(CreationContext->GetEntityCollections(InEntityManager), EntityTemplate.GetInitialFragmentValues());
+
+        constexpr float InitialDistance = FGameConst::HalfLength;
 
         for (int32 i = 0; i < NewEntities.Num(); ++i)
         {
@@ -217,8 +223,13 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
                 continue;
             }
 
-            Item->DistanceAlongBelt = FGameConst::HalfLength;
-            Item->BeltHandle = BeltHandle; // 设置新的 Handle
+            Item->DistanceAlongBelt = InitialDistance;
+            Item->BeltHandle = BeltHandle;
+
+            if (FTransformFragment* TransformFrag = InEntityManager.GetFragmentDataPtr<FTransformFragment>(Entity))
+            {
+                Trajectory.ApplyTransform(TransformFrag, InitialDistance);
+            }
 
             BeltEntityRegistry.FindOrAdd(BeltHandle).Entities.EmplaceLast(Entity);
         }
