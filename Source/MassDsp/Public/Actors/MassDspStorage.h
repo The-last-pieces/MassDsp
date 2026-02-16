@@ -12,7 +12,7 @@ UCLASS()
 class MASSDSP_API AMassDspStorage : public AMassDspBuilding
 {
     GENERATED_BODY()
-    
+
 public:
     AMassDspStorage();
 

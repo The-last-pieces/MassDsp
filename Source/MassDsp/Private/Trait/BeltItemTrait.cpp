@@ -1,7 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
-
-#include "Trait/BeltItemTrait.h"
+﻿#include "Trait/BeltItemTrait.h"
 #include "Fragments/BeltItemFragment.h"
 
 #include "MassZoneGraphNavigationFragments.h"

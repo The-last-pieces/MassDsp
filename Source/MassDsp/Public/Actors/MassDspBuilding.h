@@ -40,8 +40,8 @@ UCLASS()
 class MASSDSP_API AMassDspBuilding : public AActor
 {
     GENERATED_BODY()
-    
-public:    
+
+public:
     AMassDspBuilding();
 
 protected:
@@ -51,7 +51,7 @@ protected:
     virtual void OnConstruction(const FTransform& Transform) override;
 #endif
 
-public:    
+public:
     // 建筑主网格
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MassDsp|Building")
     TObjectPtr<UStaticMeshComponent> MeshComponent;
@@ -63,7 +63,7 @@ public:
     // 是否在开始时自动注册为 Mass 实体
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Building")
     bool bAutoRegisterToMass = true;
-    
+
     // 获取特定类型的槽口的世界变换
     UFUNCTION(BlueprintCallable, Category = "MassDsp|Building")
     TArray<FTransform> GetSlotTransformsByType(EBuildingSlotType Type) const;

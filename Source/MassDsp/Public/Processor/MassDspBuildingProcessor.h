@@ -14,18 +14,18 @@ class UZoneGraphSubsystem;
 UCLASS()
 class MASSDSP_API UMassDspBuildingProcessor : public UMassProcessor
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	UMassDspBuildingProcessor();
+    UMassDspBuildingProcessor();
 
 protected:
-	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+    virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+    virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:
-	// 查询拥有建筑片段和槽口片段的实体
-	FMassEntityQuery BuildingQuery;
+    // 查询拥有建筑片段和槽口片段的实体
+    FMassEntityQuery BuildingQuery;
 
     // 缓存子系统引用
     TWeakObjectPtr<UMassDspManager> DspManager;

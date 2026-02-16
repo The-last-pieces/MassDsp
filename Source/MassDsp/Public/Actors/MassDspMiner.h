@@ -12,7 +12,7 @@ UCLASS()
 class MASSDSP_API AMassDspMiner : public AMassDspBuilding
 {
     GENERATED_BODY()
-    
+
 public:
     AMassDspMiner();
 

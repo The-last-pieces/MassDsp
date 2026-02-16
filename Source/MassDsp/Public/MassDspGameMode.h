@@ -1,6 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
@@ -18,7 +16,7 @@ class MASSDSP_API AMassDspGameMode : public AGameModeBase
 protected:
     virtual void BeginPlay() override;
 
-protected:
+public:
     // 传送带网格
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP")
     TObjectPtr<UStaticMesh> ConveyorMesh;
@@ -35,4 +33,3 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP")
     TSubclassOf<AMassDspStorage> StorageClass;
 };
-

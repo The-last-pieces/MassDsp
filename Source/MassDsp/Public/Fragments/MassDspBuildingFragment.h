@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
 #include "ZoneGraphTypes.h" // 添加这行
-#include "Actors/MassDspBuilding.h" 
+#include "Actors/MassDspBuilding.h"
 #include "MassDspBuildingFragment.generated.h"
 
 /**
@@ -17,7 +17,7 @@ struct MASSDSP_API FMassDspBuildingFragment : public FMassFragment
     // 关联的 Actor 指针
     UPROPERTY(Transient)
     TWeakObjectPtr<AMassDspBuilding> BuildingActor;
-    
+
     // 建筑当前的运行状态
     UPROPERTY()
     uint8 State = 0;
@@ -62,17 +62,6 @@ struct FBuildingSlotState
     // 连接的 ZoneGraph 车道句柄 (缓存)
     UPROPERTY()
     FZoneGraphLaneHandle ConnectedLaneHandle;
-
-    // 在车道上的连接点距离 (Input通常是LaneLength, Output通常是0)
-    UPROPERTY()
-    float LaneConnectionDistance = 0.0f;
-
-    // 当前占用的物品实体 (如果有)
-    FMassEntityHandle OccupyingItem;
-
-    // 是否被连接（例如连接了传送带）
-    UPROPERTY()
-    bool bConnected = false;
 };
 
 /**
@@ -85,17 +74,18 @@ struct MASSDSP_API FMassDspBuildingSlotsFragment : public FMassFragment
 {
     GENERATED_BODY()
 
+public:
     UPROPERTY()
     FBuildingSlotState Slots[4];
 
+private:
     UPROPERTY()
-    int SlotCount = 0;
+    int32 SlotCount = 0;
 
-    void AddSlot(const FBuildingSlotState& NewSlot)
-    {
-        if (SlotCount < 4)
-        {
-            Slots[SlotCount++] = NewSlot;
-        }
-	}
+public:
+    void AddSlot(const FBuildingSlotState& NewSlot);
+
+    TArrayView<const FBuildingSlotState> GetSlots() const;
+
+    TArrayView<FBuildingSlotState> GetSlots();
 };

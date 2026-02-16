@@ -1,6 +1,5 @@
 #include "Actors/MassDspBuilding.h"
 #include "Subsystems/MassDspManager.h"
-#include "Kismet/GameplayStatics.h"
 #include "Components/StaticMeshComponent.h"
 
 AMassDspBuilding::AMassDspBuilding()
