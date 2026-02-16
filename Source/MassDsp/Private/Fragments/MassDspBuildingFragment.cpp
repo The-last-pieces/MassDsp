@@ -2,7 +2,7 @@
 
 void FMassDspBuildingSlotsFragment::AddSlot(const FBuildingSlotState& NewSlot)
 {
-    if (SlotCount < 4)
+    if (SlotCount < FGameConst::SlotMaxCount)
     {
         Slots[SlotCount++] = NewSlot;
     }

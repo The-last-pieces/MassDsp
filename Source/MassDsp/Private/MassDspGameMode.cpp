@@ -27,61 +27,11 @@ void AMassDspGameMode::BeginPlay()
         return;
     }
 
-    // 1. 创建并注册矿机
     FVector MinerLocation(0, 0, 0);
     AMassDspMiner* MinerActor = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation, FRotator::ZeroRotator);
-    FMassEntityHandle MinerEntity = DspManager->RegisterBuildingEntity(MinerActor);
 
-    // 2. 创建并注册仓库 (在 X 轴正方向 1000 单位处)
-    FVector StorageLocation(1000, 0, 0);
+    FVector StorageLocation(2000, 0, 0);
     AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator::ZeroRotator);
-    FMassEntityHandle StorageEntity = DspManager->RegisterBuildingEntity(StorageActor);
 
-    // 3. 连接逻辑
-    if (MinerActor && StorageActor)
-    {
-        TArray<FTransform> MinerOutputs = MinerActor->GetSlotTransformsByType(EBuildingSlotType::Output);
-        TArray<FTransform> StorageInputs = StorageActor->GetSlotTransformsByType(EBuildingSlotType::Input);
-
-        if (MinerOutputs.Num() > 0 && StorageInputs.Num() > 0)
-        {
-            FVector StartPoint = MinerOutputs[0].GetLocation();
-            FVector EndPoint = StorageInputs[0].GetLocation();
-
-            TArray<FVector> BeltPoints;
-            BeltPoints.Add(StartPoint);
-            BeltPoints.Add(EndPoint);
-
-            if (FBeltHandle BeltHandle = DspManager->CreateRuntimeBelt(BeltPoints, ConveyorMesh); BeltHandle.IsValid())
-            {
-                FMassEntityManager& EntityManager = World->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
-
-                // 连接 Miner 的输出槽到传送带起点
-                if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(MinerEntity))
-                {
-                    for (auto& Slot : MinerSlots->GetSlots())
-                    {
-                        if (Slot.Type == EBuildingSlotType::Output)
-                        {
-                            Slot.ConnectedLaneHandle = BeltHandle;
-                            break;
-                        }
-                    }
-                }
-
-                // 连接 Storage 的输入槽到传送带终点
-                if (FMassDspBuildingSlotsFragment* StorageSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(StorageEntity))
-                {
-                    for (auto& Slot : StorageSlots->GetSlots())
-                    {
-                        if (Slot.Type == EBuildingSlotType::Input)
-                        {
-                            Slot.ConnectedLaneHandle = BeltHandle;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    DspManager->CreateAndLinkBeltForSlot(MinerActor, 0, StorageActor, 0, ConveyorMesh);
 }

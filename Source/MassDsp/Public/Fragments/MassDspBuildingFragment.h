@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "GameConst.h"
 #include "MassEntityTypes.h"
 #include "MassDspBeltTypes.h"
 #include "Actors/MassDspBuilding.h"
@@ -76,7 +77,7 @@ struct MASSDSP_API FMassDspBuildingSlotsFragment : public FMassFragment
 
 public:
     UPROPERTY()
-    FBuildingSlotState Slots[4];
+    FBuildingSlotState Slots[FGameConst::SlotMaxCount];
 
 private:
     UPROPERTY()

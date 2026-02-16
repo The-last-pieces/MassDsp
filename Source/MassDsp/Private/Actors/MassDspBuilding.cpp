@@ -15,13 +15,19 @@ void AMassDspBuilding::BeginPlay()
 {
     Super::BeginPlay();
 
-    if (bAutoRegisterToMass)
+    if (auto Manager = GetWorld()->GetSubsystem<UMassDspManager>())
     {
-        UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
-        if (Manager)
-        {
-            Manager->RegisterBuildingEntity(this);
-        }
+        Manager->RegisterBuildingEntity(this);
+    }
+}
+
+void AMassDspBuilding::PostActorCreated()
+{
+    Super::PostActorCreated();
+
+    if (auto DspManager = GetWorld()->GetSubsystem<UMassDspManager>())
+    {
+        MassHandle = DspManager->RegisterBuildingEntity(this);
     }
 }
 
@@ -32,19 +38,3 @@ void AMassDspBuilding::OnConstruction(const FTransform& Transform)
     // 可视化槽口逻辑可以在这里添加，例如绘制DebugSphere
 }
 #endif
-
-TArray<FTransform> AMassDspBuilding::GetSlotTransformsByType(EBuildingSlotType Type) const
-{
-    TArray<FTransform> Result;
-    FTransform ActorTransform = GetActorTransform();
-
-    for (const FBuildingSlotDef& Slot : Slots)
-    {
-        if (Slot.SlotType == Type)
-        {
-            // 将本地变换转换为世界变换
-            Result.Add(Slot.LocalTransform * ActorTransform);
-        }
-    }
-    return Result;
-}

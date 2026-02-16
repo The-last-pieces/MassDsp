@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "MassEntityHandle.h"
+
 #include "GameFramework/Actor.h"
 #include "MassDspBuilding.generated.h"
 
@@ -47,6 +49,8 @@ public:
 protected:
     virtual void BeginPlay() override;
 
+    virtual void PostActorCreated() override;
+
 #if WITH_EDITOR
     virtual void OnConstruction(const FTransform& Transform) override;
 #endif
@@ -60,11 +64,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Building")
     TArray<FBuildingSlotDef> Slots;
 
-    // 是否在开始时自动注册为 Mass 实体
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Building")
-    bool bAutoRegisterToMass = true;
-
-    // 获取特定类型的槽口的世界变换
-    UFUNCTION(BlueprintCallable, Category = "MassDsp|Building")
-    TArray<FTransform> GetSlotTransformsByType(EBuildingSlotType Type) const;
+    // 注册到 Mass 后的实体句柄，方便后续查询和调试
+    UPROPERTY()
+    FMassEntityHandle MassHandle;
 };

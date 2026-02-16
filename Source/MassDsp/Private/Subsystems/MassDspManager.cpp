@@ -20,11 +20,11 @@ void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
 
-    // 创建一个名为 "Belts" 的隐形 Actor 来挂载所有的 SplineComponent
     if (UWorld* World = GetWorld())
     {
         FActorSpawnParameters SpawnParams;
-        SpawnParams.Name = FName(TEXT("BeltsContainer"));
+        SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
         BeltsContainerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
         if (BeltsContainerActor)
         {
@@ -37,6 +37,7 @@ void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
         }
     }
 }
+
 
 void UMassDspManager::Deinitialize()
 {
@@ -118,6 +119,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoi
     for (const FVector& Pt : ControlPoints)
     {
         NewSpline->AddSplinePoint(Pt, ESplineCoordinateSpace::World, false);
+        NewSpline->SetSplinePointType(NewSpline->GetNumberOfSplinePoints() - 1, ESplinePointType::Linear, false);
     }
     NewSpline->UpdateSpline();
     NewSpline->RegisterComponent();
@@ -181,6 +183,63 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoi
     }
 
     return NewHandle;
+}
+
+FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
+    const AMassDspBuilding* SBuilding, int32 StartSlotIndex, const AMassDspBuilding* EBuilding, int32 EndSlotIndex, UStaticMesh* BeltMesh
+)
+{
+    if (!(SBuilding && SBuilding->MassHandle.IsValid() && EBuilding && EBuilding->MassHandle.IsValid())) return FBeltHandle();
+
+    FMassEntityManager& EntityManager = GetWorld()->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
+
+    FBuildingSlotState *StartSlot = nullptr, *EndSlot = nullptr;
+
+    if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(SBuilding->MassHandle))
+    {
+        for (auto& Slot : MinerSlots->GetSlots())
+        {
+            if (Slot.Type == EBuildingSlotType::Output)
+            {
+                if (StartSlotIndex-- == 0)
+                {
+                    StartSlot = &Slot;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (FMassDspBuildingSlotsFragment* StorageSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EBuilding->MassHandle))
+    {
+        for (auto& Slot : StorageSlots->GetSlots())
+        {
+            if (Slot.Type == EBuildingSlotType::Input)
+            {
+                if (EndSlotIndex-- == 0)
+                {
+                    EndSlot = &Slot;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!StartSlot || !EndSlot) return FBeltHandle();
+
+    TArray<FVector> BeltPoints;
+
+    BeltPoints.Add(SBuilding->GetActorTransform().GetLocation());
+    BeltPoints.Add(StartSlot->WorldLocation);
+    BeltPoints.Add(EndSlot->WorldLocation);
+    BeltPoints.Add(EBuilding->GetActorTransform().GetLocation());
+
+    FBeltHandle BeltHandle = CreateRuntimeBelt(BeltPoints, BeltMesh, 10);
+    if (!BeltHandle.IsValid()) return FBeltHandle();
+
+    StartSlot->ConnectedLaneHandle = EndSlot->ConnectedLaneHandle = BeltHandle;
+
+    return BeltHandle;
 }
 
 bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, UMassEntityConfigAsset* ItemConfig)
