@@ -29,7 +29,7 @@ public:
     TMap<FZoneGraphLaneHandle, FBeltEntityArray> LaneRegistry;
 
 public:
-    FZoneGraphDataHandle CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection = 10) const;
+    FZoneGraphDataHandle CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection = 1) const;
 
     bool ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FZoneGraphLaneHandle LaneHandle, UMassEntityConfigAsset* ItemConfig);
 

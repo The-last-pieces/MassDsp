@@ -61,7 +61,6 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
             FTransformFragment* Transform = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
             FMassZoneGraphCachedLaneFragment* CachedLane = EntityManager.GetFragmentDataPtr<FMassZoneGraphCachedLaneFragment>(Entity);
 
-            // 如果实体在此时被异步销毁，需过滤
             if (!Item || !Transform || !CachedLane) continue;
 
             constexpr float Inflate = FGameConst::HalfLength * 3.f + FGameConst::MinSpacing;
@@ -94,21 +93,5 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
             TargetTransform.SetLocation(OutPos);
             TargetTransform.SetRotation(OutTangent.Rotation().Quaternion());
         }
-
-        // TStringBuilder<1000> Builder;
-        // // log打印所有distance
-        // for (auto& Entity : LaneData->Entities)
-        // {
-        //     auto Ptr = EntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity);
-        //     auto Ptr2 = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
-        //     if (Ptr && Ptr2)
-        //     {
-        //         auto Loc = Ptr2->GetTransform().GetLocation();
-        //         Builder.Appendf(TEXT("%f:"), Ptr->DistanceAlongBelt);
-        //         Builder.Appendf(TEXT("%f"), Loc.X);
-        //         Builder.Append(";");
-        //     }
-        // }
-        // UE_LOG(LogTemp, Warning, TEXT("%s"), Builder.ToString());
     });
 }
