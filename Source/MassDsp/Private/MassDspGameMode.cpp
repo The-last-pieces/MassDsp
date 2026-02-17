@@ -28,10 +28,10 @@ void AMassDspGameMode::BeginPlay()
     }
 
     FVector MinerLocation(0, 0, 0);
-    AMassDspMiner* MinerActor = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation, FRotator::ZeroRotator);
+    AMassDspMiner* MinerActor = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation, FRotator(0, 90, 0));
 
-    FVector StorageLocation(2000, 0, 0);
-    AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator::ZeroRotator);
+    FVector StorageLocation(1000, 0, 0);
+    AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator(0, -90, 0));
 
     DspManager->CreateAndLinkBeltForSlot(MinerActor, 0, StorageActor, 0, ConveyorMesh);
 }

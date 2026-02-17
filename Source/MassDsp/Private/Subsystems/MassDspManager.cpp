@@ -105,9 +105,9 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
     return EntityHandle;
 }
 
-FBeltHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoints, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
+FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
 {
-    if (ControlPoints.Num() < 2 || !BeltsContainerActor) return FBeltHandle();
+    if (!BeltsContainerActor) return FBeltHandle();
 
     // --- Spline 生成 ---
     USplineComponent* NewSpline = NewObject<USplineComponent>(BeltsContainerActor);
@@ -115,12 +115,8 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoi
     NewSpline->SetClosedLoop(false);
     NewSpline->ClearSplinePoints(false);
 
-    // 将 ControlPoints 添加为 SplinePoints
-    for (const FVector& Pt : ControlPoints)
-    {
-        NewSpline->AddSplinePoint(Pt, ESplineCoordinateSpace::World, false);
-        NewSpline->SetSplinePointType(NewSpline->GetNumberOfSplinePoints() - 1, ESplinePointType::Linear, false);
-    }
+    InitSpline(NewSpline);
+
     NewSpline->UpdateSpline();
     NewSpline->RegisterComponent();
 
@@ -135,20 +131,11 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TArray<FVector>& ControlPoi
     NewHandle.Index = Index;
     NewHandle.Generation = 0; // TODO Implement generation check if needed
 
-    // --- Spline Mesh 生成 (为了可视化) ---
     if (BeltMesh)
     {
-        // 我们依然沿着 Spline 采样生成 Mesh，但现在可以直接用 Spline 接口 
-        // 为了兼容旧逻辑（ControlPoints 之间生成 Mesh），我们遍历 Point
-
         int32 NumPoints = NewSpline->GetNumberOfSplinePoints();
         for (int32 i = 0; i < NumPoints - 1; ++i)
         {
-            // 对于每个段，我们可以在两点之间生成一个 Mesh，并使用 Start/End Tangent
-            // 细分：如果SegmentsPerSection > 1，则需要在中间再生成点。
-            // 简单起见，我们按照之前的逻辑，在 Control Points 之间做细分采样
-
-            // 下面的逻辑将复用 NewSpline 的插值能力
             float DistStart = NewSpline->GetDistanceAlongSplineAtSplinePoint(i);
             float DistEnd = NewSpline->GetDistanceAlongSplineAtSplinePoint(i + 1);
             float SegmentLen = DistEnd - DistStart;
@@ -227,14 +214,51 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 
     if (!StartSlot || !EndSlot) return FBeltHandle();
 
-    TArray<FVector> BeltPoints;
+    // --- A(建筑中心) -> B(输出槽) -> C(输入槽) -> D(建筑中心) ---
 
-    BeltPoints.Add(SBuilding->GetActorTransform().GetLocation());
-    BeltPoints.Add(StartSlot->WorldLocation);
-    BeltPoints.Add(EndSlot->WorldLocation);
-    BeltPoints.Add(EBuilding->GetActorTransform().GetLocation());
+    // 定义4个关键控制点
+    FVector A = SBuilding->GetActorLocation();
+    FVector B = StartSlot->WorldLocation;
+    FVector C = EndSlot->WorldLocation;
+    FVector D = EBuilding->GetActorLocation();
 
-    FBeltHandle BeltHandle = CreateRuntimeBelt(BeltPoints, BeltMesh, 10);
+    TArray BeltPoints = {A, B, C, D};
+
+    FVector AB_Direction = (B - A).GetSafeNormal();
+    FVector CB_Direction = (D - C).GetSafeNormal();
+
+    float AB_Length = FVector::Dist(A, B);
+    float CD_Length = FVector::Dist(C, D);
+    float BC_Length = FVector::Dist(B, C);
+
+    constexpr float TangentScale = 5.f;
+
+    float BTangentLen = FMath::Max(AB_Length * 1.0f, BC_Length * 0.4f) * TangentScale;
+    FVector StartTangent = AB_Direction * BTangentLen;
+
+    float CTangentLen = FMath::Max(CD_Length * 1.0f, BC_Length * 0.4f) * TangentScale;
+    FVector EndTangent = CB_Direction * CTangentLen;
+
+    // TODO 考虑引入中间拐点来减少曲线段的占比
+
+    FBeltHandle BeltHandle = CreateRuntimeBelt([&BeltPoints, StartTangent,EndTangent](USplineComponent* NewSpline)
+    {
+        for (const auto& Pt : BeltPoints)
+        {
+            NewSpline->AddSplinePoint(Pt, ESplineCoordinateSpace::World, false);
+        }
+
+        NewSpline->SetSplinePointType(0, ESplinePointType::Linear, false);
+
+        NewSpline->SetSplinePointType(1, ESplinePointType::CurveCustomTangent, false);
+        NewSpline->SetTangentsAtSplinePoint(1, FVector::ZeroVector, StartTangent, ESplineCoordinateSpace::World, false);
+
+        NewSpline->SetSplinePointType(2, ESplinePointType::CurveCustomTangent, false);
+        NewSpline->SetTangentsAtSplinePoint(2, EndTangent, FVector::ZeroVector, ESplineCoordinateSpace::World, false);
+
+        NewSpline->SetSplinePointType(3, ESplinePointType::Linear, false);
+    }, BeltMesh, 50);
+
     if (!BeltHandle.IsValid()) return FBeltHandle();
 
     StartSlot->ConnectedLaneHandle = EndSlot->ConnectedLaneHandle = BeltHandle;
