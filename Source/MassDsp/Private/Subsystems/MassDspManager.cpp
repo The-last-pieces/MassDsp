@@ -6,7 +6,13 @@
 #include "Fragments/BeltItemFragment.h"
 
 #include "Actors/MassDspBuilding.h"
+#include "Actors/MassDspMiner.h"
+#include "Actors/MassDspStorage.h"
+#include "Actors/MassDspAssembler.h"
 #include "Fragments/MassDspBuildingFragment.h"
+#include "Fragments/MassDspMinerFragment.h"
+#include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspAssemblerFragment.h"
 
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
@@ -68,11 +74,44 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
     // 1. 创建一个新的实体
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
 
-    // 直接创建包含所需 Fragment 的 Archetype
-    const FMassArchetypeHandle ArchetypeHandle = EntityManager.CreateArchetype({
-        FMassDspBuildingFragment::StaticStruct(),
-        FMassDspBuildingSlotsFragment::StaticStruct()
-    });
+    // 根据建筑类型创建不同的Archetype
+    FMassArchetypeHandle ArchetypeHandle;
+
+    if (AMassDspMiner* MinerActor = Cast<AMassDspMiner>(BuildingActor))
+    {
+        // 矿机：包含BuildingFragment + MinerFragment + SlotsFragment
+        ArchetypeHandle = EntityManager.CreateArchetype({
+            FMassDspBuildingFragment::StaticStruct(),
+            FMassDspMinerFragment::StaticStruct(),
+            FMassDspBuildingSlotsFragment::StaticStruct()
+        });
+    }
+    else if (AMassDspStorage* StorageActor = Cast<AMassDspStorage>(BuildingActor))
+    {
+        // 仓库：包含BuildingFragment + StorageFragment + SlotsFragment
+        ArchetypeHandle = EntityManager.CreateArchetype({
+            FMassDspBuildingFragment::StaticStruct(),
+            FMassDspStorageFragment::StaticStruct(),
+            FMassDspBuildingSlotsFragment::StaticStruct()
+        });
+    }
+    else if (AMassDspAssembler* AssemblerActor = Cast<AMassDspAssembler>(BuildingActor))
+    {
+        // 合成台：包含BuildingFragment + AssemblerFragment + SlotsFragment
+        ArchetypeHandle = EntityManager.CreateArchetype({
+            FMassDspBuildingFragment::StaticStruct(),
+            FMassDspAssemblerFragment::StaticStruct(),
+            FMassDspBuildingSlotsFragment::StaticStruct()
+        });
+    }
+    else
+    {
+        // 默认建筑：只包含BuildingFragment + SlotsFragment
+        ArchetypeHandle = EntityManager.CreateArchetype({
+            FMassDspBuildingFragment::StaticStruct(),
+            FMassDspBuildingSlotsFragment::StaticStruct()
+        });
+    }
 
     FMassEntityHandle EntityHandle = EntityManager.CreateEntity(ArchetypeHandle);
 
@@ -83,7 +122,42 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
         BuildingFragment->State = 0; // 默认闲置
     }
 
-    // 3. 处理槽口信息并添加到 Fragment
+    // 3. 根据建筑类型初始化特定Fragment
+    if (AMassDspMiner* MinerActor = Cast<AMassDspMiner>(BuildingActor))
+    {
+        if (FMassDspMinerFragment* MinerFragment = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(EntityHandle))
+        {
+            MinerFragment->ProductionInterval = MinerActor->ProductionInterval;
+            MinerFragment->ProductionProgress = 0.0f;
+        }
+    }
+    else if (AMassDspStorage* StorageActor = Cast<AMassDspStorage>(BuildingActor))
+    {
+        if (FMassDspStorageFragment* StorageFragment = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(EntityHandle))
+        {
+            StorageFragment->Capacity = StorageActor->Capacity;
+        }
+
+        // 更新BuildingFragment的MaxInventory
+        if (FMassDspBuildingFragment* BuildingFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingFragment>(EntityHandle))
+        {
+            BuildingFragment->MaxInventory = StorageActor->Capacity;
+        }
+    }
+    else if (AMassDspAssembler* AssemblerActor = Cast<AMassDspAssembler>(BuildingActor))
+    {
+        if (FMassDspAssemblerFragment* AssemblerFragment = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(EntityHandle))
+        {
+            //AssemblerFragment->CurrentRecipe = AssemblerActor->CurrentRecipe;
+            AssemblerFragment->CraftingSpeedMultiplier = AssemblerActor->CraftingSpeedMultiplier;
+            AssemblerFragment->InputBufferCapacity = AssemblerActor->InputBufferCapacity;
+            AssemblerFragment->OutputBufferCapacity = AssemblerActor->OutputBufferCapacity;
+            AssemblerFragment->CraftingProgress = 0.0f;
+            AssemblerFragment->OutputBufferCount = 0;
+        }
+    }
+
+    // 4. 处理槽口信息并添加到 Fragment
     if (FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EntityHandle))
     {
         const FTransform ActorTransform = BuildingActor->GetActorTransform();
@@ -302,6 +376,7 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
 
             Item->DistanceAlongBelt = InitialDistance;
             Item->BeltHandle = BeltHandle;
+            // TODO 存物品类型
 
             if (FTransformFragment* TransformFrag = InEntityManager.GetFragmentDataPtr<FTransformFragment>(Entity))
             {
@@ -315,6 +390,7 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
     return true;
 }
 
+// TODO 返回物品类型
 bool UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle)
 {
     // 检查注册表

@@ -9,6 +9,7 @@
 
 /**
  * 建筑的基础运行时数据 Fragment
+ * 包含所有建筑类型共有的通用数据
  */
 USTRUCT()
 struct MASSDSP_API FMassDspBuildingFragment : public FMassFragment
@@ -23,11 +24,7 @@ struct MASSDSP_API FMassDspBuildingFragment : public FMassFragment
     UPROPERTY()
     uint8 State = 0;
 
-    // 当前生产进度 (0.0 - 1.0)
-    UPROPERTY()
-    float ProductionProgress = 0.0f;
-
-    // 通用库存计数 (对于矿机是输出缓冲，对于仓库是存储量)
+    // 通用库存计数 (对于矿机是输出缓冲，对于仓库是存储量，对于合成台是输出缓冲)
     UPROPERTY()
     int32 InventoryCount = 0;
 
