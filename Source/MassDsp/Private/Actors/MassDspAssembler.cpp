@@ -1,5 +1,9 @@
 #include "Actors/MassDspAssembler.h"
 
+#include "MassEntityManager.h"
+
+#include "Fragments/MassDspAssemblerFragment.h"
+
 AMassDspAssembler::AMassDspAssembler()
 {
     // 设置默认槽位配置：3个输入 + 1个输出
@@ -46,4 +50,25 @@ AMassDspAssembler::AMassDspAssembler()
     CurrentRecipe.Inputs.Add(FRecipeInput(EItemType::IronPlate, 2));
     CurrentRecipe.Output = FRecipeOutput(EItemType::IronGear, 1);
     CurrentRecipe.CraftingTime = 2.0f;
+}
+
+const UScriptStruct* AMassDspAssembler::GetStaticStructForFragment() const
+{
+    return FMassDspAssemblerFragment::StaticStruct();
+}
+
+void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
+{
+    Super::InitFragmentForEntity(EntityManager, EntityHandle);
+
+    if (FMassDspAssemblerFragment* AssemblerFragment = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(EntityHandle))
+    {
+        AssemblerFragment->CurrentRecipe = CurrentRecipe.ToFragment();
+        AssemblerFragment->CraftingSpeedMultiplier = CraftingSpeedMultiplier;
+        AssemblerFragment->InputBufferCapacity = InputBufferCapacity;
+        AssemblerFragment->OutputBufferCapacity = OutputBufferCapacity;
+        AssemblerFragment->MaxInventory = OutputBufferCapacity;
+        AssemblerFragment->CraftingProgress = 0.0f;
+        AssemblerFragment->OutputBufferCount = 0;
+    }
 }

@@ -8,27 +8,27 @@ UENUM(BlueprintType)
 enum class EItemType : uint8
 {
     None = 0 UMETA(DisplayName = "无"),
-    
+
     // 原材料
     IronOre = 1 UMETA(DisplayName = "铁矿石"),
     CopperOre = 2 UMETA(DisplayName = "铜矿石"),
     Stone = 3 UMETA(DisplayName = "石头"),
     Coal = 4 UMETA(DisplayName = "煤炭"),
-    
+
     // 基础材料
     IronPlate = 10 UMETA(DisplayName = "铁板"),
     CopperPlate = 11 UMETA(DisplayName = "铜板"),
     SteelPlate = 12 UMETA(DisplayName = "钢板"),
-    
+
     // 中级材料
     IronGear = 20 UMETA(DisplayName = "铁齿轮"),
     CopperWire = 21 UMETA(DisplayName = "铜线"),
     Circuit = 22 UMETA(DisplayName = "电路板"),
-    
+
     // 高级材料
     AdvancedCircuit = 30 UMETA(DisplayName = "高级电路板"),
     ProcessingUnit = 31 UMETA(DisplayName = "处理器"),
-    
+
     // 预留扩展空间
     MAX = 255
 };
@@ -46,10 +46,11 @@ struct FRecipeInput
     int32 Amount = 1;
 
     FRecipeInput() = default;
-    
+
     FRecipeInput(EItemType InType, int32 InAmount)
         : ItemType(InType), Amount(InAmount)
-    {}
+    {
+    }
 
     bool IsValid() const
     {
@@ -70,14 +71,38 @@ struct FRecipeOutput
     int32 Amount = 1;
 
     FRecipeOutput() = default;
-    
+
     FRecipeOutput(EItemType InType, int32 InAmount)
         : ItemType(InType), Amount(InAmount)
-    {}
+    {
+    }
 
     bool IsValid() const
     {
         return ItemType != EItemType::None && Amount > 0;
+    }
+};
+
+USTRUCT()
+struct FRecipeDataForFragment
+{
+    GENERATED_BODY()
+
+    UPROPERTY()
+    FRecipeInput Inputs[3];
+
+    UPROPERTY()
+    int InputsCount = 0;
+
+    UPROPERTY()
+    FRecipeOutput Output;
+
+    UPROPERTY()
+    float CraftingTime = 1.0f;
+
+    TArrayView<FRecipeInput> GetInputs()
+    {
+        return MakeArrayView(Inputs, InputsCount);
     }
 };
 
@@ -110,14 +135,27 @@ struct FRecipeData
     {
         if (Inputs.Num() == 0 || Inputs.Num() > 3)
             return false;
-        
+
         for (const FRecipeInput& Input : Inputs)
         {
             if (!Input.IsValid())
                 return false;
         }
-        
+
         return Output.IsValid() && CraftingTime > 0.0f;
+    }
+
+    FRecipeDataForFragment ToFragment() const
+    {
+        FRecipeDataForFragment FragmentData;
+        FragmentData.InputsCount = FMath::Min(Inputs.Num(), 3);
+        for (int i = 0; i < FragmentData.InputsCount; ++i)
+        {
+            FragmentData.Inputs[i] = Inputs[i];
+        }
+        FragmentData.Output = Output;
+        FragmentData.CraftingTime = CraftingTime;
+        return FragmentData;
     }
 };
 

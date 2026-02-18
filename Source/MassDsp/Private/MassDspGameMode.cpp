@@ -1,11 +1,8 @@
 ﻿#include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
+
 #include "Actors/MassDspMiner.h"
 #include "Actors/MassDspStorage.h"
-#include "Fragments/MassDspBuildingFragment.h"
-#include "MassEntitySubsystem.h"
-#include "MassEntityManager.h"
-
 #include "Actors/MassDspAssembler.h"
 
 #include "Misc/CoreDelegates.h"

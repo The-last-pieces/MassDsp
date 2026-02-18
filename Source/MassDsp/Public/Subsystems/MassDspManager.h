@@ -47,5 +47,5 @@ public:
 
     bool ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle);
 
-    FMassEntityHandle RegisterBuildingEntity(AMassDspBuilding* BuildingActor) const;
+    FMassEntityHandle RegisterBuildingEntity(const AMassDspBuilding* BuildingActor) const;
 };

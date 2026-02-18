@@ -1,19 +1,20 @@
-﻿#include "Fragments/MassDspBuildingFragment.h"
+#include "Fragments/MassDspBuildingSlotsFragment.h"
 
 void FMassDspBuildingSlotsFragment::AddSlot(const FBuildingSlotState& NewSlot)
 {
     if (SlotCount < FGameConst::SlotMaxCount)
     {
-        Slots[SlotCount++] = NewSlot;
+        Slots[SlotCount] = NewSlot;
+        SlotCount++;
     }
 }
 
 TArrayView<const FBuildingSlotState> FMassDspBuildingSlotsFragment::GetSlots() const
 {
-    return MakeArrayView(Slots, SlotCount);
+    return TArrayView(Slots, SlotCount);
 }
 
 TArrayView<FBuildingSlotState> FMassDspBuildingSlotsFragment::GetSlots()
 {
-    return MakeArrayView(Slots, SlotCount);
+    return TArrayView(Slots, SlotCount);
 }

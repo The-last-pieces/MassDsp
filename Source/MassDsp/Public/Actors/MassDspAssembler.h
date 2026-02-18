@@ -17,6 +17,12 @@ class MASSDSP_API AMassDspAssembler : public AMassDspBuilding
 public:
     AMassDspAssembler();
 
+protected:
+    virtual const UScriptStruct* GetStaticStructForFragment() const override;
+    
+    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const override;
+
+public:
     // 当前配方
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Assembler")
     FRecipeData CurrentRecipe;

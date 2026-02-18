@@ -16,6 +16,12 @@ class MASSDSP_API AMassDspStorage : public AMassDspBuilding
 public:
     AMassDspStorage();
 
+protected:
+    virtual const UScriptStruct* GetStaticStructForFragment() const override;
+    
+    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const override;
+
+public:
     // 存储容量
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Storage")
     int32 Capacity = 50;

@@ -16,6 +16,12 @@ class MASSDSP_API AMassDspMiner : public AMassDspBuilding
 public:
     AMassDspMiner();
 
+protected:
+    virtual const UScriptStruct* GetStaticStructForFragment() const override;
+
+    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const override;
+
+public:
     // 生产间隔（秒）
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Miner")
     float ProductionInterval = 2.0f;

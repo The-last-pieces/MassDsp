@@ -5,6 +5,10 @@
 #include "MassDspBuildingProcessor.generated.h"
 
 class UMassDspManager;
+class AMassDspGameMode;
+struct FMassDspBuildingSlotsFragment;
+struct FBeltHandle;
+class UMassEntityConfigAsset;
 
 /**
  * 建筑逻辑处理器
@@ -24,18 +28,19 @@ protected:
     virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:
-    // 矿机生产逻辑Query
+    // 矿机生产逻辑Query（包含槽口处理）
     FMassEntityQuery MinerQuery;
 
-    // 仓库存储逻辑Query
+    // 仓库存储逻辑Query（包含槽口处理）
     FMassEntityQuery StorageQuery;
 
-    // 合成台合成逻辑Query
+    // 合成台合成逻辑Query（包含槽口处理）
     FMassEntityQuery AssemblerQuery;
-
-    // 槽口输入输出逻辑Query
-    FMassEntityQuery SlotQuery;
 
     // 缓存子系统引用
     TWeakObjectPtr<UMassDspManager> DspManager;
+
+    // 槽口处理辅助函数
+    void ProcessOutputSlots(FMassDspBuildingSlotsFragment& SlotsData, int32& InventoryCount, const FMassExecutionContext& Context, const AMassDspGameMode* GameMode) const;
+    void ProcessInputSlots(FMassDspBuildingSlotsFragment& SlotsData, int32& InventoryCount, int32 MaxInventory, const FMassExecutionContext& Context) const;
 };

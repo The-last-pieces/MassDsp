@@ -6,7 +6,8 @@
 #include "GameFramework/Actor.h"
 #include "MassDspBuilding.generated.h"
 
-class UArrowComponent; // 添加前向声明
+struct FMassEntityManager;
+class UArrowComponent;
 
 // 槽口类型枚举
 UENUM(BlueprintType)
@@ -51,6 +52,14 @@ class MASSDSP_API AMassDspBuilding : public AActor
 
 public:
     AMassDspBuilding();
+
+public:
+    TArray<const UScriptStruct*> GetStaticStructs() const;
+
+    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const;
+
+protected:
+    virtual const UScriptStruct* GetStaticStructForFragment() const;
 
 protected:
     virtual void BeginPlay() override;

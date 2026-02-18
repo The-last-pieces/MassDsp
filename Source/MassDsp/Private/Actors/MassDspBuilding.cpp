@@ -2,6 +2,8 @@
 #include "Subsystems/MassDspManager.h"
 #include "Components/StaticMeshComponent.h"
 
+#include "Fragments/MassDspBuildingSlotsFragment.h"
+
 #if WITH_EDITOR
 #include "Components/ArrowComponent.h"
 #endif
@@ -13,6 +15,42 @@ AMassDspBuilding::AMassDspBuilding()
     // 创建根组件
     MeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MeshComponent"));
     RootComponent = MeshComponent;
+}
+
+TArray<const UScriptStruct*> AMassDspBuilding::GetStaticStructs() const
+{
+    return {
+        GetStaticStructForFragment(),
+        FMassDspBuildingSlotsFragment::StaticStruct(),
+    };
+}
+
+void AMassDspBuilding::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
+{
+    if (FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EntityHandle))
+    {
+        const FTransform ActorTransform = GetActorTransform();
+
+        for (const FBuildingSlotDef& SlotDef : Slots)
+        {
+            FBuildingSlotState NewSlotState;
+            // 计算世界空间变换
+            FTransform WorldSlotTransform = SlotDef.LocalTransform * ActorTransform;
+
+            NewSlotState.WorldLocation = WorldSlotTransform.GetLocation();
+            NewSlotState.WorldRotation = WorldSlotTransform.GetRotation();
+            NewSlotState.SlotExtend = SlotDef.SlotExtend;
+            NewSlotState.Type = SlotDef.SlotType;
+
+            SlotsFragment->AddSlot(NewSlotState);
+        }
+    }
+}
+
+const UScriptStruct* AMassDspBuilding::GetStaticStructForFragment() const
+{
+    checkNoEntry();
+    return nullptr;
 }
 
 void AMassDspBuilding::BeginPlay()
