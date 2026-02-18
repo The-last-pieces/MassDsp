@@ -96,6 +96,7 @@ FMassEntityHandle UMassDspManager::RegisterBuildingEntity(AMassDspBuilding* Buil
 
             NewSlotState.WorldLocation = WorldSlotTransform.GetLocation();
             NewSlotState.WorldRotation = WorldSlotTransform.GetRotation();
+            NewSlotState.SlotExtend = SlotDef.SlotExtend;
             NewSlotState.Type = SlotDef.SlotType;
 
             SlotsFragment->AddSlot(NewSlotState);
@@ -133,39 +134,35 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
 
     if (BeltMesh)
     {
-        int32 NumPoints = NewSpline->GetNumberOfSplinePoints();
-        for (int32 i = 0; i < NumPoints - 1; ++i)
+        float DistStart = 0;
+        float DistEnd = NewSpline->GetSplineLength();
+        float SegmentLen = DistEnd - DistStart;
+        float StepLen = SegmentLen / SegmentsPerSection;
+
+        for (int32 j = 0; j < SegmentsPerSection; ++j)
         {
-            float DistStart = NewSpline->GetDistanceAlongSplineAtSplinePoint(i);
-            float DistEnd = NewSpline->GetDistanceAlongSplineAtSplinePoint(i + 1);
-            float SegmentLen = DistEnd - DistStart;
-            float StepLen = SegmentLen / SegmentsPerSection;
+            float D1 = DistStart + StepLen * j;
+            float D2 = DistStart + StepLen * (j + 1);
 
-            for (int32 j = 0; j < SegmentsPerSection; ++j)
-            {
-                float D1 = DistStart + StepLen * j;
-                float D2 = DistStart + StepLen * (j + 1);
+            FVector P1 = NewSpline->GetLocationAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
+            FVector T1 = NewSpline->GetTangentAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
+            FVector P2 = NewSpline->GetLocationAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
+            FVector T2 = NewSpline->GetTangentAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
 
-                FVector P1 = NewSpline->GetLocationAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
-                FVector T1 = NewSpline->GetTangentAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
-                FVector P2 = NewSpline->GetLocationAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
-                FVector T2 = NewSpline->GetTangentAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
+            USplineMeshComponent* Smc = NewObject<USplineMeshComponent>(BeltsContainerActor);
+            Smc->SetStaticMesh(BeltMesh);
+            Smc->SetMobility(EComponentMobility::Movable);
+            Smc->SetForwardAxis(ESplineMeshAxis::X);
 
-                USplineMeshComponent* Smc = NewObject<USplineMeshComponent>(BeltsContainerActor);
-                Smc->SetStaticMesh(BeltMesh);
-                Smc->SetMobility(EComponentMobility::Movable);
-                Smc->SetForwardAxis(ESplineMeshAxis::X);
+            float Len = FVector::Dist(P1, P2);
 
-                float Len = FVector::Dist(P1, P2);
+            Smc->SetStartAndEnd(P1, T1.GetSafeNormal() * Len, P2, T2.GetSafeNormal() * Len);
 
-                Smc->SetStartAndEnd(P1, T1.GetSafeNormal() * Len, P2, T2.GetSafeNormal() * Len);
+            Smc->SetStartScale(FVector2D(1.0f, 0.2f));
+            Smc->SetEndScale(FVector2D(1.0f, 0.2f));
 
-                Smc->SetStartScale(FVector2D(1.0f, 0.2f));
-                Smc->SetEndScale(FVector2D(1.0f, 0.2f));
-
-                Smc->SetupAttachment(BeltsContainerActor->GetRootComponent());
-                Smc->RegisterComponent();
-            }
+            Smc->SetupAttachment(BeltsContainerActor->GetRootComponent());
+            Smc->RegisterComponent();
         }
     }
 
@@ -214,18 +211,15 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 
     if (!StartSlot || !EndSlot) return FBeltHandle();
 
-    // --- A(建筑中心) -> B(输出槽) -> C(输入槽) -> D(建筑中心) ---
-
-    // 定义4个关键控制点
-    FVector A = SBuilding->GetActorLocation();
+    FVector A = StartSlot->WorldLocation - StartSlot->WorldRotation * FVector(StartSlot->SlotExtend, 0, 0);
     FVector B = StartSlot->WorldLocation;
     FVector C = EndSlot->WorldLocation;
-    FVector D = EBuilding->GetActorLocation();
+    FVector D = EndSlot->WorldLocation - EndSlot->WorldRotation * FVector(EndSlot->SlotExtend, 0, 0);
 
     TArray BeltPoints = {A, B, C, D};
 
     FVector AB_Direction = (B - A).GetSafeNormal();
-    FVector CB_Direction = (D - C).GetSafeNormal();
+    FVector CD_Direction = (D - C).GetSafeNormal();
 
     float AB_Length = FVector::Dist(A, B);
     float CD_Length = FVector::Dist(C, D);
@@ -237,7 +231,7 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     FVector StartTangent = AB_Direction * BTangentLen;
 
     float CTangentLen = FMath::Max(CD_Length * 1.0f, BC_Length * 0.4f) * TangentScale;
-    FVector EndTangent = CB_Direction * CTangentLen;
+    FVector EndTangent = CD_Direction * CTangentLen;
 
     // TODO 考虑引入中间拐点来减少曲线段的占比
 

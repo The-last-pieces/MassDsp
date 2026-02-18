@@ -56,6 +56,10 @@ struct FBuildingSlotState
     UPROPERTY()
     FQuat WorldRotation = FQuat::Identity;
 
+    // 传送带延申长度
+    UPROPERTY()
+    float SlotExtend = 100.f;
+
     // 类型
     UPROPERTY()
     EBuildingSlotType Type = EBuildingSlotType::Input;
