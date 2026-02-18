@@ -5,6 +5,9 @@
 #include "Fragments/MassDspBuildingFragment.h"
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
+
+#include "Actors/MassDspAssembler.h"
+
 #include "Misc/CoreDelegates.h"
 
 void AMassDspGameMode::BeginPlay()
@@ -27,11 +30,26 @@ void AMassDspGameMode::BeginPlay()
         return;
     }
 
-    FVector MinerLocation(0, 0, 0);
-    AMassDspMiner* MinerActor = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation, FRotator(0, 0, 0));
+    // 3个矿机 + 1个合成器 + 1个仓库的简单测试场景
 
-    FVector StorageLocation(3000, 0, 0);
-    AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator(0, 90, 0));
+    FVector MinerLocation1(0, 0, 0);
+    AMassDspMiner* MinerActor1 = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation1, FRotator(0, 90, 0));
 
-    DspManager->CreateAndLinkBeltForSlot(MinerActor, 0, StorageActor, 0, ConveyorMesh);
+    FVector MinerLocation2(1000, 0, 0);
+    AMassDspMiner* MinerActor2 = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation2, FRotator(0, 90, 0));
+
+    FVector MinerLocation3(2000, 0, 0);
+    AMassDspMiner* MinerActor3 = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation3, FRotator(0, 90, 0));
+
+    FVector AssemblerLocation(1000, 1000, 0);
+    AMassDspAssembler* AssemblerActor = World->SpawnActor<AMassDspAssembler>(AssemblerClass, AssemblerLocation, FRotator(0, 0, 0));
+
+    FVector StorageLocation(1000, 2000, 0);
+    AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator(0, 180, 0));
+
+    DspManager->CreateAndLinkBeltForSlot(MinerActor1, 0, AssemblerActor, 2, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerActor2, 0, AssemblerActor, 1, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerActor3, 0, AssemblerActor, 0, ConveyorMesh);
+
+    DspManager->CreateAndLinkBeltForSlot(AssemblerActor, 0, StorageActor, 0, ConveyorMesh);
 }

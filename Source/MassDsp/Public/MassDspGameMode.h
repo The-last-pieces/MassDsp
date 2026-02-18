@@ -7,6 +7,7 @@
 
 class AMassDspMiner;
 class AMassDspStorage;
+class AMassDspAssembler;
 
 UCLASS()
 class MASSDSP_API AMassDspGameMode : public AGameModeBase
@@ -32,4 +33,8 @@ public:
     // 仓库类
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP")
     TSubclassOf<AMassDspStorage> StorageClass;
+
+    // 合成器类
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP")
+    TSubclassOf<AMassDspAssembler> AssemblerClass;
 };
