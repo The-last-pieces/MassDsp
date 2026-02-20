@@ -27,23 +27,22 @@ TArray<const UScriptStruct*> AMassDspBuilding::GetStaticStructs() const
 
 void AMassDspBuilding::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
 {
-    if (FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EntityHandle))
+    FMassDspBuildingSlotsFragment& SlotsFragment = EntityManager.GetFragmentDataChecked<FMassDspBuildingSlotsFragment>(EntityHandle);
+
+    const FTransform ActorTransform = GetActorTransform();
+
+    for (const FBuildingSlotDef& SlotDef : Slots)
     {
-        const FTransform ActorTransform = GetActorTransform();
+        FBuildingSlotState NewSlotState;
+        // 计算世界空间变换
+        FTransform WorldSlotTransform = SlotDef.LocalTransform * ActorTransform;
 
-        for (const FBuildingSlotDef& SlotDef : Slots)
-        {
-            FBuildingSlotState NewSlotState;
-            // 计算世界空间变换
-            FTransform WorldSlotTransform = SlotDef.LocalTransform * ActorTransform;
+        NewSlotState.WorldLocation = WorldSlotTransform.GetLocation();
+        NewSlotState.WorldRotation = WorldSlotTransform.GetRotation();
+        NewSlotState.SlotExtend = SlotDef.SlotExtend;
+        NewSlotState.Type = SlotDef.SlotType;
 
-            NewSlotState.WorldLocation = WorldSlotTransform.GetLocation();
-            NewSlotState.WorldRotation = WorldSlotTransform.GetRotation();
-            NewSlotState.SlotExtend = SlotDef.SlotExtend;
-            NewSlotState.Type = SlotDef.SlotType;
-
-            SlotsFragment->AddSlot(NewSlotState);
-        }
+        SlotsFragment.AddSlot(NewSlotState);
     }
 }
 

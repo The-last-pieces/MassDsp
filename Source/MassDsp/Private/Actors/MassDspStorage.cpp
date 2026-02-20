@@ -22,9 +22,8 @@ void AMassDspStorage::InitFragmentForEntity(FMassEntityManager& EntityManager, F
 {
     Super::InitFragmentForEntity(EntityManager, EntityHandle);
 
-    if (FMassDspStorageFragment* StorageFragment = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(EntityHandle))
-    {
-        StorageFragment->MaxInventory = Capacity;
-        StorageFragment->InventoryCount = 0;
-    }
+    FMassDspStorageFragment& StorageFragment = EntityManager.GetFragmentDataChecked<FMassDspStorageFragment>(EntityHandle);
+
+    StorageFragment.MaxInventory = Capacity;
+    StorageFragment.InventoryCount = 0;
 }

@@ -19,13 +19,13 @@ public:
 
 protected:
     virtual const UScriptStruct* GetStaticStructForFragment() const override;
-    
+
     virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const override;
 
 public:
     // 当前配方
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Assembler")
-    FRecipeData CurrentRecipe;
+    ERecipeType RecipeType;
 
     // 合成速度倍率
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Assembler", meta = (ClampMin = "0.1", ClampMax = "10.0"))
@@ -38,18 +38,4 @@ public:
     // 输出缓冲区容量
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Assembler", meta = (ClampMin = "1", ClampMax = "100"))
     int32 OutputBufferCapacity = 10;
-
-    // 获取实际合成时间
-    UFUNCTION(BlueprintCallable, Category = "MassDsp|Assembler")
-    float GetActualCraftingTime() const
-    {
-        return CurrentRecipe.CraftingTime / CraftingSpeedMultiplier;
-    }
-
-    // 验证当前配方是否有效
-    UFUNCTION(BlueprintCallable, Category = "MassDsp|Assembler")
-    bool IsRecipeValid() const
-    {
-        return CurrentRecipe.IsValid();
-    }
 };

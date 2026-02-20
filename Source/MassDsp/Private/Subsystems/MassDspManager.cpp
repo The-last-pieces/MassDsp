@@ -2,6 +2,7 @@
 
 #include "GameConst.h"
 #include "MassCommonFragments.h"
+#include "MassDspGameMode.h"
 
 #include "Actors/MassDspBuilding.h"
 
@@ -12,7 +13,6 @@
 #include "MassEntityManager.h"
 #include "MassEntityConfigAsset.h"
 #include "MassExecutor.h"
-#include "MassObserverNotificationTypes.h"
 
 #include "Components/SplineMeshComponent.h"
 #include "Components/SplineComponent.h"
@@ -25,6 +25,7 @@ void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
     {
         FActorSpawnParameters SpawnParams;
         SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        SpawnParams.ObjectFlags |= RF_Transient;
 
         BeltsContainerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
         if (BeltsContainerActor)
@@ -149,30 +150,24 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 
     if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(SBuilding->MassHandle))
     {
-        for (auto& Slot : MinerSlots->GetSlots())
+        for (auto& Slot : MinerSlots->GetOutputSlots())
         {
-            if (Slot.Type == EBuildingSlotType::Output)
+            if (StartSlotIndex-- == 0)
             {
-                if (StartSlotIndex-- == 0)
-                {
-                    StartSlot = &Slot;
-                    break;
-                }
+                StartSlot = &Slot;
+                break;
             }
         }
     }
 
     if (FMassDspBuildingSlotsFragment* StorageSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EBuilding->MassHandle))
     {
-        for (auto& Slot : StorageSlots->GetSlots())
+        for (auto& Slot : StorageSlots->GetInputSlots())
         {
-            if (Slot.Type == EBuildingSlotType::Input)
+            if (EndSlotIndex-- == 0)
             {
-                if (EndSlotIndex-- == 0)
-                {
-                    EndSlot = &Slot;
-                    break;
-                }
+                EndSlot = &Slot;
+                break;
             }
         }
     }
@@ -223,18 +218,30 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 
     if (!BeltHandle.IsValid()) return FBeltHandle();
 
+    const FBeltTrajectory& Trajectory = BeltTrajectories[BeltHandle.Index];
+
     StartSlot->ConnectedLaneHandle = EndSlot->ConnectedLaneHandle = BeltHandle;
+    StartSlot->BeltSpeed = EndSlot->BeltSpeed = Trajectory.Speed;
 
     return BeltHandle;
 }
 
-bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, UMassEntityConfigAsset* ItemConfig)
+bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc)
 {
-    if (!ItemConfig || !BeltHandle.IsValid()) return false;
+    if (!GameMode.IsValid())
+    {
+        GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
+    }
+    if (!GameMode.IsValid()) return false;
+    if (!BeltHandle.IsValid()) return false;
+
+    auto ItemConfig = GameMode->BeltItemConfigAsset;
+    if (!ItemConfig) return false;
+
     UWorld* World = GetWorld();
     UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
 
-    // 检查这条车道的最后一个物品是否还在0附近
+    // 检查这条车道的最后一个物品是否还在附近
     if (auto Items = BeltEntityRegistry.Find(BeltHandle); Items && !Items->Entities.IsEmpty())
     {
         if (const FBeltItemFragment* Item = MassSubsystem->GetEntityManager().GetFragmentDataPtr<FBeltItemFragment>(Items->Entities.Last());
@@ -244,78 +251,57 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
         }
     }
 
-    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, BeltHandle](FMassEntityManager& InEntityManager)
+    EItemType ItemType = GetItemFunc();
+
+    if (ItemType == EItemType::None) return false;
+
+    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, BeltHandle, ItemType](FMassEntityManager& InEntityManager)
     {
         if (!BeltTrajectories.IsValidIndex(BeltHandle.Index)) return;
+
         const FBeltTrajectory& Trajectory = BeltTrajectories[BeltHandle.Index];
 
         const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
-        TArray<FMassEntityHandle> NewEntities;
 
-        auto CreationContext = InEntityManager.BatchCreateEntities(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues(), 1, NewEntities);
-        InEntityManager.BatchSetEntityFragmentValues(CreationContext->GetEntityCollections(InEntityManager), EntityTemplate.GetInitialFragmentValues());
+        auto Entity = InEntityManager.CreateEntity(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues());
+        InEntityManager.SetEntityFragmentValues(Entity, EntityTemplate.GetInitialFragmentValues());
 
         constexpr float InitialDistance = FGameConst::HalfLength;
 
-        for (int32 i = 0; i < NewEntities.Num(); ++i)
-        {
-            FMassEntityHandle Entity = NewEntities[i];
+        FBeltItemFragment& Item = InEntityManager.GetFragmentDataChecked<FBeltItemFragment>(Entity);
 
-            // --- 逻辑数据初始化 ---
-            FBeltItemFragment* Item = InEntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity);
-            if (!Item)
-            {
-                continue;
-            }
+        Item.DistanceAlongBelt = InitialDistance;
+        Item.BeltHandle = BeltHandle;
+        Item.ItemType = ItemType;
 
-            Item->DistanceAlongBelt = InitialDistance;
-            Item->BeltHandle = BeltHandle;
-            // TODO 存物品类型
+        FTransformFragment& TransformFrag = InEntityManager.GetFragmentDataChecked<FTransformFragment>(Entity);
+        Trajectory.ApplyTransform(TransformFrag, InitialDistance);
 
-            if (FTransformFragment* TransformFrag = InEntityManager.GetFragmentDataPtr<FTransformFragment>(Entity))
-            {
-                Trajectory.ApplyTransform(TransformFrag, InitialDistance);
-            }
-
-            BeltEntityRegistry.FindOrAdd(BeltHandle).Entities.EmplaceLast(Entity);
-        }
+        BeltEntityRegistry.FindOrAdd(BeltHandle).Entities.EmplaceLast(Entity);
     });
 
     return true;
 }
 
-// TODO 返回物品类型
-bool UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle)
+EItemType UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc)
 {
     // 检查注册表
     if (FBeltEntityArray* BeltItems = BeltEntityRegistry.Find(BeltHandle))
     {
-        if (BeltItems->Entities.IsEmpty()) return false;
+        auto& Entities = BeltItems->Entities;
+        if (Entities.IsEmpty()) return EItemType::None;
 
         UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
         FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
 
-        for (int32 i = 0; i < BeltItems->Entities.Num(); ++i)
-        {
-            FMassEntityHandle Entity = BeltItems->Entities.First();
-            if (!EntityManager.IsEntityValid(Entity))
-            {
-                CommandBuffer.DestroyEntity(Entity);
-                BeltItems->Entities.PopFirst();
-                continue;
-            }
+        FMassEntityHandle Entity = Entities.First();
 
-            if (FBeltItemFragment* ItemFrag = EntityManager.GetFragmentDataPtr<FBeltItemFragment>(Entity))
-            {
-                if (ItemFrag->bIsBlocked)
-                {
-                    CommandBuffer.DestroyEntity(Entity);
-                    BeltItems->Entities.PopFirst();
-                    return true;
-                }
-                return false;
-            }
+        if (FBeltItemFragment& ItemFrag = EntityManager.GetFragmentDataChecked<FBeltItemFragment>(Entity); ItemFrag.bIsBlocked && ValidateItemFunc(ItemFrag.ItemType))
+        {
+            CommandBuffer.DestroyEntity(Entity);
+            Entities.PopFirst();
+            return ItemFrag.ItemType;
         }
     }
-    return false;
+    return EItemType::None;
 }

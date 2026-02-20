@@ -15,12 +15,6 @@ void AMassDspGameMode::BeginPlay()
     UMassDspManager* DspManager = World->GetSubsystem<UMassDspManager>();
     if (!DspManager) return;
 
-    // 设置 Manager 的 DefaultItemConfig，以便 Miner 可以生产物品
-    if (BeltItemConfigAsset)
-    {
-        DspManager->DefaultItemConfig = BeltItemConfigAsset;
-    }
-
     if (!MinerClass || !StorageClass)
     {
         UE_LOG(LogTemp, Warning, TEXT("MinerClass or StorageClass not set in GameMode!"));

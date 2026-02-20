@@ -1,25 +1,21 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MassEntityTypes.h"
 #include "GameConst.h"
 #include "MassDspAssemblerFragment.generated.h"
 
-/**
- * 合成台输入槽位缓冲数据
- */
 USTRUCT()
-struct FAssemblerInputBuffer
+struct FBufferEntry
 {
     GENERATED_BODY()
 
-    // 物品类型
     UPROPERTY()
     EItemType ItemType = EItemType::None;
 
-    // 当前数量
     UPROPERTY()
-    int32 Count = 0;
+    int32 Amount = 0;
+
+    FBufferEntry() = default;
 };
 
 /**
@@ -43,23 +39,21 @@ struct MASSDSP_API FMassDspAssemblerFragment : public FMassFragment
     UPROPERTY()
     float CraftingSpeedMultiplier = 1.0f;
 
-    // 输入缓冲区容量（每个槽位）
     UPROPERTY()
     int32 InputBufferCapacity = 10;
 
-    // 输出缓冲区容量
     UPROPERTY()
     int32 OutputBufferCapacity = 10;
 
-    // 输入缓冲区（最多3个槽位）
     UPROPERTY()
-    FAssemblerInputBuffer InputBuffers[3];
+    FBufferEntry InputBuffers[FGameConst::SlotMaxCount - 1];
 
-    // 输出缓冲区当前数量
     UPROPERTY()
-    int32 OutputBufferCount = 0;
+    FBufferEntry OutputBuffers[FGameConst::SlotMaxCount - 1];
 
-    // 最大输出库存容量（用于槽口逻辑）
-    UPROPERTY()
-    int32 MaxInventory = 10;
+    EItemType TryProvideItemToSlot(int SlotIdx);
+
+    bool TryConsumeItemFromSlot(EItemType ItemType);
+
+    void TickExecute(float DeltaTime);
 };

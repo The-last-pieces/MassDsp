@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "GameConst.h"
 #include "MassEntityHandle.h"
 
 #include "GameFramework/Actor.h"

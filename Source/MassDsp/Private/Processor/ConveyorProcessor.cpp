@@ -78,7 +78,7 @@ void UConveyorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecuti
 
             LastItemTail = Item->DistanceAlongBelt - (FGameConst::HalfLength * 2) - FGameConst::MinSpacing;
 
-            Trajectory.ApplyTransform(Transform, Item->DistanceAlongBelt);
+            Trajectory.ApplyTransform(*Transform, Item->DistanceAlongBelt);
         }
     });
 }

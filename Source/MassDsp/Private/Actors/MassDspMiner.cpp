@@ -22,11 +22,11 @@ void AMassDspMiner::InitFragmentForEntity(FMassEntityManager& EntityManager, FMa
 {
     Super::InitFragmentForEntity(EntityManager, EntityHandle);
 
-    if (FMassDspMinerFragment* MinerFragment = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(EntityHandle))
-    {
-        MinerFragment->ProductionInterval = ProductionInterval;
-        MinerFragment->ProductionProgress = 0.0f;
-        MinerFragment->InventoryCount = 0;
-        MinerFragment->MaxInventory = 50;
-    }
+    FMassDspMinerFragment& MinerFragment = EntityManager.GetFragmentDataChecked<FMassDspMinerFragment>(EntityHandle);
+
+    MinerFragment.ProductionInterval = ProductionInterval;
+    MinerFragment.ProductionProgress = 0.0f;
+    MinerFragment.InventoryCount = 0;
+    MinerFragment.MaxInventory = 50;
+    MinerFragment.StoredItemType = EItemType::IronOre; // TODO
 }

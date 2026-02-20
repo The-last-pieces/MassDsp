@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameConst.h"
-#include "MassEntityTypes.h"
 #include "MassDspBeltTypes.h"
 #include "Actors/MassDspBuilding.h"
 #include "MassDspBuildingSlotsFragment.generated.h"
@@ -34,6 +33,29 @@ struct FBuildingSlotState
     // 连接的传送带句柄 (缓存)
     UPROPERTY()
     FBeltHandle ConnectedLaneHandle;
+
+    // 传送带速度
+    UPROPERTY()
+    float BeltSpeed = 0.f;
+
+    // Slot冷却
+    UPROPERTY()
+    float Cooldown = 0.f;
+
+    bool CheckCooldown(float DeltaTime)
+    {
+        if (Cooldown > 0.f)
+        {
+            Cooldown = FMath::Max(0.f, Cooldown - DeltaTime);
+            return false;
+        }
+        return true;
+    }
+
+    void ResetCooldown()
+    {
+        Cooldown = (FGameConst::HalfLength * 2 + FGameConst::MinSpacing) / BeltSpeed;
+    }
 };
 
 /**
@@ -45,18 +67,37 @@ struct MASSDSP_API FMassDspBuildingSlotsFragment : public FMassFragment
 {
     GENERATED_BODY()
 
-public:
-    UPROPERTY()
-    FBuildingSlotState Slots[FGameConst::SlotMaxCount];
-
 private:
     UPROPERTY()
-    int32 SlotCount = 0;
+    FBuildingSlotState OutputSlots[FGameConst::SlotMaxCount];
+
+    UPROPERTY()
+    int32 OutputSlotCount = 0;
+
+    UPROPERTY()
+    FBuildingSlotState InputSlots[FGameConst::SlotMaxCount];
+
+    UPROPERTY()
+    int32 InputSlotCount = 0;
+
+    UPROPERTY()
+    int32 OutputOffset = 0;
+
+    UPROPERTY()
+    int32 InputOffset = 0;
 
 public:
     void AddSlot(const FBuildingSlotState& NewSlot);
 
-    TArrayView<const FBuildingSlotState> GetSlots() const;
+    TArrayView<FBuildingSlotState> GetOutputSlots();
 
-    TArrayView<FBuildingSlotState> GetSlots();
+    TArrayView<FBuildingSlotState> GetInputSlots();
+
+    FBuildingSlotState& GetOutputSlotRotated(int32 Index);
+
+    FBuildingSlotState& GetInputSlotRotated(int32 Index);
+
+    void AddInputSlotOffset();
+
+    void AddOutputSlotOffset();
 };

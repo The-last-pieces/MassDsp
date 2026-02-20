@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "GameConst.h"
+
 #include "Subsystems/WorldSubsystem.h"
 #include "MassEntityTemplate.h"
 #include "MassDspBeltTypes.h"
@@ -10,6 +12,7 @@
 
 #include "MassDspManager.generated.h"
 
+class AMassDspGameMode;
 class AMassDspBuilding;
 class UMassEntityConfigAsset;
 
@@ -23,17 +26,18 @@ class MASSDSP_API UMassDspManager : public UWorldSubsystem
 {
     GENERATED_BODY()
 
-public:
+protected:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config")
-    TObjectPtr<UMassEntityConfigAsset> DefaultItemConfig;
-
+public:
     TMap<FBeltHandle, FBeltEntityArray> BeltEntityRegistry;
 
     TSparseArray<FBeltTrajectory> BeltTrajectories;
 
+    TWeakObjectPtr<AMassDspGameMode> GameMode;
+
+protected:
     UPROPERTY()
     AActor* BeltsContainerActor;
 
@@ -43,9 +47,9 @@ private:
 public:
     FBeltHandle CreateAndLinkBeltForSlot(const AMassDspBuilding* SBuilding, int32 StartSlotIndex, const AMassDspBuilding* EBuilding, int32 EndSlotIndex, UStaticMesh* BeltMesh);
 
-    bool ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, UMassEntityConfigAsset* ItemConfig);
+    bool ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
 
-    bool ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle);
+    EItemType ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
 
     FMassEntityHandle RegisterBuildingEntity(const AMassDspBuilding* BuildingActor) const;
 };

@@ -26,14 +26,14 @@ FVector FBeltTrajectory::GetTangentAtDistance(float Distance) const
     return FVector::ForwardVector;
 }
 
-void FBeltTrajectory::ApplyTransform(FTransformFragment* Transform, float Distance) const
+void FBeltTrajectory::ApplyTransform(FTransformFragment& Transform, float Distance) const
 {
     FVector OutPos = GetLocationAtDistance(Distance);
     FVector OutTangent = GetTangentAtDistance(Distance);
 
     OutPos.Z += FGameConst::ZOffset;
 
-    FTransform& TargetTransform = Transform->GetMutableTransform();
+    FTransform& TargetTransform = Transform.GetMutableTransform();
     TargetTransform.SetLocation(OutPos);
     TargetTransform.SetRotation(OutTangent.Rotation().Quaternion());
 }

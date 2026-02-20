@@ -48,5 +48,5 @@ struct MASSDSP_API FBeltTrajectory
 
     FVector GetTangentAtDistance(float Distance) const;
 
-    void ApplyTransform(FTransformFragment* Transform, float Distance) const;
+    void ApplyTransform(FTransformFragment& Transform, float Distance) const;
 };

@@ -1,9 +1,11 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "GameConst.h"
 #include "MassProcessor.h"
 #include "MassDspBuildingProcessor.generated.h"
 
+class AMassDspBuilding;
 class UMassDspManager;
 class AMassDspGameMode;
 struct FMassDspBuildingSlotsFragment;
@@ -40,7 +42,9 @@ private:
     // 缓存子系统引用
     TWeakObjectPtr<UMassDspManager> DspManager;
 
-    // 槽口处理辅助函数
-    void ProcessOutputSlots(FMassDspBuildingSlotsFragment& SlotsData, int32& InventoryCount, const FMassExecutionContext& Context, const AMassDspGameMode* GameMode) const;
-    void ProcessInputSlots(FMassDspBuildingSlotsFragment& SlotsData, int32& InventoryCount, int32 MaxInventory, const FMassExecutionContext& Context) const;
+    template <class TT> requires IsDspBuildFragment<TT>
+    void ProcessBuilding(FMassEntityQuery& Query, FMassExecutionContext& Context) const;
+
+    template <class TT> requires IsDspBuildFragment<TT>
+    void ProcessSlots(FMassDspBuildingSlotsFragment& SlotsData, const FMassExecutionContext& Context, TT& Fragment) const;
 };

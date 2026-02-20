@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MassEntityTypes.h"
+#include "GameConst.h"
 #include "MassDspMinerFragment.generated.h"
 
 /**
@@ -28,4 +28,14 @@ struct MASSDSP_API FMassDspMinerFragment : public FMassFragment
     // 最大库存容量
     UPROPERTY()
     int32 MaxInventory = 50;
+
+    // 存储类型
+    UPROPERTY()
+    EItemType StoredItemType = EItemType::None;
+
+    EItemType TryProvideItemToSlot(int SlotIdx);
+
+    static bool TryConsumeItemFromSlot(EItemType ItemType);
+    
+    void TickExecute(float DeltaTime);
 };

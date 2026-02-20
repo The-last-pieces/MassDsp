@@ -1,5 +1,6 @@
 #include "Actors/MassDspAssembler.h"
 
+#include "MassDspGameMode.h"
 #include "MassEntityManager.h"
 
 #include "Fragments/MassDspAssemblerFragment.h"
@@ -45,11 +46,7 @@ AMassDspAssembler::AMassDspAssembler()
     OutputSlot.DebugColor = FColor::Red;
     Slots.Add(OutputSlot);
 
-    // 设置默认配方示例：铁板 + 铁板 -> 铁齿轮
-    CurrentRecipe.RecipeName = TEXT("铁齿轮");
-    CurrentRecipe.Inputs.Add(FRecipeInput(EItemType::IronPlate, 2));
-    CurrentRecipe.Output = FRecipeOutput(EItemType::IronGear, 1);
-    CurrentRecipe.CraftingTime = 2.0f;
+    RecipeType = ERecipeType::IronPlate;
 }
 
 const UScriptStruct* AMassDspAssembler::GetStaticStructForFragment() const
@@ -61,14 +58,16 @@ void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager,
 {
     Super::InitFragmentForEntity(EntityManager, EntityHandle);
 
-    if (FMassDspAssemblerFragment* AssemblerFragment = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(EntityHandle))
-    {
-        AssemblerFragment->CurrentRecipe = CurrentRecipe.ToFragment();
-        AssemblerFragment->CraftingSpeedMultiplier = CraftingSpeedMultiplier;
-        AssemblerFragment->InputBufferCapacity = InputBufferCapacity;
-        AssemblerFragment->OutputBufferCapacity = OutputBufferCapacity;
-        AssemblerFragment->MaxInventory = OutputBufferCapacity;
-        AssemblerFragment->CraftingProgress = 0.0f;
-        AssemblerFragment->OutputBufferCount = 0;
-    }
+    auto GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
+    if (!GameMode) return;
+
+    auto RecipeConfig = GameMode->GameConfig->RecipeConfigs.Find(RecipeType);
+    if (!RecipeConfig) return;
+
+    FMassDspAssemblerFragment& AssemblerFragment = EntityManager.GetFragmentDataChecked<FMassDspAssemblerFragment>(EntityHandle);
+
+    AssemblerFragment.CurrentRecipe = RecipeConfig->ToFragment(RecipeType);
+    AssemblerFragment.CraftingSpeedMultiplier = CraftingSpeedMultiplier;
+    AssemblerFragment.InputBufferCapacity = InputBufferCapacity;
+    AssemblerFragment.OutputBufferCapacity = OutputBufferCapacity;
 }
