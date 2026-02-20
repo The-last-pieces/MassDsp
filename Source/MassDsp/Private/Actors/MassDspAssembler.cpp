@@ -61,7 +61,7 @@ void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager,
     auto GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
     if (!GameMode) return;
 
-    auto RecipeConfig = GameMode->GameConfig->RecipeConfigs.Find(RecipeType);
+    auto RecipeConfig = GameMode->GameConfig->GetRecipeConfig(RecipeType);
     if (!RecipeConfig) return;
 
     FMassDspAssemblerFragment& AssemblerFragment = EntityManager.GetFragmentDataChecked<FMassDspAssemblerFragment>(EntityHandle);

@@ -13,6 +13,7 @@
 #include "MassEntityManager.h"
 #include "MassEntityConfigAsset.h"
 #include "MassExecutor.h"
+#include "MassRepresentationFragments.h"
 
 #include "Components/SplineMeshComponent.h"
 #include "Components/SplineComponent.h"
@@ -265,6 +266,16 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
 
         auto Entity = InEntityManager.CreateEntity(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues());
         InEntityManager.SetEntityFragmentValues(Entity, EntityTemplate.GetInitialFragmentValues());
+
+        if (FMassRepresentationFragment* RepFrag = InEntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(Entity))
+        {
+            if (const FItemConfigData* ItemConfigData = GameMode->GameConfig->GetItemConfig(ItemType))
+            {
+                RepFrag->StaticMeshDescHandle = ItemConfigData->GetOrCreateMeshHandle(World);
+                RepFrag->CurrentRepresentation = EMassRepresentationType::StaticMeshInstance;
+                RepFrag->PrevRepresentation = EMassRepresentationType::None;
+            }
+        }
 
         constexpr float InitialDistance = FGameConst::HalfLength;
 

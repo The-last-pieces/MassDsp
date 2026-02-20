@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "MassEntityConfigAsset.h"
+#include "MassRepresentationTypes.h"
+#include "MassRepresentationSubsystem.h"
 
 #include "Misc/DataValidation.h"
 
@@ -107,6 +109,32 @@ struct FItemConfigData
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
     TObjectPtr<UMassEntityConfigAsset> EntityConfig;
+
+    FStaticMeshInstanceVisualizationDescHandle GetOrCreateMeshHandle(const UWorld* World) const
+    {
+        if (!Mesh) return FStaticMeshInstanceVisualizationDescHandle();
+
+        if (UMassRepresentationSubsystem* RepSubsystem = World->GetSubsystem<UMassRepresentationSubsystem>())
+        {
+            FStaticMeshInstanceVisualizationDesc Desc;
+
+            FMassStaticMeshInstanceVisualizationMeshDesc MeshDesc;
+            MeshDesc.Mesh = Mesh;
+
+            if (Material)
+            {
+                MeshDesc.MaterialOverrides.Add(Material);
+            }
+
+            Desc.Meshes.Add(MeshDesc);
+            Desc.bUseTransformOffset = true;
+            Desc.TransformOffset.SetScale3D(FVector(1.0f, 1.0f, 0.2f));
+
+            // 🔥 注册到系统并获取 Handle
+            return RepSubsystem->FindOrAddStaticMeshDesc(Desc);
+        }
+        return FStaticMeshInstanceVisualizationDescHandle();
+    }
 };
 
 USTRUCT()
