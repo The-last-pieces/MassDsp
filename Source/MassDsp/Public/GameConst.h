@@ -58,6 +58,17 @@ enum class ERecipeType : uint8
     IronPlate = 1 UMETA(DisplayName = "烧制铁板"),
 };
 
+// 建筑类型枚举
+UENUM(BlueprintType)
+enum class EBuildingType : uint8
+{
+    None = 0 UMETA(DisplayName = "无"),
+
+    Miner = 1 UMETA(DisplayName = "矿机"),
+    Storage = 2 UMETA(DisplayName = "仓库"),
+    Assembler = 3 UMETA(DisplayName = "合成台"),
+};
+
 // 配方输入输出项
 USTRUCT(BlueprintType)
 struct FRecipeEntry
@@ -212,6 +223,48 @@ struct FRecipeConfigData
     }
 };
 
+// 建筑类型配置数据
+USTRUCT(BlueprintType)
+struct FBuildingTypeConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Building")
+    TSubclassOf<AMassDspBuilding> BuildingClass;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Building")
+    TObjectPtr<UStaticMesh> Mesh;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Building")
+    TObjectPtr<UMaterialInterface> Material;
+
+    // 获取或创建Building的ISM渲染Handle（复用物品的模式）
+    FStaticMeshInstanceVisualizationDescHandle GetOrCreateMeshHandle(const UWorld* World) const
+    {
+        if (!Mesh) return FStaticMeshInstanceVisualizationDescHandle();
+
+        if (UMassRepresentationSubsystem* RepSubsystem = World->GetSubsystem<UMassRepresentationSubsystem>())
+        {
+            FStaticMeshInstanceVisualizationDesc Desc;
+
+            FMassStaticMeshInstanceVisualizationMeshDesc MeshDesc;
+            MeshDesc.Mesh = Mesh;
+
+            if (Material)
+            {
+                MeshDesc.MaterialOverrides.Add(Material);
+            }
+
+            Desc.Meshes.Add(MeshDesc);
+            Desc.bUseTransformOffset = false; // Building使用世界坐标
+
+            // 注册到系统并获取 Handle
+            return RepSubsystem->FindOrAddStaticMeshDesc(Desc);
+        }
+        return FStaticMeshInstanceVisualizationDescHandle();
+    }
+};
+
 // 🔥 核心:单个 DataAsset 管理所有配置
 UCLASS(BlueprintType)
 class MASSDSP_API UGameConfigData : public UPrimaryDataAsset
@@ -227,11 +280,16 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Recipes", meta = (ForceInlineRow))
     TMap<ERecipeType, FRecipeConfigData> RecipeConfigs;
 
+    // 所有建筑类型配置
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Buildings", meta = (ForceInlineRow))
+    TMap<EBuildingType, FBuildingTypeConfig> BuildingConfigs;
+
     // 构造函数:自动初始化所有枚举键
     UGameConfigData()
     {
         InitializeItemKeys();
         InitializeRecipeKeys();
+        InitializeBuildingKeys();
     }
 
     // 🔥 自动创建所有枚举的 Key
@@ -277,6 +335,26 @@ public:
                 FRecipeConfigData DefaultData;
                 DefaultData.DisplayName = EnumPtr->GetDisplayNameTextByValue(EnumValue);
                 RecipeConfigs.Add(RecipeType, DefaultData);
+            }
+        }
+    }
+
+    void InitializeBuildingKeys()
+    {
+        const UEnum* EnumPtr = StaticEnum<EBuildingType>();
+        if (!EnumPtr) return;
+
+        for (int32 i = 0; i < EnumPtr->NumEnums() - 1; ++i)
+        {
+            int64 EnumValue = EnumPtr->GetValueByIndex(i);
+            EBuildingType BuildingType = static_cast<EBuildingType>(EnumValue);
+
+            if (BuildingType == EBuildingType::None) continue;
+
+            if (!BuildingConfigs.Contains(BuildingType))
+            {
+                FBuildingTypeConfig DefaultData;
+                BuildingConfigs.Add(BuildingType, DefaultData);
             }
         }
     }
@@ -343,6 +421,7 @@ public:
         Super::PostEditChangeProperty(PropertyChangedEvent);
         InitializeItemKeys();
         InitializeRecipeKeys();
+        InitializeBuildingKeys();
     }
 #endif
 
@@ -355,6 +434,11 @@ public:
     const FRecipeConfigData* GetRecipeConfig(ERecipeType RecipeType) const
     {
         return RecipeConfigs.Find(RecipeType);
+    }
+
+    const FBuildingTypeConfig* GetBuildingConfig(EBuildingType BuildingType) const
+    {
+        return BuildingConfigs.Find(BuildingType);
     }
 
     virtual FPrimaryAssetId GetPrimaryAssetId() const override

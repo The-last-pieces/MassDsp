@@ -12,9 +12,14 @@ AMassDspBuilding::AMassDspBuilding()
 {
     PrimaryActorTick.bCanEverTick = false;
 
-    // 创建根组件
+#if WITH_EDITORONLY_DATA
+    // 仅编辑器创建Mesh组件用于预览，运行时使用Mass ISM渲染
     MeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MeshComponent"));
-    RootComponent = MeshComponent;
+    if (MeshComponent)
+    {
+        RootComponent = MeshComponent;
+    }
+#endif
 }
 
 TArray<const UScriptStruct*> AMassDspBuilding::GetStaticStructs() const
@@ -25,17 +30,15 @@ TArray<const UScriptStruct*> AMassDspBuilding::GetStaticStructs() const
     };
 }
 
-void AMassDspBuilding::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
+void AMassDspBuilding::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const
 {
     FMassDspBuildingSlotsFragment& SlotsFragment = EntityManager.GetFragmentDataChecked<FMassDspBuildingSlotsFragment>(EntityHandle);
-
-    const FTransform ActorTransform = GetActorTransform();
 
     for (const FBuildingSlotDef& SlotDef : Slots)
     {
         FBuildingSlotState NewSlotState;
         // 计算世界空间变换
-        FTransform WorldSlotTransform = SlotDef.LocalTransform * ActorTransform;
+        FTransform WorldSlotTransform = SlotDef.LocalTransform * WorldTransform;
 
         NewSlotState.WorldLocation = WorldSlotTransform.GetLocation();
         NewSlotState.WorldRotation = WorldSlotTransform.GetRotation();
@@ -50,21 +53,6 @@ const UScriptStruct* AMassDspBuilding::GetStaticStructForFragment() const
 {
     checkNoEntry();
     return nullptr;
-}
-
-void AMassDspBuilding::BeginPlay()
-{
-    Super::BeginPlay();
-}
-
-void AMassDspBuilding::PostActorCreated()
-{
-    Super::PostActorCreated();
-
-    if (auto DspManager = GetWorld()->GetSubsystem<UMassDspManager>())
-    {
-        MassHandle = DspManager->RegisterBuildingEntity(this);
-    }
 }
 
 #if WITH_EDITOR

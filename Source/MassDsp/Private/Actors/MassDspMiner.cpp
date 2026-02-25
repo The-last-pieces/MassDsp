@@ -18,9 +18,9 @@ const UScriptStruct* AMassDspMiner::GetStaticStructForFragment() const
     return FMassDspMinerFragment::StaticStruct();
 }
 
-void AMassDspMiner::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
+void AMassDspMiner::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const
 {
-    Super::InitFragmentForEntity(EntityManager, EntityHandle);
+    Super::InitFragmentForEntity(EntityManager, EntityHandle, WorldTransform);
 
     FMassDspMinerFragment& MinerFragment = EntityManager.GetFragmentDataChecked<FMassDspMinerFragment>(EntityHandle);
 

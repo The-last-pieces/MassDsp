@@ -52,30 +52,6 @@ void UMassDspManager::Deinitialize()
     Super::Deinitialize();
 }
 
-FMassEntityHandle UMassDspManager::RegisterBuildingEntity(const AMassDspBuilding* BuildingActor) const
-{
-    if (!BuildingActor)
-    {
-        return FMassEntityHandle();
-    }
-
-    UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
-    if (!EntitySubsystem)
-    {
-        return FMassEntityHandle();
-    }
-
-    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-
-    FMassArchetypeHandle ArchetypeHandle = EntityManager.CreateArchetype(BuildingActor->GetStaticStructs());
-
-    FMassEntityHandle EntityHandle = EntityManager.CreateEntity(ArchetypeHandle);
-
-    BuildingActor->InitFragmentForEntity(EntityManager, EntityHandle);
-
-    return EntityHandle;
-}
-
 FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
 {
     if (!BeltsContainerActor) return FBeltHandle();
@@ -314,4 +290,115 @@ EItemType UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer
         }
     }
     return EItemType::None;
+}
+
+// ===== 新增：Building Entity批量创建系统 =====
+
+FMassEntityHandle UMassDspManager::SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,
+                                                          EBuildingType BuildingType)
+{
+    if (!BuildingClass)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("SpawnBuildingFromClass: Invalid BuildingClass"));
+        return FMassEntityHandle();
+    }
+
+    FBuildingSpawnData SpawnData(BuildingClass, WorldTransform, BuildingType);
+
+    FMassEntityHandle ResultHandle;
+
+    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, SpawnData, &ResultHandle](FMassEntityManager& EntityManager)
+    {
+        ResultHandle = CreateBuildingEntityInternal(EntityManager, SpawnData);
+    });
+
+    // TODO 这块有问题
+
+    return ResultHandle;
+}
+
+TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList)
+{
+    TArray<FMassEntityHandle> CreatedEntities;
+    CreatedEntities.Reserve(SpawnDataList.Num());
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+    if (!EntitySubsystem)
+    {
+        UE_LOG(LogTemp, Error, TEXT("BatchSpawnBuildings: MassEntitySubsystem not found"));
+        return CreatedEntities;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+    // 批量创建（同步）
+    for (const FBuildingSpawnData& SpawnData : SpawnDataList)
+    {
+        if (FMassEntityHandle EntityHandle = CreateBuildingEntityInternal(EntityManager, SpawnData); EntityHandle.IsValid())
+        {
+            CreatedEntities.Add(EntityHandle);
+        }
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("BatchSpawnBuildings: Created %d building entities"), CreatedEntities.Num());
+
+    return CreatedEntities;
+}
+
+FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData)
+{
+    if (!SpawnData.BuildingClass)
+    {
+        return FMassEntityHandle();
+    }
+
+    // 从CDO获取Building配置
+    const AMassDspBuilding* BuildingCDO = GetDefault<AMassDspBuilding>(SpawnData.BuildingClass);
+    if (!BuildingCDO)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CreateBuildingEntityInternal: Failed to get CDO for class %s"), *SpawnData.BuildingClass->GetName());
+        return FMassEntityHandle();
+    }
+
+    // 创建Archetype（包含Building特定Fragment + Transform + Representation）
+    TArray<const UScriptStruct*> FragmentTypes = BuildingCDO->GetStaticStructs();
+    FragmentTypes.Add(FTransformFragment::StaticStruct());
+    FragmentTypes.Add(FMassRepresentationFragment::StaticStruct());
+
+    FMassArchetypeHandle ArchetypeHandle = EntityManager.CreateArchetype(FragmentTypes);
+    FMassEntityHandle EntityHandle = EntityManager.CreateEntity(ArchetypeHandle);
+
+    // 初始化Building特定Fragment数据（从CDO读取配置）
+    BuildingCDO->InitFragmentForEntity(EntityManager, EntityHandle, SpawnData.WorldTransform);
+
+    // 设置Transform
+    if (FTransformFragment* TransformFrag = EntityManager.GetFragmentDataPtr<FTransformFragment>(EntityHandle))
+    {
+        TransformFrag->SetTransform(SpawnData.WorldTransform);
+    }
+
+    // 设置Representation（ISM渲染）
+    if (FMassRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(EntityHandle))
+    {
+        if (!GameMode.IsValid())
+        {
+            GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
+        }
+
+        if (GameMode.IsValid() && GameMode->GameConfig)
+        {
+            if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(SpawnData.BuildingType))
+            {
+                RepFrag->StaticMeshDescHandle = BuildingConfig->GetOrCreateMeshHandle(GetWorld());
+                RepFrag->CurrentRepresentation = EMassRepresentationType::StaticMeshInstance;
+                RepFrag->PrevRepresentation = EMassRepresentationType::None;
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("CreateBuildingEntityInternal: BuildingConfig not found for type %d"), static_cast<int32>(SpawnData.BuildingType));
+            }
+        }
+    }
+
+    return EntityHandle;
 }

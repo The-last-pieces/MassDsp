@@ -54,11 +54,11 @@ const UScriptStruct* AMassDspAssembler::GetStaticStructForFragment() const
     return FMassDspAssemblerFragment::StaticStruct();
 }
 
-void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
+void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const
 {
-    Super::InitFragmentForEntity(EntityManager, EntityHandle);
+    Super::InitFragmentForEntity(EntityManager, EntityHandle, WorldTransform);
 
-    auto GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
+    auto GameMode = Cast<AMassDspGameMode>(EntityManager.GetWorld()->GetAuthGameMode());
     if (!GameMode) return;
 
     auto RecipeConfig = GameMode->GameConfig->GetRecipeConfig(RecipeType);

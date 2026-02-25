@@ -15,32 +15,69 @@ void AMassDspGameMode::BeginPlay()
     UMassDspManager* DspManager = World->GetSubsystem<UMassDspManager>();
     if (!DspManager) return;
 
-    if (!MinerClass || !StorageClass)
+    if (!MinerClass || !StorageClass || !AssemblerClass)
     {
-        UE_LOG(LogTemp, Warning, TEXT("MinerClass or StorageClass not set in GameMode!"));
+        UE_LOG(LogTemp, Warning, TEXT("Building Classes not set in GameMode!"));
         return;
     }
 
-    // 3个矿机 + 1个合成器 + 1个仓库的简单测试场景
+    // ===== 新方案：批量创建Building Entity（无Actor实例化）=====
 
-    FVector MinerLocation1(0, 0, 0);
-    AMassDspMiner* MinerActor1 = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation1, FRotator(0, 90, 0));
+    // 构建Building生成数据列表
+    TArray<FBuildingSpawnData> BuildingDataList;
 
-    FVector MinerLocation2(1000, 0, 0);
-    AMassDspMiner* MinerActor2 = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation2, FRotator(0, 90, 0));
+    // 3个矿机
+    BuildingDataList.Add(FBuildingSpawnData(
+        MinerClass,
+        FTransform(FRotator(0, 90, 0), FVector(0, 0, 0)),
+        EBuildingType::Miner
+    ));
+    BuildingDataList.Add(FBuildingSpawnData(
+        MinerClass,
+        FTransform(FRotator(0, 90, 0), FVector(1000, 0, 0)),
+        EBuildingType::Miner
+    ));
+    BuildingDataList.Add(FBuildingSpawnData(
+        MinerClass,
+        FTransform(FRotator(0, 90, 0), FVector(2000, 0, 0)),
+        EBuildingType::Miner
+    ));
 
-    FVector MinerLocation3(2000, 0, 0);
-    AMassDspMiner* MinerActor3 = World->SpawnActor<AMassDspMiner>(MinerClass, MinerLocation3, FRotator(0, 90, 0));
+    // 1个合成台
+    BuildingDataList.Add(FBuildingSpawnData(
+        AssemblerClass,
+        FTransform(FRotator(0, 0, 0), FVector(1000, 1000, 0)),
+        EBuildingType::Assembler
+    ));
 
-    FVector AssemblerLocation(1000, 1000, 0);
-    AMassDspAssembler* AssemblerActor = World->SpawnActor<AMassDspAssembler>(AssemblerClass, AssemblerLocation, FRotator(0, 0, 0));
+    // 1个仓库
+    BuildingDataList.Add(FBuildingSpawnData(
+        StorageClass,
+        FTransform(FRotator(0, 180, 0), FVector(1000, 2000, 0)),
+        EBuildingType::Storage
+    ));
 
-    FVector StorageLocation(1000, 2000, 0);
-    AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator(0, 180, 0));
+    // 批量创建所有Building Entity
+    TArray<FMassEntityHandle> CreatedBuildings = DspManager->BatchSpawnBuildings(BuildingDataList);
 
-    DspManager->CreateAndLinkBeltForSlot(MinerActor1->MassHandle, 0, AssemblerActor->MassHandle, 2, ConveyorMesh);
-    DspManager->CreateAndLinkBeltForSlot(MinerActor2->MassHandle, 0, AssemblerActor->MassHandle, 1, ConveyorMesh);
-    DspManager->CreateAndLinkBeltForSlot(MinerActor3->MassHandle, 0, AssemblerActor->MassHandle, 0, ConveyorMesh);
+    if (CreatedBuildings.Num() != 5)
+    {
+        UE_LOG(LogTemp, Error, TEXT("Failed to create all building entities! Expected 5, got %d"), CreatedBuildings.Num());
+        return;
+    }
 
-    DspManager->CreateAndLinkBeltForSlot(AssemblerActor->MassHandle, 0, StorageActor->MassHandle, 0, ConveyorMesh);
+    // 提取EntityHandle用于连接传送带
+    FMassEntityHandle MinerEntity1 = CreatedBuildings[0];
+    FMassEntityHandle MinerEntity2 = CreatedBuildings[1];
+    FMassEntityHandle MinerEntity3 = CreatedBuildings[2];
+    FMassEntityHandle AssemblerEntity = CreatedBuildings[3];
+    FMassEntityHandle StorageEntity = CreatedBuildings[4];
+
+    // 创建传送带连接（与之前逻辑相同）
+    DspManager->CreateAndLinkBeltForSlot(MinerEntity1, 0, AssemblerEntity, 2, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerEntity2, 0, AssemblerEntity, 1, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerEntity3, 0, AssemblerEntity, 0, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, ConveyorMesh);
+
+    UE_LOG(LogTemp, Log, TEXT("Successfully initialized MassDsp factory: 3 Miners + 1 Assembler + 1 Storage (Pure ECS Mode)"));
 }

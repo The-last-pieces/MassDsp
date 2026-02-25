@@ -18,9 +18,9 @@ const UScriptStruct* AMassDspStorage::GetStaticStructForFragment() const
     return FMassDspStorageFragment::StaticStruct();
 }
 
-void AMassDspStorage::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const
+void AMassDspStorage::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const
 {
-    Super::InitFragmentForEntity(EntityManager, EntityHandle);
+    Super::InitFragmentForEntity(EntityManager, EntityHandle, WorldTransform);
 
     FMassDspStorageFragment& StorageFragment = EntityManager.GetFragmentDataChecked<FMassDspStorageFragment>(EntityHandle);
 

@@ -19,7 +19,7 @@ public:
 protected:
     virtual const UScriptStruct* GetStaticStructForFragment() const override;
 
-    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const override;
+    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const override;
 
 public:
     // 生产间隔（秒）

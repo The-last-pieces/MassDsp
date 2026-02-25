@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameConst.h"
-#include "MassEntityHandle.h"
 
 #include "GameFramework/Actor.h"
 #include "MassDspBuilding.generated.h"
@@ -43,8 +42,14 @@ struct FBuildingSlotDef
 
 /**
  * 通用建筑基类
- * 负责在场景中放置、配置槽口和基础属性。
- * 所有的逻辑处理将通过 MassEntity 系统进行。
+ * 
+ * 【重要】此类仅用作配置数据容器（CDO），运行时不会实例化Actor！
+ * 
+ * - 在蓝图编辑器中：设置Building的配置属性（Slots、产出类型等）
+ * - 运行时：直接从CDO读取配置，通过MassDspManager创建纯Mass Entity
+ * - 渲染：使用MassRepresentation System的ISM批量渲染，无独立Mesh组件
+ * 
+ * 所有逻辑处理通过 MassEntity 系统和 Processor 完成。
  */
 UCLASS(Blueprintable)
 class MASSDSP_API AMassDspBuilding : public AActor
@@ -57,19 +62,15 @@ public:
 public:
     TArray<const UScriptStruct*> GetStaticStructs() const;
 
-    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle) const;
+    // 从CDO初始化Fragment数据（由MassDspManager调用）
+    virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const;
 
 protected:
     virtual const UScriptStruct* GetStaticStructForFragment() const;
 
-protected:
-    virtual void BeginPlay() override;
-    virtual void PostActorCreated() override;
-
 #if WITH_EDITOR
     virtual void OnConstruction(const FTransform& Transform) override;
-    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override; // 新增
-
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
 private:
@@ -80,11 +81,12 @@ private:
     void ClearSlotVisualization();
 
 public:
-    // 建筑主网格
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MassDsp|Building")
+    // 【已弃用】运行时使用MassRepresentation System的ISM渲染，不再需要独立Mesh组件
+    // 保留此字段仅为兼容已有蓝图引用，编辑器中可用于预览
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MassDsp|Building", meta = (DeprecatedProperty, DeprecationMessage = "Runtime rendering uses Mass ISM system"))
     TObjectPtr<UStaticMeshComponent> MeshComponent;
 
-    // 槽口配置列表
+    // 槽口配置列表（蓝图中设置，运行时从CDO读取）
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Building")
     TArray<FBuildingSlotDef> Slots;
 
@@ -99,10 +101,6 @@ public:
     // 槽口可视化箭头粗细
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Building|Debug", meta = (EditCondition = "bShowSlotVisualization"))
     float SlotVisualizationThickness = 3.0f;
-
-    // 注册到 Mass 后的实体句柄，方便后续查询和调试
-    UPROPERTY()
-    FMassEntityHandle MassHandle;
 
 #if WITH_EDITORONLY_DATA
     // 槽口可视化箭头组件（仅编辑器）
