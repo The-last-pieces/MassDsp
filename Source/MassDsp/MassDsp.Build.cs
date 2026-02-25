@@ -30,7 +30,7 @@ public class MassDsp : ModuleRules
         ]);
 
         PrivateDependencyModuleNames.AddRange([
-            "MassMovement",
+            "MassMovement", "ProceduralMeshComponent", "CableComponent",
         ]);
 
         // Uncomment if you are using Slate UI

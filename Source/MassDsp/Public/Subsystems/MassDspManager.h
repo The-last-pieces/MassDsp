@@ -12,6 +12,7 @@
 
 #include "MassDspManager.generated.h"
 
+class UProceduralMeshComponent;
 class AMassDspGameMode;
 class AMassDspBuilding;
 class UMassEntityConfigAsset;
@@ -64,13 +65,18 @@ protected:
     UPROPERTY()
     AActor* BeltsContainerActor;
 
+    UPROPERTY()
+    UProceduralMeshComponent* BeltProceduralMesh;
+
+    int NextSectionIndex = 0;
+
 private:
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
 
-    FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UStaticMesh* BeltMesh, int32 SegmentsPerSection);
+    FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UMaterialInterface* Material, int32 SegmentsPerSection);
 
 public:
-    FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UStaticMesh* BeltMesh);
+    FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material);
 
     bool ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
 

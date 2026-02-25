@@ -15,7 +15,7 @@
 #include "MassRepresentationFragments.h"
 #include "MassLODFragments.h"
 
-#include "Components/SplineMeshComponent.h"
+#include "ProceduralMeshComponent.h"
 #include "Components/SplineComponent.h"
 
 void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
@@ -62,7 +62,7 @@ TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
     return GameMode;
 }
 
-FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
+FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UMaterialInterface* Material, int32 SegmentsPerSection)
 {
     if (!BeltsContainerActor) return FBeltHandle();
 
@@ -88,44 +88,202 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     NewHandle.Index = Index;
     NewHandle.Generation = 0; // TODO Implement generation check if needed
 
-    if (BeltMesh)
+    // TODO 大规模测试时性能有很大问题
+    if (Material)
     {
-        float DistStart = 0;
-        float DistEnd = NewSpline->GetSplineLength();
-        float SegmentLen = DistEnd - DistStart;
-        float StepLen = SegmentLen / SegmentsPerSection;
+        TArray<FVector> Vertices;
+        TArray<int32> Triangles;
+        TArray<FVector> Normals;
+        TArray<FVector2D> UVs;
+        const float Width = 110.0f;
+        const float BeltHeight = 20.0f;
+        const float BeltThickness = 20.0f;
+        const float DistEnd = NewSpline->GetSplineLength();
+        const float StepLen = DistEnd / SegmentsPerSection;
 
+        // 预先生成所有关键点的顶点
+        TArray<FVector> ControlPoints;
+        TArray<FVector> UpVectors;
+        TArray<FVector> RightVectors;
+        TArray<float> UCoords;
+
+        for (int32 i = 0; i <= SegmentsPerSection; ++i)
+        {
+            float Distance = FMath::Min(StepLen * i, DistEnd);
+            FVector Point = NewSpline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
+            Point.Z += BeltHeight;
+
+            FVector Up = NewSpline->GetUpVectorAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
+            FVector Tangent = NewSpline->GetTangentAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World).GetSafeNormal();
+            FVector Right = FVector::CrossProduct(Up, Tangent).GetSafeNormal();
+
+            ControlPoints.Add(Point);
+            UpVectors.Add(Up);
+            RightVectors.Add(Right);
+            UCoords.Add((float)i / SegmentsPerSection);
+        }
+
+        // 为每个控制点生成顶面和底面的顶点
+        TArray<int32> TopLeftIndices;
+        TArray<int32> TopRightIndices;
+        TArray<int32> BotLeftIndices;
+        TArray<int32> BotRightIndices;
+
+        for (int32 i = 0; i <= SegmentsPerSection; ++i)
+        {
+            FVector Point = ControlPoints[i];
+            FVector Up = UpVectors[i];
+            FVector Right = RightVectors[i];
+            float U = UCoords[i];
+
+            // 顶面左右顶点
+            TopLeftIndices.Add(Vertices.Num());
+            Vertices.Add(Point - Right * Width * 0.5f);
+            Normals.Add(Up);
+            UVs.Add(FVector2D(U, 0.0f));
+
+            TopRightIndices.Add(Vertices.Num());
+            Vertices.Add(Point + Right * Width * 0.5f);
+            Normals.Add(Up);
+            UVs.Add(FVector2D(U, 1.0f));
+
+            // 底面左右顶点
+            BotLeftIndices.Add(Vertices.Num());
+            Vertices.Add(Point - Right * Width * 0.5f - Up * BeltThickness);
+            Normals.Add(-Up);
+            UVs.Add(FVector2D(U, 0.0f));
+
+            BotRightIndices.Add(Vertices.Num());
+            Vertices.Add(Point + Right * Width * 0.5f - Up * BeltThickness);
+            Normals.Add(-Up);
+            UVs.Add(FVector2D(U, 1.0f));
+        }
+
+        // 构建三角形（使用共享顶点）
         for (int32 j = 0; j < SegmentsPerSection; ++j)
         {
-            float D1 = DistStart + StepLen * j;
-            float D2 = DistStart + StepLen * (j + 1);
+            int32 i0 = j;
+            int32 i1 = j + 1;
 
-            FVector P1 = NewSpline->GetLocationAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
-            FVector T1 = NewSpline->GetTangentAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
-            FVector P2 = NewSpline->GetLocationAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
-            FVector T2 = NewSpline->GetTangentAtDistanceAlongSpline(D2, ESplineCoordinateSpace::World);
+            // 顶面
+            Triangles.Add(TopLeftIndices[i1]);
+            Triangles.Add(TopLeftIndices[i0]);
+            Triangles.Add(TopRightIndices[i0]);
+            Triangles.Add(TopLeftIndices[i1]);
+            Triangles.Add(TopRightIndices[i0]);
+            Triangles.Add(TopRightIndices[i1]);
 
-            USplineMeshComponent* Smc = NewObject<USplineMeshComponent>(BeltsContainerActor);
-            Smc->SetStaticMesh(BeltMesh);
-            Smc->SetMobility(EComponentMobility::Movable);
-            Smc->SetForwardAxis(ESplineMeshAxis::X);
+            // 底面
+            Triangles.Add(BotLeftIndices[i0]);
+            Triangles.Add(BotLeftIndices[i1]);
+            Triangles.Add(BotRightIndices[i0]);
+            Triangles.Add(BotRightIndices[i0]);
+            Triangles.Add(BotLeftIndices[i1]);
+            Triangles.Add(BotRightIndices[i1]);
 
-            float Len = FVector::Dist(P1, P2);
+            // 左侧面 - 需要独立顶点（不同法线）
+            int32 LeftSideBase = Vertices.Num();
+            FVector LeftNormal = -RightVectors[j];
 
-            Smc->SetStartAndEnd(P1, T1.GetSafeNormal() * Len, P2, T2.GetSafeNormal() * Len);
+            Vertices.Add(ControlPoints[i0] - RightVectors[i0] * Width * 0.5f);
+            Normals.Add(LeftNormal);
+            UVs.Add(FVector2D(UCoords[i0], 0.0f));
 
-            Smc->SetStartScale(FVector2D(1.0f, 0.2f));
-            Smc->SetEndScale(FVector2D(1.0f, 0.2f));
+            Vertices.Add(ControlPoints[i1] - RightVectors[i1] * Width * 0.5f);
+            Normals.Add(LeftNormal);
+            UVs.Add(FVector2D(UCoords[i1], 0.0f));
 
-            Smc->SetupAttachment(BeltsContainerActor->GetRootComponent());
-            Smc->RegisterComponent();
+            Vertices.Add(ControlPoints[i0] - RightVectors[i0] * Width * 0.5f - UpVectors[i0] * BeltThickness);
+            Normals.Add(LeftNormal);
+            UVs.Add(FVector2D(UCoords[i0], 1.0f));
+
+            Vertices.Add(ControlPoints[i1] - RightVectors[i1] * Width * 0.5f - UpVectors[i1] * BeltThickness);
+            Normals.Add(LeftNormal);
+            UVs.Add(FVector2D(UCoords[i1], 1.0f));
+
+            Triangles.Add(LeftSideBase + 0);
+            Triangles.Add(LeftSideBase + 1);
+            Triangles.Add(LeftSideBase + 2);
+            Triangles.Add(LeftSideBase + 2);
+            Triangles.Add(LeftSideBase + 1);
+            Triangles.Add(LeftSideBase + 3);
+
+            // 右侧面
+            int32 RightSideBase = Vertices.Num();
+            FVector RightNormal = RightVectors[j];
+
+            Vertices.Add(ControlPoints[i0] + RightVectors[i0] * Width * 0.5f);
+            Normals.Add(RightNormal);
+            UVs.Add(FVector2D(UCoords[i0], 0.0f));
+
+            Vertices.Add(ControlPoints[i1] + RightVectors[i1] * Width * 0.5f);
+            Normals.Add(RightNormal);
+            UVs.Add(FVector2D(UCoords[i1], 0.0f));
+
+            Vertices.Add(ControlPoints[i0] + RightVectors[i0] * Width * 0.5f - UpVectors[i0] * BeltThickness);
+            Normals.Add(RightNormal);
+            UVs.Add(FVector2D(UCoords[i0], 1.0f));
+
+            Vertices.Add(ControlPoints[i1] + RightVectors[i1] * Width * 0.5f - UpVectors[i1] * BeltThickness);
+            Normals.Add(RightNormal);
+            UVs.Add(FVector2D(UCoords[i1], 1.0f));
+
+            Triangles.Add(RightSideBase + 0);
+            Triangles.Add(RightSideBase + 2);
+            Triangles.Add(RightSideBase + 1);
+            Triangles.Add(RightSideBase + 1);
+            Triangles.Add(RightSideBase + 2);
+            Triangles.Add(RightSideBase + 3);
         }
+
+
+        if (Vertices.Num() == 0)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("CreateRuntimeBelt: No valid vertices generated"));
+            return NewHandle;
+        }
+
+        if (!BeltProceduralMesh)
+        {
+            BeltProceduralMesh = NewObject<UProceduralMeshComponent>(BeltsContainerActor, TEXT("BeltProceduralMesh"));
+            BeltProceduralMesh->SetupAttachment(BeltsContainerActor->GetRootComponent());
+            BeltProceduralMesh->SetVisibility(true);
+            BeltProceduralMesh->SetCastShadow(false);
+            BeltProceduralMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision); // 禁用碰撞以避免Chaos错误
+            BeltProceduralMesh->RegisterComponent();
+        }
+
+        BeltProceduralMesh->CreateMeshSection_LinearColor(
+            NextSectionIndex,
+            Vertices,
+            Triangles,
+            Normals,
+            UVs,
+            TArray<FLinearColor>(),
+            TArray<FProcMeshTangent>(),
+            false // bCreateCollision = false
+        );
+
+        if (Material)
+        {
+            BeltProceduralMesh->SetMaterial(NextSectionIndex, Material);
+        }
+        else
+        {
+            UMaterial* BaseMat = UMaterial::GetDefaultMaterial(MD_Surface);
+            UMaterialInstanceDynamic* DynMat = UMaterialInstanceDynamic::Create(BaseMat, BeltProceduralMesh);
+            BeltProceduralMesh->SetMaterial(NextSectionIndex, DynMat);
+        }
+
+        NextSectionIndex++;
     }
 
     return NewHandle;
 }
 
-FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UStaticMesh* BeltMesh)
+FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
+    FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material
+)
 {
     if (!(SBuilding.IsValid() && EBuilding.IsValid())) return FBeltHandle();
 
@@ -199,7 +357,7 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(FMassEntityHandle SBuildin
         NewSpline->SetTangentsAtSplinePoint(2, EndTangent, FVector::ZeroVector, ESplineCoordinateSpace::World, false);
 
         NewSpline->SetSplinePointType(3, ESplinePointType::Linear, false);
-    }, BeltMesh, 50);
+    }, Material, 50);
 
     if (!BeltHandle.IsValid()) return FBeltHandle();
 
