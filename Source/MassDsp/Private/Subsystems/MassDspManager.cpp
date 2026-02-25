@@ -95,7 +95,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     FBeltTrajectory NewTrajectory;
     NewTrajectory.SplineComponent = NewSpline;
     NewTrajectory.TotalLength = NewSpline->GetSplineLength();
-    NewTrajectory.Speed = 400.f;
+    NewTrajectory.Speed = FGameConst::ItemSpace * 6; // 1秒6个物品
 
     int32 Index = BeltTrajectories.Add(NewTrajectory);
     FBeltHandle NewHandle;
@@ -284,6 +284,7 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
         Item.DistanceAlongBelt = InitialDistance;
         Item.BeltHandle = BeltHandle;
         Item.ItemType = ItemType;
+        Item.bIsBlocked = false;
 
         FTransformFragment& TransformFrag = InEntityManager.GetFragmentDataChecked<FTransformFragment>(Entity);
         Trajectory.ApplyTransform(TransformFrag, InitialDistance);
