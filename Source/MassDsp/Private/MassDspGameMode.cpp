@@ -1,4 +1,7 @@
 ﻿#include "MassDspGameMode.h"
+
+#include "MassEntitySubsystem.h"
+
 #include "Subsystems/MassDspManager.h"
 
 #include "Actors/MassDspMiner.h"

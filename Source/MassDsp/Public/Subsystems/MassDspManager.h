@@ -65,6 +65,8 @@ protected:
     AActor* BeltsContainerActor;
 
 private:
+    TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
+
     FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UStaticMesh* BeltMesh, int32 SegmentsPerSection);
 
 public:

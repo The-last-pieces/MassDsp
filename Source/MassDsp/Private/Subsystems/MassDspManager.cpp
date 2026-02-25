@@ -12,8 +12,8 @@
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
 #include "MassEntityConfigAsset.h"
-#include "MassExecutor.h"
 #include "MassRepresentationFragments.h"
+#include "MassLODFragments.h"
 
 #include "Components/SplineMeshComponent.h"
 #include "Components/SplineComponent.h"
@@ -50,6 +50,16 @@ void UMassDspManager::Deinitialize()
     }
 
     Super::Deinitialize();
+}
+
+TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
+{
+    if (!GameMode.IsValid())
+    {
+        GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
+    }
+
+    return GameMode;
 }
 
 FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UStaticMesh* BeltMesh, int32 SegmentsPerSection)
@@ -203,10 +213,7 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(FMassEntityHandle SBuildin
 
 bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc)
 {
-    if (!GameMode.IsValid())
-    {
-        GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
-    }
+    TryGetGameMode();
     if (!GameMode.IsValid()) return false;
     if (!BeltHandle.IsValid()) return false;
 
@@ -238,7 +245,12 @@ bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBelt
 
         const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
 
-        auto Entity = InEntityManager.CreateEntity(EntityTemplate.GetArchetype(), EntityTemplate.GetSharedFragmentValues());
+        FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
+        Composition.Add<FBeltItemFragment>();
+
+        FMassArchetypeHandle CustomArchetype = InEntityManager.CreateArchetype(Composition);
+
+        auto Entity = InEntityManager.CreateEntity(CustomArchetype, EntityTemplate.GetSharedFragmentValues());
         InEntityManager.SetEntityFragmentValues(Entity, EntityTemplate.GetInitialFragmentValues());
 
         if (FMassRepresentationFragment* RepFrag = InEntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(Entity))
@@ -347,8 +359,15 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
 
 FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData)
 {
+    TryGetGameMode();
+    if (!GameMode.IsValid())
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateBuildingEntityInternal: GameMode is null!"));
+        return FMassEntityHandle();
+    }
     if (!SpawnData.BuildingClass)
     {
+        UE_LOG(LogTemp, Error, TEXT("CreateBuildingEntityInternal: BuildingClass is null!"));
         return FMassEntityHandle();
     }
 
@@ -360,13 +379,20 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
         return FMassEntityHandle();
     }
 
-    // 创建Archetype（包含Building特定Fragment + Transform + Representation）
-    TArray<const UScriptStruct*> FragmentTypes = BuildingCDO->GetStaticStructs();
-    FragmentTypes.Add(FTransformFragment::StaticStruct());
-    FragmentTypes.Add(FMassRepresentationFragment::StaticStruct());
+    auto ItemConfig = GameMode->BeltItemConfigAsset;
 
-    FMassArchetypeHandle ArchetypeHandle = EntityManager.CreateArchetype(FragmentTypes);
-    FMassEntityHandle EntityHandle = EntityManager.CreateEntity(ArchetypeHandle);
+    const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*GetWorld());
+
+    FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
+    for (const UScriptStruct* FragmentType : BuildingCDO->GetStaticStructs())
+    {
+        Composition.GetContainer<FMassFragment>().Add(*FragmentType);
+    }
+
+    FMassArchetypeHandle CustomArchetype = EntityManager.CreateArchetype(Composition);
+
+    auto EntityHandle = EntityManager.CreateEntity(CustomArchetype, EntityTemplate.GetSharedFragmentValues());
+    EntityManager.SetEntityFragmentValues(EntityHandle, EntityTemplate.GetInitialFragmentValues());
 
     // 初始化Building特定Fragment数据（从CDO读取配置）
     BuildingCDO->InitFragmentForEntity(EntityManager, EntityHandle, SpawnData.WorldTransform);
@@ -380,23 +406,11 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
     // 设置Representation（ISM渲染）
     if (FMassRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(EntityHandle))
     {
-        if (!GameMode.IsValid())
+        if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(SpawnData.BuildingType))
         {
-            GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
-        }
-
-        if (GameMode.IsValid() && GameMode->GameConfig)
-        {
-            if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(SpawnData.BuildingType))
-            {
-                RepFrag->StaticMeshDescHandle = BuildingConfig->GetOrCreateMeshHandle(GetWorld());
-                RepFrag->CurrentRepresentation = EMassRepresentationType::StaticMeshInstance;
-                RepFrag->PrevRepresentation = EMassRepresentationType::None;
-            }
-            else
-            {
-                UE_LOG(LogTemp, Warning, TEXT("CreateBuildingEntityInternal: BuildingConfig not found for type %d"), static_cast<int32>(SpawnData.BuildingType));
-            }
+            RepFrag->StaticMeshDescHandle = BuildingConfig->GetOrCreateMeshHandle(GetWorld());
+            RepFrag->CurrentRepresentation = EMassRepresentationType::StaticMeshInstance;
+            RepFrag->PrevRepresentation = EMassRepresentationType::None;
         }
     }
 
