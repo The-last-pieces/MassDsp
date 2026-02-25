@@ -139,17 +139,15 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     return NewHandle;
 }
 
-FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
-    const AMassDspBuilding* SBuilding, int32 StartSlotIndex, const AMassDspBuilding* EBuilding, int32 EndSlotIndex, UStaticMesh* BeltMesh
-)
+FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UStaticMesh* BeltMesh)
 {
-    if (!(SBuilding && SBuilding->MassHandle.IsValid() && EBuilding && EBuilding->MassHandle.IsValid())) return FBeltHandle();
+    if (!(SBuilding.IsValid() && EBuilding.IsValid())) return FBeltHandle();
 
     FMassEntityManager& EntityManager = GetWorld()->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
 
     FBuildingSlotState *StartSlot = nullptr, *EndSlot = nullptr;
 
-    if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(SBuilding->MassHandle))
+    if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(SBuilding))
     {
         for (auto& Slot : MinerSlots->GetOutputSlots())
         {
@@ -161,7 +159,7 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
         }
     }
 
-    if (FMassDspBuildingSlotsFragment* StorageSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EBuilding->MassHandle))
+    if (FMassDspBuildingSlotsFragment* StorageSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EBuilding))
     {
         for (auto& Slot : StorageSlots->GetInputSlots())
         {

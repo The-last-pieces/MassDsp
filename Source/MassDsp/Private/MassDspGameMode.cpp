@@ -38,9 +38,9 @@ void AMassDspGameMode::BeginPlay()
     FVector StorageLocation(1000, 2000, 0);
     AMassDspStorage* StorageActor = World->SpawnActor<AMassDspStorage>(StorageClass, StorageLocation, FRotator(0, 180, 0));
 
-    DspManager->CreateAndLinkBeltForSlot(MinerActor1, 0, AssemblerActor, 2, ConveyorMesh);
-    DspManager->CreateAndLinkBeltForSlot(MinerActor2, 0, AssemblerActor, 1, ConveyorMesh);
-    DspManager->CreateAndLinkBeltForSlot(MinerActor3, 0, AssemblerActor, 0, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerActor1->MassHandle, 0, AssemblerActor->MassHandle, 2, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerActor2->MassHandle, 0, AssemblerActor->MassHandle, 1, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(MinerActor3->MassHandle, 0, AssemblerActor->MassHandle, 0, ConveyorMesh);
 
-    DspManager->CreateAndLinkBeltForSlot(AssemblerActor, 0, StorageActor, 0, ConveyorMesh);
+    DspManager->CreateAndLinkBeltForSlot(AssemblerActor->MassHandle, 0, StorageActor->MassHandle, 0, ConveyorMesh);
 }
