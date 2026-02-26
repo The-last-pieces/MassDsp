@@ -23,7 +23,7 @@ public class MassDsp : ModuleRules
             "MassMovement",
             "ZoneGraph",
             "MassZoneGraphNavigation",
-			"HeadMountedDisplay",
+            "HeadMountedDisplay",
             "MassActors",
             "MassSmartObjects",
             "MassSpawner",
@@ -32,6 +32,18 @@ public class MassDsp : ModuleRules
         PrivateDependencyModuleNames.AddRange([
             "MassMovement", "ProceduralMeshComponent", "CableComponent",
         ]);
+
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.AddRange([
+                "MaterialEditor",
+                "UnrealEd",
+                "ToolMenus",
+                "Slate",
+                "SlateCore",
+                "EditorStyle",
+            ]);
+        }
 
         // Uncomment if you are using Slate UI
         // PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

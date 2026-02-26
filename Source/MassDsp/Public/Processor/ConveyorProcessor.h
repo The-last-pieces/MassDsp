@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassProcessor.h"
+#include "MassExecutionContext.h"
 #include "ConveyorProcessor.generated.h"
 
 UCLASS()

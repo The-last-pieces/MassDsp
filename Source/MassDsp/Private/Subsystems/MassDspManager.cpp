@@ -52,6 +52,72 @@ void UMassDspManager::Deinitialize()
     Super::Deinitialize();
 }
 
+TArray<UMassDspManager::FSamplePoint> UMassDspManager::GenerateAdaptiveSamples(const USplineComponent* Spline, int32 MinSegments, int32 MaxSegments)
+{
+    TArray<FSamplePoint> Samples;
+    if (!Spline) return Samples;
+
+    const float TotalLength = Spline->GetSplineLength();
+    if (TotalLength <= 0.0f) return Samples;
+
+    // 初始采样点
+    Samples.Reserve(MaxSegments);
+    Samples.Add(CreateSamplePoint(Spline, 0.0f));
+
+    float CurrentDist = 0.0f;
+    int32 SegmentCount = 0;
+
+    while (CurrentDist < TotalLength && SegmentCount < MaxSegments)
+    {
+        const FSamplePoint& LastSample = Samples.Last();
+
+        // 计算前向采样点的曲率
+        float ProbeDistance = FMath::Min(CurrentDist + 50.0f, TotalLength);
+        FVector ProbeTangent = Spline->GetTangentAtDistanceAlongSpline(ProbeDistance, ESplineCoordinateSpace::World).GetSafeNormal();
+
+        // 曲率估算：切线方向变化率
+        float DeltaAngle = FMath::Acos(FMath::Clamp(FVector::DotProduct(LastSample.Tangent, ProbeTangent), -1.0f, 1.0f));
+        float Curvature = DeltaAngle / 50.0f; // 弧度/单位距离
+
+        // 根据曲率自适应调整步长
+        // 曲率大（急转弯）→ 步长小（密集采样）
+        // 曲率小（直线）→ 步长大（稀疏采样）
+        float AdaptiveStep = FMath::Clamp(
+            200.0f / FMath::Max(Curvature * 1000.0f + 1.0f, 1.0f), // 曲率越大步长越小
+            TotalLength / MaxSegments, // 最小步长（避免过密）
+            TotalLength / MinSegments // 最大步长（保证最少段数）
+        );
+
+        CurrentDist = FMath::Min(CurrentDist + AdaptiveStep, TotalLength);
+
+        FSamplePoint NewSample = CreateSamplePoint(Spline, CurrentDist);
+        NewSample.Curvature = Curvature;
+        Samples.Add(NewSample);
+
+        SegmentCount++;
+    }
+
+    // 确保终点被采样
+    if (FMath::Abs(Samples.Last().Distance - TotalLength) > 1.0f)
+    {
+        Samples.Add(CreateSamplePoint(Spline, TotalLength));
+    }
+
+    return Samples;
+}
+
+UMassDspManager::FSamplePoint UMassDspManager::CreateSamplePoint(const USplineComponent* Spline, float Distance)
+{
+    FSamplePoint Sample;
+    Sample.Distance = Distance;
+    Sample.Location = Spline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
+    Sample.Tangent = Spline->GetTangentAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World).GetSafeNormal();
+    Sample.Up = Spline->GetUpVectorAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
+    Sample.Right = FVector::CrossProduct(Sample.Up, Sample.Tangent).GetSafeNormal();
+    Sample.Curvature = 0.0f;
+    return Sample;
+}
+
 TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
 {
     if (!GameMode.IsValid())
@@ -81,7 +147,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     FBeltTrajectory NewTrajectory;
     NewTrajectory.SplineComponent = NewSpline;
     NewTrajectory.TotalLength = NewSpline->GetSplineLength();
-    NewTrajectory.Speed = FGameConst::ItemSpace * 6; // 1秒6个物品
+    NewTrajectory.Speed = FGameConst::ItemSpace * 2; // 1秒6个物品
 
     int32 Index = BeltTrajectories.Add(NewTrajectory);
     FBeltHandle NewHandle;
@@ -91,157 +157,12 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     // TODO 大规模测试时性能有很大问题
     if (Material)
     {
+        TArray<FSamplePoint> SamplePoints = GenerateAdaptiveSamples(NewSpline, 100, 500);
+
         TArray<FVector> Vertices;
         TArray<int32> Triangles;
         TArray<FVector> Normals;
         TArray<FVector2D> UVs;
-        const float Width = 110.0f;
-        const float BeltHeight = 20.0f;
-        const float BeltThickness = 20.0f;
-        const float DistEnd = NewSpline->GetSplineLength();
-        const float StepLen = DistEnd / SegmentsPerSection;
-
-        // 预先生成所有关键点的顶点
-        TArray<FVector> ControlPoints;
-        TArray<FVector> UpVectors;
-        TArray<FVector> RightVectors;
-        TArray<float> UCoords;
-
-        for (int32 i = 0; i <= SegmentsPerSection; ++i)
-        {
-            float Distance = FMath::Min(StepLen * i, DistEnd);
-            FVector Point = NewSpline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-            Point.Z += BeltHeight;
-
-            FVector Up = NewSpline->GetUpVectorAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-            FVector Tangent = NewSpline->GetTangentAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World).GetSafeNormal();
-            FVector Right = FVector::CrossProduct(Up, Tangent).GetSafeNormal();
-
-            ControlPoints.Add(Point);
-            UpVectors.Add(Up);
-            RightVectors.Add(Right);
-            UCoords.Add((float)i / SegmentsPerSection);
-        }
-
-        // 为每个控制点生成顶面和底面的顶点
-        TArray<int32> TopLeftIndices;
-        TArray<int32> TopRightIndices;
-        TArray<int32> BotLeftIndices;
-        TArray<int32> BotRightIndices;
-
-        for (int32 i = 0; i <= SegmentsPerSection; ++i)
-        {
-            FVector Point = ControlPoints[i];
-            FVector Up = UpVectors[i];
-            FVector Right = RightVectors[i];
-            float U = UCoords[i];
-
-            // 顶面左右顶点
-            TopLeftIndices.Add(Vertices.Num());
-            Vertices.Add(Point - Right * Width * 0.5f);
-            Normals.Add(Up);
-            UVs.Add(FVector2D(U, 0.0f));
-
-            TopRightIndices.Add(Vertices.Num());
-            Vertices.Add(Point + Right * Width * 0.5f);
-            Normals.Add(Up);
-            UVs.Add(FVector2D(U, 1.0f));
-
-            // 底面左右顶点
-            BotLeftIndices.Add(Vertices.Num());
-            Vertices.Add(Point - Right * Width * 0.5f - Up * BeltThickness);
-            Normals.Add(-Up);
-            UVs.Add(FVector2D(U, 0.0f));
-
-            BotRightIndices.Add(Vertices.Num());
-            Vertices.Add(Point + Right * Width * 0.5f - Up * BeltThickness);
-            Normals.Add(-Up);
-            UVs.Add(FVector2D(U, 1.0f));
-        }
-
-        // 构建三角形（使用共享顶点）
-        for (int32 j = 0; j < SegmentsPerSection; ++j)
-        {
-            int32 i0 = j;
-            int32 i1 = j + 1;
-
-            // 顶面
-            Triangles.Add(TopLeftIndices[i1]);
-            Triangles.Add(TopLeftIndices[i0]);
-            Triangles.Add(TopRightIndices[i0]);
-            Triangles.Add(TopLeftIndices[i1]);
-            Triangles.Add(TopRightIndices[i0]);
-            Triangles.Add(TopRightIndices[i1]);
-
-            // 底面
-            Triangles.Add(BotLeftIndices[i0]);
-            Triangles.Add(BotLeftIndices[i1]);
-            Triangles.Add(BotRightIndices[i0]);
-            Triangles.Add(BotRightIndices[i0]);
-            Triangles.Add(BotLeftIndices[i1]);
-            Triangles.Add(BotRightIndices[i1]);
-
-            // 左侧面 - 需要独立顶点（不同法线）
-            int32 LeftSideBase = Vertices.Num();
-            FVector LeftNormal = -RightVectors[j];
-
-            Vertices.Add(ControlPoints[i0] - RightVectors[i0] * Width * 0.5f);
-            Normals.Add(LeftNormal);
-            UVs.Add(FVector2D(UCoords[i0], 0.0f));
-
-            Vertices.Add(ControlPoints[i1] - RightVectors[i1] * Width * 0.5f);
-            Normals.Add(LeftNormal);
-            UVs.Add(FVector2D(UCoords[i1], 0.0f));
-
-            Vertices.Add(ControlPoints[i0] - RightVectors[i0] * Width * 0.5f - UpVectors[i0] * BeltThickness);
-            Normals.Add(LeftNormal);
-            UVs.Add(FVector2D(UCoords[i0], 1.0f));
-
-            Vertices.Add(ControlPoints[i1] - RightVectors[i1] * Width * 0.5f - UpVectors[i1] * BeltThickness);
-            Normals.Add(LeftNormal);
-            UVs.Add(FVector2D(UCoords[i1], 1.0f));
-
-            Triangles.Add(LeftSideBase + 0);
-            Triangles.Add(LeftSideBase + 1);
-            Triangles.Add(LeftSideBase + 2);
-            Triangles.Add(LeftSideBase + 2);
-            Triangles.Add(LeftSideBase + 1);
-            Triangles.Add(LeftSideBase + 3);
-
-            // 右侧面
-            int32 RightSideBase = Vertices.Num();
-            FVector RightNormal = RightVectors[j];
-
-            Vertices.Add(ControlPoints[i0] + RightVectors[i0] * Width * 0.5f);
-            Normals.Add(RightNormal);
-            UVs.Add(FVector2D(UCoords[i0], 0.0f));
-
-            Vertices.Add(ControlPoints[i1] + RightVectors[i1] * Width * 0.5f);
-            Normals.Add(RightNormal);
-            UVs.Add(FVector2D(UCoords[i1], 0.0f));
-
-            Vertices.Add(ControlPoints[i0] + RightVectors[i0] * Width * 0.5f - UpVectors[i0] * BeltThickness);
-            Normals.Add(RightNormal);
-            UVs.Add(FVector2D(UCoords[i0], 1.0f));
-
-            Vertices.Add(ControlPoints[i1] + RightVectors[i1] * Width * 0.5f - UpVectors[i1] * BeltThickness);
-            Normals.Add(RightNormal);
-            UVs.Add(FVector2D(UCoords[i1], 1.0f));
-
-            Triangles.Add(RightSideBase + 0);
-            Triangles.Add(RightSideBase + 2);
-            Triangles.Add(RightSideBase + 1);
-            Triangles.Add(RightSideBase + 1);
-            Triangles.Add(RightSideBase + 2);
-            Triangles.Add(RightSideBase + 3);
-        }
-
-
-        if (Vertices.Num() == 0)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("CreateRuntimeBelt: No valid vertices generated"));
-            return NewHandle;
-        }
 
         if (!BeltProceduralMesh)
         {
@@ -253,32 +174,282 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
             BeltProceduralMesh->RegisterComponent();
         }
 
-        BeltProceduralMesh->CreateMeshSection_LinearColor(
-            NextSectionIndex,
-            Vertices,
-            Triangles,
-            Normals,
-            UVs,
-            TArray<FLinearColor>(),
-            TArray<FProcMeshTangent>(),
-            false // bCreateCollision = false
-        );
+        auto DynMaterial = UMaterialInstanceDynamic::Create(Material, this);
 
-        if (Material)
-        {
-            BeltProceduralMesh->SetMaterial(NextSectionIndex, Material);
-        }
-        else
-        {
-            UMaterial* BaseMat = UMaterial::GetDefaultMaterial(MD_Surface);
-            UMaterialInstanceDynamic* DynMat = UMaterialInstanceDynamic::Create(BaseMat, BeltProceduralMesh);
-            BeltProceduralMesh->SetMaterial(NextSectionIndex, DynMat);
-        }
 
-        NextSectionIndex++;
+        constexpr float Width = 110.0f;
+        constexpr float BeltThickness = 20.0f;
+        constexpr float UVScale = 100.0f;
+        constexpr float MatTiling = 5.0f;
+
+        DynMaterial->SetVectorParameterValue(TEXT("BaseColor"), FColor::Blue);
+        DynMaterial->SetScalarParameterValue(TEXT("Tiling"), MatTiling);
+
+        // 公式推导: 
+        // 材质相位变化率 = Time * MatSpeed
+        // 空间相位变化率 = (Dist / UVScale) * Tiling
+        // 令 Time * MatSpeed = (Dist / UVScale) * Tiling
+        // => Dist/Time = PhysicalSpeed
+        // => MatSpeed = PhysicalSpeed * Tiling / UVScale
+        float CorrectedMatSpeed = NewTrajectory.Speed * MatTiling / UVScale;
+
+        DynMaterial->SetScalarParameterValue(TEXT("Speed"), CorrectedMatSpeed);
+
+        GenerateConveyorMesh(BeltProceduralMesh, NewSpline, DynMaterial, Width, BeltThickness, UVScale, 5.0f);
+
+        // TODO 直线分割有问题. 材质一直闪烁
     }
 
     return NewHandle;
+}
+
+// 内部使用的切片结构体
+struct FConveyorSlice
+{
+    FVector Location;
+    FVector Right;
+    FVector Up;
+    FVector Tangent;
+    float Distance;
+};
+
+void UMassDspManager::GenerateConveyorMesh(
+    UProceduralMeshComponent* TargetMesh,
+    const USplineComponent* Spline,
+    UMaterialInterface* Material,
+    float Width,
+    float Thickness,
+    float UVScale,
+    float AngleThreshold)
+{
+    if (!TargetMesh || !Spline || Spline->GetNumberOfSplinePoints() < 2) return;
+
+    // --- 1. 计算自适应切片 (Adaptive Slicing) ---
+    TArray<FConveyorSlice> Slices;
+    const float SplineLength = Spline->GetSplineLength();
+    constexpr float CheckStep = 10.0f; // 采样精度 10cm
+    constexpr float MaxSegmentLength = 100.0f; // 强制分段最大距离
+
+    // 起点
+    Slices.Add({
+        Spline->GetLocationAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local),
+        Spline->GetRightVectorAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local),
+        Spline->GetUpVectorAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local),
+        Spline->GetTangentAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local).GetSafeNormal(),
+        0.0f
+    });
+
+    FVector LastTangent = Slices[0].Tangent;
+    float LastSliceDist = 0.0f;
+
+    // 遍历
+    for (float Dist = CheckStep; Dist < SplineLength; Dist += CheckStep)
+    {
+        FVector CurrentTangent = Spline->GetTangentAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::Local).GetSafeNormal();
+
+        // 计算角度变化
+        float Dot = FVector::DotProduct(LastTangent, CurrentTangent);
+        float Angle = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Dot, -1.0f, 1.0f)));
+        float DistSinceLast = Dist - LastSliceDist;
+
+        if (Angle >= AngleThreshold || DistSinceLast >= MaxSegmentLength)
+        {
+            Slices.Add({
+                Spline->GetLocationAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::Local),
+                Spline->GetRightVectorAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::Local),
+                Spline->GetUpVectorAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::Local),
+                CurrentTangent,
+                Dist
+            });
+            LastTangent = CurrentTangent;
+            LastSliceDist = Dist;
+        }
+    }
+
+    // 终点
+    if (LastSliceDist < SplineLength)
+    {
+        Slices.Add({
+            Spline->GetLocationAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local),
+            Spline->GetRightVectorAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local),
+            Spline->GetUpVectorAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local),
+            Spline->GetTangentAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local).GetSafeNormal(),
+            SplineLength
+        });
+    }
+
+    // --- 2. 构建几何体 (Box Extrusion) ---
+    if (Slices.Num() < 2) return;
+
+
+    TArray<FVector> Vertices;
+    TArray<int32> Triangles;
+    TArray<FVector> Normals;
+    TArray<FVector2D> UVs;
+    TArray<FProcMeshTangent> Tangents;
+    TArray<FLinearColor> Colors;
+
+    const float HalfWidth = Width * 0.5f;
+    const float HalfThick = Thickness * 0.5f;
+
+    // 辅助 Lambda：添加四边形 (两个三角形)
+    auto AddQuad = [&](int32 V0, int32 V1, int32 V2, int32 V3)
+    {
+        Triangles.Add(V0);
+        Triangles.Add(V1);
+        Triangles.Add(V2);
+        Triangles.Add(V2);
+        Triangles.Add(V1);
+        Triangles.Add(V3);
+    };
+
+    // 我们将分别生成 Top, Bottom, Left, Right 四个面
+    // 这样做是为了让每个面有独立的法线 (Hard Edges)
+
+    int32 NumSlices = Slices.Num();
+    int32 VertexOffset = 0;
+
+    // --- A. 顶面 (Top Face) ---
+    for (int32 i = 0; i < NumSlices; i++)
+    {
+        const auto& Slice = Slices[i];
+        // 顶面稍微向上偏移 HalfThick
+        FVector Center = Slice.Location + (Slice.Up * HalfThick);
+
+        Vertices.Add(Center - (Slice.Right * HalfWidth)); // Left
+        Vertices.Add(Center + (Slice.Right * HalfWidth)); // Right
+
+        Normals.Add(Slice.Up); // 法线向上
+        Normals.Add(Slice.Up);
+
+        // UV: X=0/1, Y=Distance
+        UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
+        UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
+
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+
+        Colors.Add(FLinearColor::White);
+        Colors.Add(FLinearColor::White);
+    }
+
+    // 顶面索引
+    for (int32 i = 0; i < NumSlices - 1; i++)
+    {
+        int32 Base = VertexOffset + (i * 2);
+        AddQuad(Base, Base + 1, Base + 2, Base + 3);
+    }
+    VertexOffset += NumSlices * 2;
+
+    // --- B. 底面 (Bottom Face) ---
+    for (int32 i = 0; i < NumSlices; i++)
+    {
+        const auto& Slice = Slices[i];
+        FVector Center = Slice.Location - (Slice.Up * HalfThick);
+
+        Vertices.Add(Center - (Slice.Right * HalfWidth));
+        Vertices.Add(Center + (Slice.Right * HalfWidth));
+
+        Normals.Add(-Slice.Up); // 法线向下
+        Normals.Add(-Slice.Up);
+
+        UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
+        UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
+
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+
+        Colors.Add(FLinearColor::Gray);
+        Colors.Add(FLinearColor::Gray);
+    }
+
+    // 底面索引 (注意顺序，底面要朝下，所以顶点顺序要反过来或者交换)
+    for (int32 i = 0; i < NumSlices - 1; i++)
+    {
+        int32 Base = VertexOffset + (i * 2);
+        // 交换 V1 和 V2 的位置以翻转法线方向
+        AddQuad(Base + 1, Base, Base + 3, Base + 2);
+    }
+    VertexOffset += NumSlices * 2;
+
+    // --- C. 左侧面 (Left Face) ---
+    for (int32 i = 0; i < NumSlices; i++)
+    {
+        const auto& Slice = Slices[i];
+        FVector TopL = Slice.Location + (Slice.Up * HalfThick) - (Slice.Right * HalfWidth);
+        FVector BotL = Slice.Location - (Slice.Up * HalfThick) - (Slice.Right * HalfWidth);
+
+        Vertices.Add(TopL);
+        Vertices.Add(BotL);
+
+        Normals.Add(-Slice.Right); // 法线向左
+        Normals.Add(-Slice.Right);
+
+        // 侧面 UV 简单映射
+        UVs.Add(FVector2D(Slice.Distance / UVScale, 0.0f));
+        UVs.Add(FVector2D(Slice.Distance / UVScale, 1.0f));
+
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+
+        Colors.Add(FLinearColor::Gray);
+        Colors.Add(FLinearColor::Gray);
+    }
+
+    for (int32 i = 0; i < NumSlices - 1; i++)
+    {
+        int32 Base = VertexOffset + (i * 2);
+        AddQuad(Base, Base + 2, Base + 1, Base + 3);
+    }
+    VertexOffset += NumSlices * 2;
+
+    // --- D. 右侧面 (Right Face) ---
+    for (int32 i = 0; i < NumSlices; i++)
+    {
+        const auto& Slice = Slices[i];
+        FVector TopR = Slice.Location + (Slice.Up * HalfThick) + (Slice.Right * HalfWidth);
+        FVector BotR = Slice.Location - (Slice.Up * HalfThick) + (Slice.Right * HalfWidth);
+
+        Vertices.Add(TopR);
+        Vertices.Add(BotR);
+
+        Normals.Add(Slice.Right); // 法线向右
+        Normals.Add(Slice.Right);
+
+        UVs.Add(FVector2D(Slice.Distance / UVScale, 0.0f));
+        UVs.Add(FVector2D(Slice.Distance / UVScale, 1.0f));
+
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+
+        Colors.Add(FLinearColor::Gray);
+        Colors.Add(FLinearColor::Gray);
+    }
+
+    for (int32 i = 0; i < NumSlices - 1; i++)
+    {
+        int32 Base = VertexOffset + (i * 2);
+        AddQuad(Base + 2, Base, Base + 3, Base + 1);
+    }
+
+    // --- 3. 提交数据 --- 
+    TargetMesh->CreateMeshSection_LinearColor(
+        NextSectionIndex,
+        Vertices,
+        Triangles,
+        Normals,
+        UVs,
+        Colors,
+        Tangents,
+        true // 开启碰撞
+    );
+
+    if (Material)
+    {
+        TargetMesh->SetMaterial(NextSectionIndex, Material);
+    }
+
+    NextSectionIndex++;
 }
 
 FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
@@ -323,6 +494,10 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     FVector D = EndSlot->WorldLocation - EndSlot->WorldRotation * FVector(EndSlot->SlotExtend, 0, 0);
 
     TArray BeltPoints = {A, B, C, D};
+    for (FVector& Pt : BeltPoints)
+    {
+        Pt.Z += 20.0f;
+    }
 
     FVector AB_Direction = (B - A).GetSafeNormal();
     FVector CD_Direction = (D - C).GetSafeNormal();

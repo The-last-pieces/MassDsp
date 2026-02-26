@@ -359,6 +359,7 @@ public:
         }
     }
 
+#if WITH_EDITOR
     virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override
     {
         // 验证所有物品配置的有效性
@@ -414,7 +415,6 @@ public:
         return EDataValidationResult::Valid;
     }
 
-#if WITH_EDITOR
     // 编辑器中修改时自动更新键
     virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override
     {

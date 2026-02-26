@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameConst.h"
+#include "MassExecutionContext.h"
 #include "MassProcessor.h"
 #include "MassDspBuildingProcessor.generated.h"
 

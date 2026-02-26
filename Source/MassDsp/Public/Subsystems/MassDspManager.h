@@ -71,9 +71,43 @@ protected:
     int NextSectionIndex = 0;
 
 private:
+    struct FSamplePoint
+    {
+        float Distance;
+        FVector Location;
+        FVector Tangent;
+        FVector Up;
+        FVector Right;
+        float Curvature;
+    };
+
+    static TArray<FSamplePoint> GenerateAdaptiveSamples(const USplineComponent* Spline, int32 MinSegments = 20, int32 MaxSegments = 200);
+
+    static FSamplePoint CreateSamplePoint(const USplineComponent* Spline, float Distance);
+
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
 
     FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UMaterialInterface* Material, int32 SegmentsPerSection);
+
+    /**
+      * 静态生成传送带网格
+      * @param TargetMesh       要填充数据的 ProceduralMesh 组件
+      * @param Spline           定义路径的样条线组件
+      * @param Material         要应用的材质 (支持前面做的动态材质)
+      * @param Width            传送带宽度
+      * @param Thickness        传送带厚度
+      * @param UVScale          UV平铺比例 (通常设为 100.0，即 1米重复一次)
+      * @param AngleThreshold   自适应细分角度阈值 (建议 5.0 度)
+      */
+    void GenerateConveyorMesh(
+        UProceduralMeshComponent* TargetMesh,
+        const USplineComponent* Spline,
+        UMaterialInterface* Material,
+        float Width = 200.0f,
+        float Thickness = 20.0f,
+        float UVScale = 100.0f,
+        float AngleThreshold = 5.0f
+    );
 
 public:
     FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material);
