@@ -230,12 +230,17 @@ void UMassDspManager::GenerateConveyorMesh(
     constexpr float CheckStep = 10.0f; // 采样精度 10cm
     constexpr float MaxSegmentLength = 100.0f; // 强制分段最大距离
 
-    // 起点
+    // 方向帧采样时偏离两端的安全距离（避开 UE 样条端点方向帧翻转的问题）
+    constexpr float EndpointBias = 0.1f;
+    const float SafeStart = FMath::Min(EndpointBias, SplineLength * 0.01f);
+    const float SafeEnd = FMath::Max(SplineLength - EndpointBias, SplineLength * 0.99f);
+
+    // 起点：位置取 0，方向帧从 SafeStart 处采样
     Slices.Add({
-        Spline->GetLocationAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local),
-        Spline->GetRightVectorAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local),
-        Spline->GetUpVectorAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local),
-        Spline->GetTangentAtDistanceAlongSpline(0, ESplineCoordinateSpace::Local).GetSafeNormal(),
+        Spline->GetLocationAtDistanceAlongSpline(0.0f, ESplineCoordinateSpace::Local),
+        Spline->GetRightVectorAtDistanceAlongSpline(SafeStart, ESplineCoordinateSpace::Local),
+        Spline->GetUpVectorAtDistanceAlongSpline(SafeStart, ESplineCoordinateSpace::Local),
+        Spline->GetTangentAtDistanceAlongSpline(SafeStart, ESplineCoordinateSpace::Local).GetSafeNormal(),
         0.0f
     });
 
@@ -266,14 +271,14 @@ void UMassDspManager::GenerateConveyorMesh(
         }
     }
 
-    // 终点
+    // 终点：位置取 SplineLength，方向帧从 SafeEnd 处采样，避开端点翻转
     if (LastSliceDist < SplineLength)
     {
         Slices.Add({
             Spline->GetLocationAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local),
-            Spline->GetRightVectorAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local),
-            Spline->GetUpVectorAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local),
-            Spline->GetTangentAtDistanceAlongSpline(SplineLength, ESplineCoordinateSpace::Local).GetSafeNormal(),
+            Spline->GetRightVectorAtDistanceAlongSpline(SafeEnd, ESplineCoordinateSpace::Local),
+            Spline->GetUpVectorAtDistanceAlongSpline(SafeEnd, ESplineCoordinateSpace::Local),
+            Spline->GetTangentAtDistanceAlongSpline(SafeEnd, ESplineCoordinateSpace::Local).GetSafeNormal(),
             SplineLength
         });
     }
@@ -526,10 +531,14 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
         NewSpline->SetSplinePointType(0, ESplinePointType::Linear, false);
 
         NewSpline->SetSplinePointType(1, ESplinePointType::CurveCustomTangent, false);
-        NewSpline->SetTangentsAtSplinePoint(1, FVector::ZeroVector, StartTangent, ESplineCoordinateSpace::World, false);
+        // in-tangent 取 A→B 方向，避免首段 Hermite 曲线在 B 点切线为零导致变形
+        FVector EntryTangent = BeltPoints[1] - BeltPoints[0];
+        NewSpline->SetTangentsAtSplinePoint(1, EntryTangent, StartTangent, ESplineCoordinateSpace::World, false);
 
         NewSpline->SetSplinePointType(2, ESplinePointType::CurveCustomTangent, false);
-        NewSpline->SetTangentsAtSplinePoint(2, EndTangent, FVector::ZeroVector, ESplineCoordinateSpace::World, false);
+        // out-tangent 取 C→D 方向，避免尾段 Hermite 曲线在 C 点切线为零导致直线传送带末端扭曲
+        FVector ExitTangent = BeltPoints[3] - BeltPoints[2];
+        NewSpline->SetTangentsAtSplinePoint(2, EndTangent, ExitTangent, ESplineCoordinateSpace::World, false);
 
         NewSpline->SetSplinePointType(3, ESplinePointType::Linear, false);
     }, Material, 50);
