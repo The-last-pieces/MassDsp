@@ -18,9 +18,15 @@
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionComponentMask.h"
 #include "Materials/MaterialExpressionTime.h"
-#include "Materials/MaterialExpressionIf.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionComment.h"
+#include "Materials/MaterialExpressionDDX.h"
+#include "Materials/MaterialExpressionDDY.h"
+#include "Materials/MaterialExpressionMax.h"
+#include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionDivide.h"
+#include "Materials/MaterialExpressionClamp.h"
+#include "Materials/MaterialExpressionPower.h"
 
 void UMaterialGeneratorUtils::CreateConveyorMaterial()
 {
@@ -112,80 +118,187 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
     LineWidth->DefaultValue = 0.15f;
 
     // --- 5. 逻辑构建 ---
+    // 设计：两侧边缘亮条（纯U方向，零V频率，完美mip）+ 中心低频扫光（软脉冲）
+    // 彻底规避高频虚线带来的远距离模糊问题
 
     // 常量
-    auto* ConstZero = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -400, 400));
+    auto* ConstZero = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 500));
     ConstZero->R = 0.0f;
-    auto* ConstOne = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -400, 450));
+    auto* ConstOne = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 560));
     ConstOne->R = 1.0f;
-    auto* ConstHalf = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1000, 700));
-    ConstHalf->R = 0.5f;
+    auto* ConstUEpsilon = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 620));
+    ConstUEpsilon->R = 0.0001f; // 防止除零
+    auto* ConstGlowPow = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 680));
+    ConstGlowPow->R = 4.0f; // 扫光尖锐程度，间距由 GlowThreshold 控制
+    auto* ConstGlowThreshold = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 740));
+    ConstGlowThreshold->R = 0.78f; // 截断阈值：>0 暗区比例 = Threshold，0.78=78%周期为暗区
+    auto* ConstGlowThresholdInv = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 800));
+    ConstGlowThresholdInv->R = 1.0f / (1.0f - 0.78f); // = 1/(1-Threshold)，将峰顶归一化到[0,1]
+    auto* ConstGlowAmt = Cast<UMaterialExpressionConstant>(CreateNode(UMaterialExpressionConstant::StaticClass(), -1400, 860));
+    ConstGlowAmt->R = 0.55f; // 扫光最大亮度
 
-    // UV & Time
+    // UV
     auto* TexCoord = Cast<UMaterialExpressionTextureCoordinate>(CreateNode(UMaterialExpressionTextureCoordinate::StaticClass(), -1200, 300));
     auto* Time = Cast<UMaterialExpressionTime>(CreateNode(UMaterialExpressionTime::StaticClass(), -1200, 100));
 
-    // 逻辑A: 纵向滚动虚线
-    auto* TimeSpeed = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), -1000, 150));
-    TimeSpeed->A.Expression = Time;
-    TimeSpeed->B.Expression = Speed;
-
-    auto* MaskV = Cast<UMaterialExpressionComponentMask>(CreateNode(UMaterialExpressionComponentMask::StaticClass(), -1000, 300));
-    MaskV->Input.Expression = TexCoord;
-    MaskV->R = 0;
-    MaskV->G = 1;
-
-    auto* VTiling = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), -800, 350));
-    VTiling->A.Expression = MaskV;
-    VTiling->B.Expression = Tiling;
-
-    auto* MoveSub = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), -600, 300));
-    MoveSub->A.Expression = VTiling;
-    MoveSub->B.Expression = TimeSpeed;
-
-    auto* SineWave = Cast<UMaterialExpressionSine>(CreateNode(UMaterialExpressionSine::StaticClass(), -450, 300));
-    SineWave->Input.Expression = MoveSub;
-
-    auto* DashMask = Cast<UMaterialExpressionIf>(CreateNode(UMaterialExpressionIf::StaticClass(), -300, 300));
-    DashMask->A.Expression = SineWave;
-    DashMask->B.Expression = ConstZero;
-    DashMask->AGreaterThanB.Expression = ConstOne;
-    DashMask->AEqualsB.Expression = ConstZero;
-    DashMask->ALessThanB.Expression = ConstZero;
-
-    // 逻辑B: 横向中心遮罩
-    auto* MaskU = Cast<UMaterialExpressionComponentMask>(CreateNode(UMaterialExpressionComponentMask::StaticClass(), -1000, 600));
+    // 提取 U、V
+    auto* MaskU = Cast<UMaterialExpressionComponentMask>(CreateNode(UMaterialExpressionComponentMask::StaticClass(), -1000, 300));
     MaskU->Input.Expression = TexCoord;
     MaskU->R = 1;
     MaskU->G = 0;
 
-    auto* CenterOffset = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), -800, 600));
-    CenterOffset->A.Expression = MaskU;
-    CenterOffset->B.Expression = ConstHalf;
+    auto* MaskV = Cast<UMaterialExpressionComponentMask>(CreateNode(UMaterialExpressionComponentMask::StaticClass(), -1000, 400));
+    MaskV->Input.Expression = TexCoord;
+    MaskV->R = 0;
+    MaskV->G = 1;
 
-    auto* AbsDist = Cast<UMaterialExpressionAbs>(CreateNode(UMaterialExpressionAbs::StaticClass(), -600, 600));
-    AbsDist->Input.Expression = CenterOffset;
+    // =============================================
+    // A. 边缘条纹 (Edge Stripes)
+    // 用 U 坐标的屏幕空间导数计算"1 像素 = 多少 UV"
+    // 边缘过渡宽度始终等于 1 像素，任何距离都无锯齿无发虚
+    // =============================================
 
-    auto* WidthMask = Cast<UMaterialExpressionIf>(CreateNode(UMaterialExpressionIf::StaticClass(), -300, 600));
-    WidthMask->A.Expression = AbsDist;
-    WidthMask->B.Expression = LineWidth;
-    WidthMask->AGreaterThanB.Expression = ConstZero;
-    WidthMask->AEqualsB.Expression = ConstOne;
-    WidthMask->ALessThanB.Expression = ConstOne;
+    auto* DDX_U = Cast<UMaterialExpressionDDX>(CreateNode(UMaterialExpressionDDX::StaticClass(), -800, 150));
+    DDX_U->Value.Expression = MaskU;
 
-    // 逻辑C: 混合
-    auto* FinalMask = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), -150, 450));
-    FinalMask->A.Expression = DashMask;
-    FinalMask->B.Expression = WidthMask;
+    auto* DDY_U = Cast<UMaterialExpressionDDY>(CreateNode(UMaterialExpressionDDY::StaticClass(), -800, 220));
+    DDY_U->Value.Expression = MaskU;
 
-    auto* FinalColor = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 0, 0));
+    auto* AbsDDX_U = Cast<UMaterialExpressionAbs>(CreateNode(UMaterialExpressionAbs::StaticClass(), -650, 150));
+    AbsDDX_U->Input.Expression = DDX_U;
+
+    auto* AbsDDY_U = Cast<UMaterialExpressionAbs>(CreateNode(UMaterialExpressionAbs::StaticClass(), -650, 220));
+    AbsDDY_U->Input.Expression = DDY_U;
+
+    // 1像素在UV空间的跨度 = max(|ddx(U)|, |ddy(U)|)
+    auto* MaxDeriv_U = Cast<UMaterialExpressionMax>(CreateNode(UMaterialExpressionMax::StaticClass(), -500, 185));
+    MaxDeriv_U->A.Expression = AbsDDX_U;
+    MaxDeriv_U->B.Expression = AbsDDY_U;
+
+    // 防止除零
+    auto* SafeDeriv = Cast<UMaterialExpressionMax>(CreateNode(UMaterialExpressionMax::StaticClass(), -350, 185));
+    SafeDeriv->A.Expression = MaxDeriv_U;
+    SafeDeriv->B.Expression = ConstUEpsilon;
+
+    // 左边缘: saturate((LineWidth - U) / SafeDeriv)
+    auto* LeftRaw = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), -800, 260));
+    LeftRaw->A.Expression = LineWidth;
+    LeftRaw->B.Expression = MaskU;
+
+    auto* LeftNorm = Cast<UMaterialExpressionDivide>(CreateNode(UMaterialExpressionDivide::StaticClass(), -600, 260));
+    LeftNorm->A.Expression = LeftRaw;
+    LeftNorm->B.Expression = SafeDeriv;
+
+    auto* LeftEdge = Cast<UMaterialExpressionClamp>(CreateNode(UMaterialExpressionClamp::StaticClass(), -400, 260));
+    LeftEdge->Input.Expression = LeftNorm;
+    LeftEdge->MinDefault = 0.0f;
+    LeftEdge->MaxDefault = 1.0f;
+
+    // 右边缘: saturate((LineWidth - (1-U)) / SafeDeriv)
+    auto* OneMinusU = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), -800, 340));
+    OneMinusU->A.Expression = ConstOne;
+    OneMinusU->B.Expression = MaskU;
+
+    auto* RightRaw = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), -600, 340));
+    RightRaw->A.Expression = LineWidth;
+    RightRaw->B.Expression = OneMinusU;
+
+    auto* RightNorm = Cast<UMaterialExpressionDivide>(CreateNode(UMaterialExpressionDivide::StaticClass(), -400, 340));
+    RightNorm->A.Expression = RightRaw;
+    RightNorm->B.Expression = SafeDeriv;
+
+    auto* RightEdge = Cast<UMaterialExpressionClamp>(CreateNode(UMaterialExpressionClamp::StaticClass(), -200, 340));
+    RightEdge->Input.Expression = RightNorm;
+    RightEdge->MinDefault = 0.0f;
+    RightEdge->MaxDefault = 1.0f;
+
+    // 合并两侧边缘
+    auto* EdgeMask = Cast<UMaterialExpressionMax>(CreateNode(UMaterialExpressionMax::StaticClass(), 0, 300));
+    EdgeMask->A.Expression = LeftEdge;
+    EdgeMask->B.Expression = RightEdge;
+
+    // =============================================
+    // B. 中心滚动扫光 (Center Glow) — sin^n 平滑脉冲，无不连续点
+    // =============================================
+
+    auto* TimeSpeed = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), -1000, 150));
+    TimeSpeed->A.Expression = Time;
+    TimeSpeed->B.Expression = Speed;
+
+    auto* VTiling = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), -800, 500));
+    VTiling->A.Expression = MaskV;
+    VTiling->B.Expression = Tiling;
+
+    auto* MoveSub = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), -600, 480));
+    MoveSub->A.Expression = VTiling;
+    MoveSub->B.Expression = TimeSpeed;
+
+    // sin(phase) → [-1, 1]，天然连续无跳变
+    auto* SineGlow = Cast<UMaterialExpressionSine>(CreateNode(UMaterialExpressionSine::StaticClass(), -400, 480));
+    SineGlow->Input.Expression = MoveSub;
+
+    // * 0.5 + 0.5 → [0, 1]
+    auto* SinePos = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), -200, 480));
+    SinePos->A.Expression = SineGlow;
+    SinePos->ConstB = 0.5f;
+
+    auto* SineRemap = Cast<UMaterialExpressionAdd>(CreateNode(UMaterialExpressionAdd::StaticClass(), 0, 480));
+    SineRemap->A.Expression = SinePos;
+    SineRemap->ConstB = 0.5f;
+
+    // sin^GlowPow → 收窄为尖锐光带，GlowPow 越大越细
+    // 先阈值截断：(SineRemap - Threshold) / (1 - Threshold)，将峰顶归一化并切零底部
+    // 这样 Threshold 比例的周期就是完全的暗区，实现独立控制间距
+    auto* ThreshSub = Cast<UMaterialExpressionSubtract>(CreateNode(UMaterialExpressionSubtract::StaticClass(), 50, 480));
+    ThreshSub->A.Expression = SineRemap;
+    ThreshSub->B.Expression = ConstGlowThreshold;
+
+    auto* ThreshNorm = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), 200, 480));
+    ThreshNorm->A.Expression = ThreshSub;
+    ThreshNorm->B.Expression = ConstGlowThresholdInv;
+
+    auto* ThreshClamped = Cast<UMaterialExpressionClamp>(CreateNode(UMaterialExpressionClamp::StaticClass(), 350, 480));
+    ThreshClamped->Input.Expression = ThreshNorm;
+    ThreshClamped->MinDefault = 0.0f;
+    ThreshClamped->MaxDefault = 1.0f;
+
+    auto* CenterGlowRaw = Cast<UMaterialExpressionPower>(CreateNode(UMaterialExpressionPower::StaticClass(), 500, 480));
+    CenterGlowRaw->Base.Expression = ThreshClamped;
+    CenterGlowRaw->Exponent.Expression = ConstGlowPow;
+
+    // 限制扫光亮度
+    auto* CenterGlow = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), 400, 480));
+    CenterGlow->A.Expression = CenterGlowRaw;
+    CenterGlow->B.Expression = ConstGlowAmt;
+
+    // =============================================
+    // C. 合并：边缘线优先，扫光叠加在底部
+    // =============================================
+    auto* FinalMask = Cast<UMaterialExpressionMax>(CreateNode(UMaterialExpressionMax::StaticClass(), 600, 380));
+    FinalMask->A.Expression = EdgeMask;
+    FinalMask->B.Expression = CenterGlow;
+
+    auto* FinalColor = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 1200, 200));
     FinalColor->A.Expression = BaseColor;
     FinalColor->B.Expression = LineColor;
     FinalColor->Alpha.Expression = FinalMask;
 
     // --- 6. 输出与保存 ---
+    Material->SetShadingModel(MSM_DefaultLit);
     Material->GetEditorOnlyData()->BaseColor.Expression = FinalColor;
     Material->TwoSided = false;
+
+    // 微型动态 WorldPositionOffset：sin(Time)*0.0001 单位（肉眼完全不可见）
+    // 静态 Mesh 默认 MotionVector=0，TAA 认为像素不动并大量积累历史帧导致残影
+    // WPO 动画后光栅化器每帧重算 MotionVector，TAA 可正确跟踪动画，残影彻底消除
+    auto* WpoSine = Cast<UMaterialExpressionSine>(CreateNode(UMaterialExpressionSine::StaticClass(), 1200, 450));
+    WpoSine->Input.Expression = Time;
+
+    auto* WpoScale = Cast<UMaterialExpressionMultiply>(CreateNode(UMaterialExpressionMultiply::StaticClass(), 1380, 450));
+    WpoScale->A.Expression = WpoSine;
+    WpoScale->ConstB = 0.1f; // 1mm，肉眼完全不可见，但足够让 float16 velocity buffer 精确记录非零 MotionVector
+
+    Material->GetEditorOnlyData()->WorldPositionOffset.Expression = WpoScale;
 
     Material->PostEditChange();
     auto _ = Material->MarkPackageDirty();
