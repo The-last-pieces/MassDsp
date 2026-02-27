@@ -71,20 +71,6 @@ protected:
     int NextSectionIndex = 0;
 
 private:
-    struct FSamplePoint
-    {
-        float Distance;
-        FVector Location;
-        FVector Tangent;
-        FVector Up;
-        FVector Right;
-        float Curvature;
-    };
-
-    static TArray<FSamplePoint> GenerateAdaptiveSamples(const USplineComponent* Spline, int32 MinSegments = 20, int32 MaxSegments = 200);
-
-    static FSamplePoint CreateSamplePoint(const USplineComponent* Spline, float Distance);
-
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
 
     FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UMaterialInterface* Material, int32 SegmentsPerSection);

@@ -28,6 +28,7 @@
 #include "Materials/MaterialExpressionClamp.h"
 #include "Materials/MaterialExpressionPower.h"
 
+// TODO 先把抗锯齿从TSR改成TAA临时处理下材质残影问题,后续考虑在材质中设置像素速度解决
 void UMaterialGeneratorUtils::CreateConveyorMaterial()
 {
 #if WITH_EDITOR
@@ -76,7 +77,7 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
 
     if (!Material) return;
 
-    Material->bEnableResponsiveAA = true;
+    Material->bEnableResponsiveAA = false;
 
     // 辅助Lambda
     auto CreateNode = [&](const UClass* Class, int32 X, int32 Y) -> UMaterialExpression*

@@ -52,72 +52,6 @@ void UMassDspManager::Deinitialize()
     Super::Deinitialize();
 }
 
-TArray<UMassDspManager::FSamplePoint> UMassDspManager::GenerateAdaptiveSamples(const USplineComponent* Spline, int32 MinSegments, int32 MaxSegments)
-{
-    TArray<FSamplePoint> Samples;
-    if (!Spline) return Samples;
-
-    const float TotalLength = Spline->GetSplineLength();
-    if (TotalLength <= 0.0f) return Samples;
-
-    // 初始采样点
-    Samples.Reserve(MaxSegments);
-    Samples.Add(CreateSamplePoint(Spline, 0.0f));
-
-    float CurrentDist = 0.0f;
-    int32 SegmentCount = 0;
-
-    while (CurrentDist < TotalLength && SegmentCount < MaxSegments)
-    {
-        const FSamplePoint& LastSample = Samples.Last();
-
-        // 计算前向采样点的曲率
-        float ProbeDistance = FMath::Min(CurrentDist + 50.0f, TotalLength);
-        FVector ProbeTangent = Spline->GetTangentAtDistanceAlongSpline(ProbeDistance, ESplineCoordinateSpace::World).GetSafeNormal();
-
-        // 曲率估算：切线方向变化率
-        float DeltaAngle = FMath::Acos(FMath::Clamp(FVector::DotProduct(LastSample.Tangent, ProbeTangent), -1.0f, 1.0f));
-        float Curvature = DeltaAngle / 50.0f; // 弧度/单位距离
-
-        // 根据曲率自适应调整步长
-        // 曲率大（急转弯）→ 步长小（密集采样）
-        // 曲率小（直线）→ 步长大（稀疏采样）
-        float AdaptiveStep = FMath::Clamp(
-            200.0f / FMath::Max(Curvature * 1000.0f + 1.0f, 1.0f), // 曲率越大步长越小
-            TotalLength / MaxSegments, // 最小步长（避免过密）
-            TotalLength / MinSegments // 最大步长（保证最少段数）
-        );
-
-        CurrentDist = FMath::Min(CurrentDist + AdaptiveStep, TotalLength);
-
-        FSamplePoint NewSample = CreateSamplePoint(Spline, CurrentDist);
-        NewSample.Curvature = Curvature;
-        Samples.Add(NewSample);
-
-        SegmentCount++;
-    }
-
-    // 确保终点被采样
-    if (FMath::Abs(Samples.Last().Distance - TotalLength) > 1.0f)
-    {
-        Samples.Add(CreateSamplePoint(Spline, TotalLength));
-    }
-
-    return Samples;
-}
-
-UMassDspManager::FSamplePoint UMassDspManager::CreateSamplePoint(const USplineComponent* Spline, float Distance)
-{
-    FSamplePoint Sample;
-    Sample.Distance = Distance;
-    Sample.Location = Spline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-    Sample.Tangent = Spline->GetTangentAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World).GetSafeNormal();
-    Sample.Up = Spline->GetUpVectorAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-    Sample.Right = FVector::CrossProduct(Sample.Up, Sample.Tangent).GetSafeNormal();
-    Sample.Curvature = 0.0f;
-    return Sample;
-}
-
 TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
 {
     if (!GameMode.IsValid())
@@ -157,8 +91,6 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     // TODO 大规模测试时性能有很大问题
     if (Material)
     {
-        TArray<FSamplePoint> SamplePoints = GenerateAdaptiveSamples(NewSpline, 100, 500);
-
         TArray<FVector> Vertices;
         TArray<int32> Triangles;
         TArray<FVector> Normals;
@@ -446,7 +378,7 @@ void UMassDspManager::GenerateConveyorMesh(
         UVs,
         Colors,
         Tangents,
-        true // 开启碰撞
+        false
     );
 
     if (Material)
@@ -457,6 +389,7 @@ void UMassDspManager::GenerateConveyorMesh(
     NextSectionIndex++;
 }
 
+// TODO 优化成异步的(如果要开启碰撞)
 FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material
 )

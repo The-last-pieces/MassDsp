@@ -36,64 +36,83 @@ void AMassDspGameMode::BeginPlay()
 
     // 大规模创建
 
-    for (int i = 0; i < 22; ++i)
+    constexpr int N = 5;
+    constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
+
+    // 第一步：收集所有Building生成数据
+    TArray<FBuildingSpawnData> AllBuildingDataList;
+    AllBuildingDataList.Reserve(N * N * BuildingsPerGroup);
+
+    for (int i = 0; i < N; ++i)
     {
-        for (int j = 0; j < 22; ++j)
+        for (int j = 0; j < N; ++j)
         {
             constexpr int GridSize = 4000;
             FVector SpawnLocation = FVector(i * GridSize, j * GridSize, 0);
 
-            // 构建Building生成数据列表
-            TArray<FBuildingSpawnData> BuildingDataList;
-
             // 3个矿机
-            BuildingDataList.Add(FBuildingSpawnData(
+            AllBuildingDataList.Add(FBuildingSpawnData(
                 MinerClass,
                 FTransform(FRotator(0, 90, 0), SpawnLocation + FVector(0, 0, 0)),
                 EBuildingType::Miner
             ));
-            BuildingDataList.Add(FBuildingSpawnData(
+            AllBuildingDataList.Add(FBuildingSpawnData(
                 MinerClass,
                 FTransform(FRotator(0, 90, 0), SpawnLocation + FVector(1000, 0, 0)),
                 EBuildingType::Miner
             ));
-            BuildingDataList.Add(FBuildingSpawnData(
+            AllBuildingDataList.Add(FBuildingSpawnData(
                 MinerClass,
                 FTransform(FRotator(0, 90, 0), SpawnLocation + FVector(2000, 0, 0)),
                 EBuildingType::Miner
             ));
 
             // 1个合成台
-            BuildingDataList.Add(FBuildingSpawnData(
+            AllBuildingDataList.Add(FBuildingSpawnData(
                 AssemblerClass,
                 FTransform(FRotator(0, 0, 0), SpawnLocation + FVector(1000, 1000, 0)),
                 EBuildingType::Assembler
             ));
 
             // 1个仓库
-            BuildingDataList.Add(FBuildingSpawnData(
+            AllBuildingDataList.Add(FBuildingSpawnData(
                 StorageClass,
                 FTransform(FRotator(0, 180, 0), SpawnLocation + FVector(1000, 2000, 0)),
                 EBuildingType::Storage
             ));
-
-            // 批量创建所有Building Entity
-            TArray<FMassEntityHandle> CreatedBuildings = DspManager->BatchSpawnBuildings(BuildingDataList);
-
-            // 提取EntityHandle用于连接传送带
-            FMassEntityHandle MinerEntity1 = CreatedBuildings[0];
-            FMassEntityHandle MinerEntity2 = CreatedBuildings[1];
-            FMassEntityHandle MinerEntity3 = CreatedBuildings[2];
-            FMassEntityHandle AssemblerEntity = CreatedBuildings[3];
-            FMassEntityHandle StorageEntity = CreatedBuildings[4];
-
-            // 创建传送带连接
-            DspManager->CreateAndLinkBeltForSlot(MinerEntity1, 0, AssemblerEntity, 2, ConveyorMaterial);
-            DspManager->CreateAndLinkBeltForSlot(MinerEntity2, 0, AssemblerEntity, 1, ConveyorMaterial);
-            DspManager->CreateAndLinkBeltForSlot(MinerEntity3, 0, AssemblerEntity, 0, ConveyorMaterial);
-            DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, ConveyorMaterial);
         }
     }
+
+    // 第二步：单次批量创建所有Building Entity
+    TArray<FMassEntityHandle> AllCreatedBuildings = DspManager->BatchSpawnBuildings(AllBuildingDataList);
+
+    // 第三步：遍历每组，连接传送带
+    constexpr int BeltsPerGroup = 4; // 每组传送带数量
+    constexpr int TotalBelts = N * N * BeltsPerGroup;
+
+    const double BeltLinkStartTime = FPlatformTime::Seconds();
+
+    for (int GroupIndex = 0; GroupIndex < N * N; ++GroupIndex)
+    {
+        const int BaseIndex = GroupIndex * BuildingsPerGroup;
+
+        FMassEntityHandle MinerEntity1 = AllCreatedBuildings[BaseIndex + 0];
+        FMassEntityHandle MinerEntity2 = AllCreatedBuildings[BaseIndex + 1];
+        FMassEntityHandle MinerEntity3 = AllCreatedBuildings[BaseIndex + 2];
+        FMassEntityHandle AssemblerEntity = AllCreatedBuildings[BaseIndex + 3];
+        FMassEntityHandle StorageEntity = AllCreatedBuildings[BaseIndex + 4];
+
+        // 创建传送带连接
+        DspManager->CreateAndLinkBeltForSlot(MinerEntity1, 0, AssemblerEntity, 2, ConveyorMaterial);
+        DspManager->CreateAndLinkBeltForSlot(MinerEntity2, 0, AssemblerEntity, 1, ConveyorMaterial);
+        DspManager->CreateAndLinkBeltForSlot(MinerEntity3, 0, AssemblerEntity, 0, ConveyorMaterial);
+        DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, ConveyorMaterial);
+    }
+
+    const double BeltLinkElapsed = FPlatformTime::Seconds() - BeltLinkStartTime;
+    const double AvgBeltTimeMs = (TotalBelts > 0) ? (BeltLinkElapsed * 1000.0 / TotalBelts) : 0.0;
+    UE_LOG(LogTemp, Log, TEXT("[Belt Profile] Total: %d belts | Total time: %.3f ms | Avg per belt: %.4f ms"),
+           TotalBelts, BeltLinkElapsed * 1000.0, AvgBeltTimeMs);
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)
