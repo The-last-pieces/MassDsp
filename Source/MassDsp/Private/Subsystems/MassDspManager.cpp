@@ -145,6 +145,7 @@ struct FConveyorSlice
     float Distance;
 };
 
+// TODO 通过枚举管理传送带类型，支持不同的材质实例
 void UMassDspManager::GenerateConveyorMesh(
     UProceduralMeshComponent* TargetMesh,
     const USplineComponent* Spline,
@@ -152,7 +153,8 @@ void UMassDspManager::GenerateConveyorMesh(
     float Width,
     float Thickness,
     float UVScale,
-    float AngleThreshold)
+    float AngleThreshold,
+    float BeltSpeed) // 新增Speed参数
 {
     if (!TargetMesh || !Spline || Spline->GetNumberOfSplinePoints() < 2) return;
 
@@ -215,130 +217,80 @@ void UMassDspManager::GenerateConveyorMesh(
         });
     }
 
-    // --- 2. 构建几何体 (Box Extrusion) ---
-    if (Slices.Num() < 2) return;
+    // --- 2. 构建几何体，追加到PendingBeltMesh ---
 
-
-    TArray<FVector> Vertices;
-    TArray<int32> Triangles;
-    TArray<FVector> Normals;
-    TArray<FVector2D> UVs;
-    TArray<FProcMeshTangent> Tangents;
-    TArray<FLinearColor> Colors;
+    // 关键：IndexOffset = 已有顶点数
+    int32 IndexOffset = PendingBeltMesh.Vertices.Num();
 
     const float HalfWidth = Width * 0.5f;
     const float HalfThick = Thickness * 0.5f;
 
-    // 辅助 Lambda：添加四边形 (两个三角形)
+    // Speed编码到顶点色R通道
+    FLinearColor TopColor(BeltSpeed / 1000.f, 0, 0, 1);
+    FLinearColor SideColor(0, 0, 0, 1);
+
     auto AddQuad = [&](int32 V0, int32 V1, int32 V2, int32 V3)
     {
-        Triangles.Add(V0);
-        Triangles.Add(V1);
-        Triangles.Add(V2);
-        Triangles.Add(V2);
-        Triangles.Add(V1);
-        Triangles.Add(V3);
+        PendingBeltMesh.Triangles.Add(IndexOffset + V0);
+        PendingBeltMesh.Triangles.Add(IndexOffset + V1);
+        PendingBeltMesh.Triangles.Add(IndexOffset + V2);
+        PendingBeltMesh.Triangles.Add(IndexOffset + V2);
+        PendingBeltMesh.Triangles.Add(IndexOffset + V1);
+        PendingBeltMesh.Triangles.Add(IndexOffset + V3);
     };
 
-    // 我们将分别生成 Top, Bottom, Left, Right 四个面
-    // 这样做是为了让每个面有独立的法线 (Hard Edges)
-
+    // 顶点局部IndexOffset（相对本次追加的起点）
+    int32 LocalOffset = 0;
     int32 NumSlices = Slices.Num();
-    int32 VertexOffset = 0;
 
-    // --- A. 顶面 (Top Face) ---
+    // --- A. 顶面 ---
     for (int32 i = 0; i < NumSlices; i++)
     {
         const auto& Slice = Slices[i];
-        // 顶面稍微向上偏移 HalfThick
         FVector Center = Slice.Location + (Slice.Up * HalfThick);
-
-        Vertices.Add(Center - (Slice.Right * HalfWidth)); // Left
-        Vertices.Add(Center + (Slice.Right * HalfWidth)); // Right
-
-        Normals.Add(Slice.Up); // 法线向上
-        Normals.Add(Slice.Up);
-
-        // UV: X=0/1, Y=Distance
-        UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
-        UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
-
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-
-        Colors.Add(FLinearColor::White);
-        Colors.Add(FLinearColor::White);
+        PendingBeltMesh.Vertices.Add(Center - (Slice.Right * HalfWidth));
+        PendingBeltMesh.Vertices.Add(Center + (Slice.Right * HalfWidth));
+        PendingBeltMesh.Normals.Add(Slice.Up);
+        PendingBeltMesh.Normals.Add(Slice.Up);
+        PendingBeltMesh.UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
+        PendingBeltMesh.UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
+        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        PendingBeltMesh.Colors.Add(TopColor);
+        PendingBeltMesh.Colors.Add(TopColor);
     }
-
-    // 顶面索引
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
-        int32 Base = VertexOffset + (i * 2);
+        int32 Base = LocalOffset + (i * 2);
         AddQuad(Base, Base + 1, Base + 2, Base + 3);
     }
-    VertexOffset += NumSlices * 2;
+    LocalOffset += NumSlices * 2;
 
-    // --- B. 底面 (Bottom Face) ---
+    // --- B/C/D 底面、左侧、右侧（结构完全同原来，只改两点）---
+    // 1. 所有 Vertices/Normals 等 改成 PendingBeltMesh.Vertices 等
+    // 2. 所有 Colors 改成 SideColor
+    // 3. AddQuad里的Base用LocalOffset而非VertexOffset
     for (int32 i = 0; i < NumSlices; i++)
     {
         const auto& Slice = Slices[i];
         FVector Center = Slice.Location - (Slice.Up * HalfThick);
-
-        Vertices.Add(Center - (Slice.Right * HalfWidth));
-        Vertices.Add(Center + (Slice.Right * HalfWidth));
-
-        Normals.Add(-Slice.Up); // 法线向下
-        Normals.Add(-Slice.Up);
-
-        UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
-        UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
-
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-
-        Colors.Add(FLinearColor::Gray);
-        Colors.Add(FLinearColor::Gray);
+        PendingBeltMesh.Vertices.Add(Center - (Slice.Right * HalfWidth));
+        PendingBeltMesh.Vertices.Add(Center + (Slice.Right * HalfWidth));
+        PendingBeltMesh.Normals.Add(-Slice.Up);
+        PendingBeltMesh.Normals.Add(-Slice.Up);
+        PendingBeltMesh.UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
+        PendingBeltMesh.UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
+        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        PendingBeltMesh.Colors.Add(SideColor);
+        PendingBeltMesh.Colors.Add(SideColor);
     }
-
-    // 底面索引 (注意顺序，底面要朝下，所以顶点顺序要反过来或者交换)
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
-        int32 Base = VertexOffset + (i * 2);
-        // 交换 V1 和 V2 的位置以翻转法线方向
-        AddQuad(Base + 1, Base, Base + 3, Base + 2);
-    }
-    VertexOffset += NumSlices * 2;
-
-    // --- C. 左侧面 (Left Face) ---
-    for (int32 i = 0; i < NumSlices; i++)
-    {
-        const auto& Slice = Slices[i];
-        FVector TopL = Slice.Location + (Slice.Up * HalfThick) - (Slice.Right * HalfWidth);
-        FVector BotL = Slice.Location - (Slice.Up * HalfThick) - (Slice.Right * HalfWidth);
-
-        Vertices.Add(TopL);
-        Vertices.Add(BotL);
-
-        Normals.Add(-Slice.Right); // 法线向左
-        Normals.Add(-Slice.Right);
-
-        // 侧面 UV 简单映射
-        UVs.Add(FVector2D(Slice.Distance / UVScale, 0.0f));
-        UVs.Add(FVector2D(Slice.Distance / UVScale, 1.0f));
-
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-
-        Colors.Add(FLinearColor::Gray);
-        Colors.Add(FLinearColor::Gray);
-    }
-
-    for (int32 i = 0; i < NumSlices - 1; i++)
-    {
-        int32 Base = VertexOffset + (i * 2);
+        int32 Base = LocalOffset + (i * 2);
         AddQuad(Base, Base + 2, Base + 1, Base + 3);
     }
-    VertexOffset += NumSlices * 2;
+    LocalOffset += NumSlices * 2;
 
     // --- D. 右侧面 (Right Face) ---
     for (int32 i = 0; i < NumSlices; i++)
@@ -347,46 +299,27 @@ void UMassDspManager::GenerateConveyorMesh(
         FVector TopR = Slice.Location + (Slice.Up * HalfThick) + (Slice.Right * HalfWidth);
         FVector BotR = Slice.Location - (Slice.Up * HalfThick) + (Slice.Right * HalfWidth);
 
-        Vertices.Add(TopR);
-        Vertices.Add(BotR);
+        PendingBeltMesh.Vertices.Add(TopR);
+        PendingBeltMesh.Vertices.Add(BotR);
 
-        Normals.Add(Slice.Right); // 法线向右
-        Normals.Add(Slice.Right);
+        PendingBeltMesh.Normals.Add(Slice.Right); // 法线向右
+        PendingBeltMesh.Normals.Add(Slice.Right);
 
-        UVs.Add(FVector2D(Slice.Distance / UVScale, 0.0f));
-        UVs.Add(FVector2D(Slice.Distance / UVScale, 1.0f));
+        PendingBeltMesh.UVs.Add(FVector2D(Slice.Distance / UVScale, 0.0f));
+        PendingBeltMesh.UVs.Add(FVector2D(Slice.Distance / UVScale, 1.0f));
 
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
 
-        Colors.Add(FLinearColor::Gray);
-        Colors.Add(FLinearColor::Gray);
+        PendingBeltMesh.Colors.Add(FLinearColor::Gray);
+        PendingBeltMesh.Colors.Add(FLinearColor::Gray);
     }
 
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
-        int32 Base = VertexOffset + (i * 2);
+        int32 Base = LocalOffset + (i * 2);
         AddQuad(Base + 2, Base, Base + 3, Base + 1);
     }
-
-    // --- 3. 提交数据 --- 
-    TargetMesh->CreateMeshSection_LinearColor(
-        NextSectionIndex,
-        Vertices,
-        Triangles,
-        Normals,
-        UVs,
-        Colors,
-        Tangents,
-        false
-    );
-
-    if (Material)
-    {
-        TargetMesh->SetMaterial(NextSectionIndex, Material);
-    }
-
-    NextSectionIndex++;
 }
 
 // TODO 优化成异步的(如果要开启碰撞)
@@ -690,4 +623,26 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
     }
 
     return EntityHandle;
+}
+
+void UMassDspManager::FlushBeltMesh(UMaterialInterface* Material) const
+{
+    if (!BeltProceduralMesh) return;
+
+    // 所有传送带合并 = 永远只有Section 0 = 1个DrawCall
+    BeltProceduralMesh->CreateMeshSection_LinearColor(
+        0,
+        PendingBeltMesh.Vertices,
+        PendingBeltMesh.Triangles,
+        PendingBeltMesh.Normals,
+        PendingBeltMesh.UVs,
+        PendingBeltMesh.Colors,
+        PendingBeltMesh.Tangents,
+        false
+    );
+
+    if (Material)
+    {
+        BeltProceduralMesh->SetMaterial(0, Material);
+    }
 }

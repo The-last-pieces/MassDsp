@@ -36,7 +36,7 @@ void AMassDspGameMode::BeginPlay()
 
     // 大规模创建
 
-    constexpr int N = 5;
+    constexpr int N = 40;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据
@@ -113,6 +113,9 @@ void AMassDspGameMode::BeginPlay()
     const double AvgBeltTimeMs = (TotalBelts > 0) ? (BeltLinkElapsed * 1000.0 / TotalBelts) : 0.0;
     UE_LOG(LogTemp, Log, TEXT("[Belt Profile] Total: %d belts | Total time: %.3f ms | Avg per belt: %.4f ms"),
            TotalBelts, BeltLinkElapsed * 1000.0, AvgBeltTimeMs);
+
+    // GameMode的BeginPlay里，所有传送带创建完毕后：
+    DspManager->FlushBeltMesh(ConveyorMaterial);
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)

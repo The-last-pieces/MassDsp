@@ -12,6 +12,7 @@
 
 #include "MassDspManager.generated.h"
 
+struct FProcMeshTangent;
 class UProceduralMeshComponent;
 class AMassDspGameMode;
 class AMassDspBuilding;
@@ -68,8 +69,6 @@ protected:
     UPROPERTY()
     UProceduralMeshComponent* BeltProceduralMesh;
 
-    int NextSectionIndex = 0;
-
 private:
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
 
@@ -84,6 +83,7 @@ private:
       * @param Thickness        传送带厚度
       * @param UVScale          UV平铺比例 (通常设为 100.0，即 1米重复一次)
       * @param AngleThreshold   自适应细分角度阈值 (建议 5.0 度)
+      * @param BeltSpeed
       */
     void GenerateConveyorMesh(
         UProceduralMeshComponent* TargetMesh,
@@ -92,11 +92,14 @@ private:
         float Width = 200.0f,
         float Thickness = 20.0f,
         float UVScale = 100.0f,
-        float AngleThreshold = 5.0f
+        float AngleThreshold = 5.0f,
+        float BeltSpeed = 1000
     );
 
 public:
     FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material);
+
+    void FlushBeltMesh(UMaterialInterface* Material) const;
 
     bool ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
 
@@ -112,4 +115,17 @@ public:
 private:
     // 内部辅助方法：创建Building Entity的核心逻辑
     FMassEntityHandle CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData);
+
+    // 新增：合并缓存
+    struct FMergedBeltMeshData
+    {
+        TArray<FVector> Vertices;
+        TArray<int32> Triangles;
+        TArray<FVector> Normals;
+        TArray<FVector2D> UVs;
+        TArray<FProcMeshTangent> Tangents;
+        TArray<FLinearColor> Colors; // R通道存Speed
+    };
+
+    FMergedBeltMeshData PendingBeltMesh;
 };

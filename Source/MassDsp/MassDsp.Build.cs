@@ -30,7 +30,7 @@ public class MassDsp : ModuleRules
         ]);
 
         PrivateDependencyModuleNames.AddRange([
-            "MassMovement", "ProceduralMeshComponent", "CableComponent",
+            "MassMovement", "ProceduralMeshComponent", // "CableComponent",
         ]);
 
         if (Target.bBuildEditor)
