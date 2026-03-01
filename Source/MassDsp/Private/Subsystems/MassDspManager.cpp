@@ -141,7 +141,6 @@ struct FConveyorSlice
     float Distance;
 };
 
-// TODO 有些传送带是扁的
 void UMassDspManager::GenerateConveyorMesh(
     FMergedBeltMeshData& OutMesh,
     const USplineComponent* Spline,
@@ -279,7 +278,39 @@ void UMassDspManager::GenerateConveyorMesh(
     }
     LocalOffset += NumSlices * 2;
 
+    // --- C. 左侧面 (Left Face) ---
+    // UV: U=0.5 固定在中心区域（无边框效果），V=Distance/UVScale 沿传送带方向
+    for (int32 i = 0; i < NumSlices; i++)
+    {
+        const auto& [Location, Right, Up, Tangent, Distance] = Slices[i];
+        FVector TopL = Location + (Up * HalfThick) - (Right * HalfWidth);
+        FVector BotL = Location - (Up * HalfThick) - (Right * HalfWidth);
+
+        OutMesh.Vertices.Add(TopL);
+        OutMesh.Vertices.Add(BotL);
+
+        OutMesh.Normals.Add(-Right);
+        OutMesh.Normals.Add(-Right);
+
+        OutMesh.UVs.Add(FVector2D(0.5f, Distance / UVScale));
+        OutMesh.UVs.Add(FVector2D(0.5f, Distance / UVScale));
+
+        OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
+        OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
+
+        OutMesh.Colors.Add(FLinearColor(0.0f, 0.5f, 0.5f, 1.0f));
+        OutMesh.Colors.Add(FLinearColor(0.0f, 0.5f, 0.5f, 1.0f));
+    }
+    for (int32 i = 0; i < NumSlices - 1; i++)
+    {
+        int32 Base = LocalOffset + (i * 2);
+        // 与右侧面绕序相反，使法线朝 -Right
+        AddQuad(Base + 2, Base + 3, Base, Base + 1);
+    }
+    LocalOffset += NumSlices * 2;
+
     // --- D. 右侧面 (Right Face) ---
+    // UV: U=0.5 固定在中心区域（避免 Distance=0 时落入边框区产生箭头动画），V=Distance/UVScale 沿传送带方向
     for (int32 i = 0; i < NumSlices; i++)
     {
         const auto& [Location, Right, Up, Tangent, Distance] = Slices[i];
@@ -292,20 +323,75 @@ void UMassDspManager::GenerateConveyorMesh(
         OutMesh.Normals.Add(Right);
         OutMesh.Normals.Add(Right);
 
-        OutMesh.UVs.Add(FVector2D(Distance / UVScale, 0.0f));
-        OutMesh.UVs.Add(FVector2D(Distance / UVScale, 1.0f));
+        OutMesh.UVs.Add(FVector2D(0.5f, Distance / UVScale));
+        OutMesh.UVs.Add(FVector2D(0.5f, Distance / UVScale));
 
         OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
         OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
 
-        OutMesh.Colors.Add(FLinearColor::Gray);
-        OutMesh.Colors.Add(FLinearColor::Gray);
+        OutMesh.Colors.Add(FLinearColor(0.0f, 0.5f, 0.5f, 1.0f));
+        OutMesh.Colors.Add(FLinearColor(0.0f, 0.5f, 0.5f, 1.0f));
     }
-
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
         int32 Base = LocalOffset + (i * 2);
         AddQuad(Base + 2, Base, Base + 3, Base + 1);
+    }
+    LocalOffset += NumSlices * 2;
+
+    // --- E. 起点封口 (Front Cap) ---
+    // 面法线朝 -Tangent（传送带入口方向）
+    {
+        const auto& S = Slices[0];
+        FVector TopL = S.Location + (S.Up * HalfThick) - (S.Right * HalfWidth);
+        FVector TopR = S.Location + (S.Up * HalfThick) + (S.Right * HalfWidth);
+        FVector BotL = S.Location - (S.Up * HalfThick) - (S.Right * HalfWidth);
+        FVector BotR = S.Location - (S.Up * HalfThick) + (S.Right * HalfWidth);
+        const FVector CapNormal = -S.Tangent;
+
+        // 顶点顺序: TopL(0), TopR(1), BotL(2), BotR(3)
+        OutMesh.Vertices.Add(TopL);
+        OutMesh.Vertices.Add(TopR);
+        OutMesh.Vertices.Add(BotL);
+        OutMesh.Vertices.Add(BotR);
+        for (int32 j = 0; j < 4; j++) OutMesh.Normals.Add(CapNormal);
+        OutMesh.UVs.Add(FVector2D(0.0f, 0.0f));
+        OutMesh.UVs.Add(FVector2D(1.0f, 0.0f));
+        OutMesh.UVs.Add(FVector2D(0.0f, 1.0f));
+        OutMesh.UVs.Add(FVector2D(1.0f, 1.0f));
+        for (int32 j = 0; j < 4; j++) OutMesh.Tangents.Add(FProcMeshTangent(S.Right, false));
+        for (int32 j = 0; j < 4; j++) OutMesh.Colors.Add(FLinearColor(0.0f, 0.5f, 0.5f, 1.0f));
+
+        // 绕序使法线朝 -Tangent
+        AddQuad(LocalOffset + 0, LocalOffset + 2, LocalOffset + 1, LocalOffset + 3);
+        LocalOffset += 4;
+    }
+
+    // --- F. 终点封口 (Back Cap) ---
+    // 面法线朝 +Tangent（传送带出口方向）
+    {
+        const auto& S = Slices[NumSlices - 1];
+        FVector TopL = S.Location + (S.Up * HalfThick) - (S.Right * HalfWidth);
+        FVector TopR = S.Location + (S.Up * HalfThick) + (S.Right * HalfWidth);
+        FVector BotL = S.Location - (S.Up * HalfThick) - (S.Right * HalfWidth);
+        FVector BotR = S.Location - (S.Up * HalfThick) + (S.Right * HalfWidth);
+        const FVector CapNormal = S.Tangent;
+
+        OutMesh.Vertices.Add(TopL);
+        OutMesh.Vertices.Add(TopR);
+        OutMesh.Vertices.Add(BotL);
+        OutMesh.Vertices.Add(BotR);
+        for (int32 j = 0; j < 4; j++) OutMesh.Normals.Add(CapNormal);
+        OutMesh.UVs.Add(FVector2D(0.0f, 0.0f));
+        OutMesh.UVs.Add(FVector2D(1.0f, 0.0f));
+        OutMesh.UVs.Add(FVector2D(0.0f, 1.0f));
+        OutMesh.UVs.Add(FVector2D(1.0f, 1.0f));
+        for (int32 j = 0; j < 4; j++) OutMesh.Tangents.Add(FProcMeshTangent(S.Right, false));
+        for (int32 j = 0; j < 4; j++) OutMesh.Colors.Add(FLinearColor(0.0f, 0.5f, 0.5f, 1.0f));
+
+        // 绕序使法线朝 +Tangent（与起点封口相反）
+        AddQuad(LocalOffset + 0, LocalOffset + 1, LocalOffset + 2, LocalOffset + 3);
+        LocalOffset += 4;
     }
 }
 

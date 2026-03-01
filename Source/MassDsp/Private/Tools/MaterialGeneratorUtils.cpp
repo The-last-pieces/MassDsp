@@ -29,6 +29,7 @@
 #include "Materials/MaterialExpressionDivide.h"
 #include "Materials/MaterialExpressionClamp.h"
 #include "Materials/MaterialExpressionFrac.h"
+#include "Materials/MaterialExpressionVertexColor.h"
 
 #endif
 
@@ -312,19 +313,37 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
 
     // =============================================
     // C. 颜色合成
-    //   CenterArrow = lerp(CenterColor, ArrowColor, ArrowMask)   — 中心区域
-    //   FinalColor  = lerp(CenterArrow, BorderColor, BorderMask) — 两侧白边叠加
+    //   顶点色 R=1.0：顶/底面，走完整箭头 + 边框流程
+    //   顶点色 R=0.0：左/右/封口面，直接输出 BorderColor
+    //
+    //   CenterArrow    = lerp(CenterColor, ArrowColor, ArrowMask)        — 中心箭头区
+    //   TopBottomColor = lerp(CenterArrow, BorderColor, BorderMask)      — 两侧白边叠加
+    //   FinalColor     = lerp(BorderColor, TopBottomColor, VertexColor.R) — R=0 侧面→BorderColor
     // =============================================
 
-    auto* CenterArrow = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 1300, 100));
+    auto* VertexColorNode = Cast<UMaterialExpressionVertexColor>(CreateNode(UMaterialExpressionVertexColor::StaticClass(), 1050, 480));
+
+    auto* MaskVertexR = Cast<UMaterialExpressionComponentMask>(CreateNode(UMaterialExpressionComponentMask::StaticClass(), 1200, 480));
+    MaskVertexR->Input.Expression = VertexColorNode;
+    MaskVertexR->R = 1;
+    MaskVertexR->G = 0;
+    MaskVertexR->B = 0;
+
+    auto* CenterArrow = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 1400, 100));
     CenterArrow->A.Expression = CenterColorParam;
     CenterArrow->B.Expression = ArrowColorParam;
     CenterArrow->Alpha.Expression = ArrowMask;
 
-    auto* FinalColor = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 1550, 300));
-    FinalColor->A.Expression = CenterArrow;
-    FinalColor->B.Expression = BorderColorParam;
-    FinalColor->Alpha.Expression = BorderMask;
+    auto* TopBottomColor = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 1600, 300));
+    TopBottomColor->A.Expression = CenterArrow;
+    TopBottomColor->B.Expression = BorderColorParam;
+    TopBottomColor->Alpha.Expression = BorderMask;
+
+    // R=0 → BorderColor（前后左右侧面），R=1 → 顶底面完整效果
+    auto* FinalColor = Cast<UMaterialExpressionLinearInterpolate>(CreateNode(UMaterialExpressionLinearInterpolate::StaticClass(), 1800, 400));
+    FinalColor->A.Expression = BorderColorParam;
+    FinalColor->B.Expression = TopBottomColor;
+    FinalColor->Alpha.Expression = MaskVertexR;
 
     // --- 10. 输出与保存 ---
     Material->SetShadingModel(MSM_DefaultLit);
