@@ -82,34 +82,43 @@ protected:
 private:
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
 
-    FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UMaterialInterface* Material, int32 SegmentsPerSection);
+    FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, EBeltType BeltType);
+
+    // 新增：合并缓存
+    struct FMergedBeltMeshData
+    {
+        TArray<FVector> Vertices;
+        TArray<int32> Triangles;
+        TArray<FVector> Normals;
+        TArray<FVector2D> UVs;
+        TArray<FProcMeshTangent> Tangents;
+        TArray<FLinearColor> Colors; // R通道存Speed
+    };
 
     /**
       * 静态生成传送带网格
-      * @param TargetMesh       要填充数据的 ProceduralMesh 组件
+      * @param OutMesh
       * @param Spline           定义路径的样条线组件
-      * @param Material         要应用的材质 (支持前面做的动态材质)
       * @param Width            传送带宽度
       * @param Thickness        传送带厚度
       * @param UVScale          UV平铺比例 (通常设为 100.0，即 1米重复一次)
       * @param AngleThreshold   自适应细分角度阈值 (建议 5.0 度)
       * @param BeltSpeed
       */
-    void GenerateConveyorMesh(
-        UProceduralMeshComponent* TargetMesh,
+    static void GenerateConveyorMesh(
+        FMergedBeltMeshData& OutMesh,
         const USplineComponent* Spline,
-        UMaterialInterface* Material,
+        float BeltSpeed,
         float Width = 200.0f,
         float Thickness = 20.0f,
         float UVScale = 100.0f,
-        float AngleThreshold = 5.0f,
-        float BeltSpeed = 1000
+        float AngleThreshold = 5.0f
     );
 
 public:
-    FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material);
+    FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, EBeltType BeltType);
 
-    void FlushBeltMesh(UMaterialInterface* Material) const;
+    void FlushBeltMesh();
 
     bool ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
 
@@ -117,7 +126,7 @@ public:
 
     // ISM 渲染：只把位于视锥体内且距离小于 MaxRenderDistance 的传送带物品放入 ISM
     // 平视：视锥剔除侧面/背面；飞高：距离上限截断覆盖面积，两者互补
-    void UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, FVector CameraPos);
+    void UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, const FVector& CameraPos);
 
     // 新增：从蓝图类创建单个Building Entity（运行时动态创建）
     FMassEntityHandle SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,
@@ -133,16 +142,7 @@ private:
     // 按需懒创建指定物品类型的 ISM 组件
     UInstancedStaticMeshComponent* GetOrCreateIsmForItemType(EItemType ItemType);
 
-    // 新增：合并缓存
-    struct FMergedBeltMeshData
-    {
-        TArray<FVector> Vertices;
-        TArray<int32> Triangles;
-        TArray<FVector> Normals;
-        TArray<FVector2D> UVs;
-        TArray<FProcMeshTangent> Tangents;
-        TArray<FLinearColor> Colors; // R通道存Speed
-    };
+    TMap<EBeltType, FMergedBeltMeshData> PendingBeltMeshMap;
 
-    FMergedBeltMeshData PendingBeltMesh;
+    TSet<EBeltType> BeltMaterializedSet; // 记录已生成网格的 BeltType，避免重复生成
 };

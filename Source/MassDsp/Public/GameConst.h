@@ -69,6 +69,16 @@ enum class EBuildingType : uint8
     Assembler = 3 UMETA(DisplayName = "合成台"),
 };
 
+// 传送带类型枚举
+UENUM(BlueprintType)
+enum class EBeltType : uint8
+{
+    None    = 0 UMETA(DisplayName = "无"),
+    Normal  = 1 UMETA(DisplayName = "普通传送带"),
+    Fast    = 2 UMETA(DisplayName = "快速传送带"),
+    Express = 3 UMETA(DisplayName = "极速传送带"),
+};
+
 // 配方输入输出项
 USTRUCT(BlueprintType)
 struct FRecipeEntry
@@ -265,6 +275,24 @@ struct FBuildingTypeConfig
     }
 };
 
+// 传送带类型配置数据
+USTRUCT(BlueprintType)
+struct FBeltTypeConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belt")
+    TObjectPtr<UMaterialInterface> Material;
+
+    // 传送带速度（cm/s）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belt")
+    float Speed = 400.0f;
+
+    // 传送带颜色（传入材质 BaseColor 参数）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belt")
+    FLinearColor Color = FLinearColor::Blue;
+};
+
 // 🔥 核心:单个 DataAsset 管理所有配置
 UCLASS(BlueprintType)
 class MASSDSP_API UGameConfigData : public UPrimaryDataAsset
@@ -284,12 +312,17 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Buildings", meta = (ForceInlineRow))
     TMap<EBuildingType, FBuildingTypeConfig> BuildingConfigs;
 
+    // 所有传送带类型配置
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Belts", meta = (ForceInlineRow))
+    TMap<EBeltType, FBeltTypeConfig> BeltTypeConfigs;
+
     // 构造函数:自动初始化所有枚举键
     UGameConfigData()
     {
         InitializeItemKeys();
         InitializeRecipeKeys();
         InitializeBuildingKeys();
+        InitializeBeltTypeKeys();
     }
 
     // 🔥 自动创建所有枚举的 Key
@@ -359,6 +392,26 @@ public:
         }
     }
 
+    void InitializeBeltTypeKeys()
+    {
+        const UEnum* EnumPtr = StaticEnum<EBeltType>();
+        if (!EnumPtr) return;
+
+        for (int32 i = 0; i < EnumPtr->NumEnums() - 1; ++i)
+        {
+            int64 EnumValue = EnumPtr->GetValueByIndex(i);
+            EBeltType BeltType = static_cast<EBeltType>(EnumValue);
+
+            if (BeltType == EBeltType::None) continue;
+
+            if (!BeltTypeConfigs.Contains(BeltType))
+            {
+                FBeltTypeConfig DefaultData;
+                BeltTypeConfigs.Add(BeltType, DefaultData);
+            }
+        }
+    }
+
 #if WITH_EDITOR
     virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override
     {
@@ -422,6 +475,7 @@ public:
         InitializeItemKeys();
         InitializeRecipeKeys();
         InitializeBuildingKeys();
+        InitializeBeltTypeKeys();
     }
 #endif
 
@@ -439,6 +493,11 @@ public:
     const FBuildingTypeConfig* GetBuildingConfig(EBuildingType BuildingType) const
     {
         return BuildingConfigs.Find(BuildingType);
+    }
+
+    const FBeltTypeConfig* GetBeltTypeConfig(EBeltType BeltType) const
+    {
+        return BeltTypeConfigs.Find(BeltType);
     }
 
     virtual FPrimaryAssetId GetPrimaryAssetId() const override

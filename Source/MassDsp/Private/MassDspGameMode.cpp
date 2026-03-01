@@ -39,7 +39,7 @@ void AMassDspGameMode::BeginPlay()
     // 大规模创建
 
     // TODO 5w建筑的时候帧率跌得有点夸张,得优化下
-    constexpr int N = 100;
+    constexpr int N = 40;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据
@@ -106,10 +106,10 @@ void AMassDspGameMode::BeginPlay()
         FMassEntityHandle StorageEntity = AllCreatedBuildings[BaseIndex + 4];
 
         // 创建传送带连接
-        DspManager->CreateAndLinkBeltForSlot(MinerEntity1, 0, AssemblerEntity, 2, ConveyorMaterial);
-        DspManager->CreateAndLinkBeltForSlot(MinerEntity2, 0, AssemblerEntity, 1, ConveyorMaterial);
-        DspManager->CreateAndLinkBeltForSlot(MinerEntity3, 0, AssemblerEntity, 0, ConveyorMaterial);
-        DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, ConveyorMaterial);
+        DspManager->CreateAndLinkBeltForSlot(MinerEntity1, 0, AssemblerEntity, 2, EBeltType::Normal);
+        DspManager->CreateAndLinkBeltForSlot(MinerEntity2, 0, AssemblerEntity, 1, EBeltType::Normal);
+        DspManager->CreateAndLinkBeltForSlot(MinerEntity3, 0, AssemblerEntity, 0, EBeltType::Normal);
+        DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, EBeltType::Fast);
     }
 
     const double BeltLinkElapsed = FPlatformTime::Seconds() - BeltLinkStartTime;
@@ -117,8 +117,7 @@ void AMassDspGameMode::BeginPlay()
     UE_LOG(LogTemp, Log, TEXT("[Belt Profile] Total: %d belts | Total time: %.3f ms | Avg per belt: %.4f ms"),
            TotalBelts, BeltLinkElapsed * 1000.0, AvgBeltTimeMs);
 
-    // GameMode的BeginPlay里，所有传送带创建完毕后：
-    DspManager->FlushBeltMesh(ConveyorMaterial);
+    DspManager->FlushBeltMesh();
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)

@@ -63,7 +63,7 @@ TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
     return GameMode;
 }
 
-FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, UMaterialInterface* Material, int32 SegmentsPerSection)
+FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, EBeltType BeltType)
 {
     if (!BeltsContainerActor) return FBeltHandle();
 
@@ -78,11 +78,22 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     NewSpline->UpdateSpline();
     NewSpline->RegisterComponent();
 
+    // --- 从 BeltType 配置读取速度 ---
+    float BeltSpeed = FGameConst::ItemSpace * 2; // 默认速度（fallback）
+    TryGetGameMode();
+    if (GameMode.IsValid() && GameMode->GameConfig)
+    {
+        if (const FBeltTypeConfig* Config = GameMode->GameConfig->GetBeltTypeConfig(BeltType))
+        {
+            BeltSpeed = Config->Speed;
+        }
+    }
+
     // --- 创建 Handle 并存储 ---
     FBeltTrajectory NewTrajectory;
     NewTrajectory.SplineComponent = NewSpline;
     NewTrajectory.TotalLength = NewSpline->GetSplineLength();
-    NewTrajectory.Speed = FGameConst::ItemSpace * 2; // 1秒6个物品
+    NewTrajectory.Speed = BeltSpeed;
 
     int32 Index = BeltTrajectories.Add(NewTrajectory);
 
@@ -99,49 +110,25 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     BeltData.BeltLength = NewTrajectory.TotalLength;
     BeltData.BeltSpeed = NewTrajectory.Speed;
 
-    // TODO 大规模测试时性能有很大问题
-    if (Material)
+    // --- 生成网格几何，追加到对应 BeltType 的 PendingBeltMeshMap 条目 ---
+    if (BeltType != EBeltType::None)
     {
-        TArray<FVector> Vertices;
-        TArray<int32> Triangles;
-        TArray<FVector> Normals;
-        TArray<FVector2D> UVs;
-
         if (!BeltProceduralMesh)
         {
             BeltProceduralMesh = NewObject<UProceduralMeshComponent>(BeltsContainerActor, TEXT("BeltProceduralMesh"));
             BeltProceduralMesh->SetupAttachment(BeltsContainerActor->GetRootComponent());
             BeltProceduralMesh->SetVisibility(true);
             BeltProceduralMesh->SetCastShadow(false);
-            BeltProceduralMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision); // 禁用碰撞以避免Chaos错误
-            BeltProceduralMesh->SetCullDistance(MaxRenderDistance * 2); // 设置裁剪距离
+            BeltProceduralMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            BeltProceduralMesh->SetCullDistance(MaxRenderDistance * 2);
             BeltProceduralMesh->RegisterComponent();
         }
 
-        auto DynMaterial = UMaterialInstanceDynamic::Create(Material, this);
-
-
+        FMergedBeltMeshData& MeshData = PendingBeltMeshMap.FindOrAdd(BeltType);
         constexpr float Width = 110.0f;
         constexpr float BeltThickness = 20.0f;
         constexpr float UVScale = 100.0f;
-        constexpr float MatTiling = 5.0f;
-
-        DynMaterial->SetVectorParameterValue(TEXT("BaseColor"), FColor::Blue);
-        DynMaterial->SetScalarParameterValue(TEXT("Tiling"), MatTiling);
-
-        // 公式推导: 
-        // 材质相位变化率 = Time * MatSpeed
-        // 空间相位变化率 = (Dist / UVScale) * Tiling
-        // 令 Time * MatSpeed = (Dist / UVScale) * Tiling
-        // => Dist/Time = PhysicalSpeed
-        // => MatSpeed = PhysicalSpeed * Tiling / UVScale
-        float CorrectedMatSpeed = NewTrajectory.Speed * MatTiling / UVScale;
-
-        DynMaterial->SetScalarParameterValue(TEXT("Speed"), CorrectedMatSpeed);
-
-        GenerateConveyorMesh(BeltProceduralMesh, NewSpline, DynMaterial, Width, BeltThickness, UVScale, 5.0f);
-
-        // TODO 直线分割有问题. 材质一直闪烁
+        GenerateConveyorMesh(MeshData, NewSpline, BeltSpeed, Width, BeltThickness, UVScale, 5.0f);
     }
 
     return NewHandle;
@@ -159,16 +146,15 @@ struct FConveyorSlice
 
 // TODO 通过枚举管理传送带类型，支持不同的材质实例
 void UMassDspManager::GenerateConveyorMesh(
-    UProceduralMeshComponent* TargetMesh,
+    FMergedBeltMeshData& OutMesh,
     const USplineComponent* Spline,
-    UMaterialInterface* Material,
+    float BeltSpeed,
     float Width,
     float Thickness,
     float UVScale,
-    float AngleThreshold,
-    float BeltSpeed) // 新增Speed参数
+    float AngleThreshold)
 {
-    if (!TargetMesh || !Spline || Spline->GetNumberOfSplinePoints() < 2) return;
+    if (!Spline || Spline->GetNumberOfSplinePoints() < 2) return;
 
     // --- 1. 计算自适应切片 (Adaptive Slicing) ---
     TArray<FConveyorSlice> Slices;
@@ -229,10 +215,10 @@ void UMassDspManager::GenerateConveyorMesh(
         });
     }
 
-    // --- 2. 构建几何体，追加到PendingBeltMesh ---
+    // --- 2. 构建几何体，追加到 OutMesh ---
 
     // 关键：IndexOffset = 已有顶点数
-    int32 IndexOffset = PendingBeltMesh.Vertices.Num();
+    int32 IndexOffset = OutMesh.Vertices.Num();
 
     const float HalfWidth = Width * 0.5f;
     const float HalfThick = Thickness * 0.5f;
@@ -243,12 +229,12 @@ void UMassDspManager::GenerateConveyorMesh(
 
     auto AddQuad = [&](int32 V0, int32 V1, int32 V2, int32 V3)
     {
-        PendingBeltMesh.Triangles.Add(IndexOffset + V0);
-        PendingBeltMesh.Triangles.Add(IndexOffset + V1);
-        PendingBeltMesh.Triangles.Add(IndexOffset + V2);
-        PendingBeltMesh.Triangles.Add(IndexOffset + V2);
-        PendingBeltMesh.Triangles.Add(IndexOffset + V1);
-        PendingBeltMesh.Triangles.Add(IndexOffset + V3);
+        OutMesh.Triangles.Add(IndexOffset + V0);
+        OutMesh.Triangles.Add(IndexOffset + V1);
+        OutMesh.Triangles.Add(IndexOffset + V2);
+        OutMesh.Triangles.Add(IndexOffset + V2);
+        OutMesh.Triangles.Add(IndexOffset + V1);
+        OutMesh.Triangles.Add(IndexOffset + V3);
     };
 
     // 顶点局部IndexOffset（相对本次追加的起点）
@@ -258,18 +244,18 @@ void UMassDspManager::GenerateConveyorMesh(
     // --- A. 顶面 ---
     for (int32 i = 0; i < NumSlices; i++)
     {
-        const auto& Slice = Slices[i];
-        FVector Center = Slice.Location + (Slice.Up * HalfThick);
-        PendingBeltMesh.Vertices.Add(Center - (Slice.Right * HalfWidth));
-        PendingBeltMesh.Vertices.Add(Center + (Slice.Right * HalfWidth));
-        PendingBeltMesh.Normals.Add(Slice.Up);
-        PendingBeltMesh.Normals.Add(Slice.Up);
-        PendingBeltMesh.UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
-        PendingBeltMesh.UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
-        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        PendingBeltMesh.Colors.Add(TopColor);
-        PendingBeltMesh.Colors.Add(TopColor);
+        const auto& [Location, Right, Up, Tangent, Distance] = Slices[i];
+        FVector Center = Location + (Up * HalfThick);
+        OutMesh.Vertices.Add(Center - (Right * HalfWidth));
+        OutMesh.Vertices.Add(Center + (Right * HalfWidth));
+        OutMesh.Normals.Add(Up);
+        OutMesh.Normals.Add(Up);
+        OutMesh.UVs.Add(FVector2D(0.0f, Distance / UVScale));
+        OutMesh.UVs.Add(FVector2D(1.0f, Distance / UVScale));
+        OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
+        OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
+        OutMesh.Colors.Add(TopColor);
+        OutMesh.Colors.Add(TopColor);
     }
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
@@ -278,24 +264,21 @@ void UMassDspManager::GenerateConveyorMesh(
     }
     LocalOffset += NumSlices * 2;
 
-    // --- B/C/D 底面、左侧、右侧（结构完全同原来，只改两点）---
-    // 1. 所有 Vertices/Normals 等 改成 PendingBeltMesh.Vertices 等
-    // 2. 所有 Colors 改成 SideColor
-    // 3. AddQuad里的Base用LocalOffset而非VertexOffset
+    // --- B. 底面 ---
     for (int32 i = 0; i < NumSlices; i++)
     {
         const auto& Slice = Slices[i];
         FVector Center = Slice.Location - (Slice.Up * HalfThick);
-        PendingBeltMesh.Vertices.Add(Center - (Slice.Right * HalfWidth));
-        PendingBeltMesh.Vertices.Add(Center + (Slice.Right * HalfWidth));
-        PendingBeltMesh.Normals.Add(-Slice.Up);
-        PendingBeltMesh.Normals.Add(-Slice.Up);
-        PendingBeltMesh.UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
-        PendingBeltMesh.UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
-        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        PendingBeltMesh.Colors.Add(SideColor);
-        PendingBeltMesh.Colors.Add(SideColor);
+        OutMesh.Vertices.Add(Center - (Slice.Right * HalfWidth));
+        OutMesh.Vertices.Add(Center + (Slice.Right * HalfWidth));
+        OutMesh.Normals.Add(-Slice.Up);
+        OutMesh.Normals.Add(-Slice.Up);
+        OutMesh.UVs.Add(FVector2D(0.0f, Slice.Distance / UVScale));
+        OutMesh.UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
+        OutMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        OutMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        OutMesh.Colors.Add(SideColor);
+        OutMesh.Colors.Add(SideColor);
     }
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
@@ -307,24 +290,24 @@ void UMassDspManager::GenerateConveyorMesh(
     // --- D. 右侧面 (Right Face) ---
     for (int32 i = 0; i < NumSlices; i++)
     {
-        const auto& Slice = Slices[i];
-        FVector TopR = Slice.Location + (Slice.Up * HalfThick) + (Slice.Right * HalfWidth);
-        FVector BotR = Slice.Location - (Slice.Up * HalfThick) + (Slice.Right * HalfWidth);
+        const auto& [Location, Right, Up, Tangent, Distance] = Slices[i];
+        FVector TopR = Location + (Up * HalfThick) + (Right * HalfWidth);
+        FVector BotR = Location - (Up * HalfThick) + (Right * HalfWidth);
 
-        PendingBeltMesh.Vertices.Add(TopR);
-        PendingBeltMesh.Vertices.Add(BotR);
+        OutMesh.Vertices.Add(TopR);
+        OutMesh.Vertices.Add(BotR);
 
-        PendingBeltMesh.Normals.Add(Slice.Right); // 法线向右
-        PendingBeltMesh.Normals.Add(Slice.Right);
+        OutMesh.Normals.Add(Right);
+        OutMesh.Normals.Add(Right);
 
-        PendingBeltMesh.UVs.Add(FVector2D(Slice.Distance / UVScale, 0.0f));
-        PendingBeltMesh.UVs.Add(FVector2D(Slice.Distance / UVScale, 1.0f));
+        OutMesh.UVs.Add(FVector2D(Distance / UVScale, 0.0f));
+        OutMesh.UVs.Add(FVector2D(Distance / UVScale, 1.0f));
 
-        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        PendingBeltMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
+        OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
+        OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
 
-        PendingBeltMesh.Colors.Add(FLinearColor::Gray);
-        PendingBeltMesh.Colors.Add(FLinearColor::Gray);
+        OutMesh.Colors.Add(FLinearColor::Gray);
+        OutMesh.Colors.Add(FLinearColor::Gray);
     }
 
     for (int32 i = 0; i < NumSlices - 1; i++)
@@ -336,7 +319,7 @@ void UMassDspManager::GenerateConveyorMesh(
 
 // TODO 优化成异步的(如果要开启碰撞)
 FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
-    FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, UMaterialInterface* Material
+    FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, EBeltType BeltType
 )
 {
     if (!(SBuilding.IsValid() && EBuilding.IsValid())) return FBeltHandle();
@@ -419,7 +402,7 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
         NewSpline->SetTangentsAtSplinePoint(2, EndTangent, ExitTangent, ESplineCoordinateSpace::World, false);
 
         NewSpline->SetSplinePointType(3, ESplinePointType::Linear, false);
-    }, Material, 50);
+    }, BeltType);
 
     if (!BeltHandle.IsValid()) return FBeltHandle();
 
@@ -513,7 +496,7 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
     return ISM;
 }
 
-void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, FVector CameraPos)
+void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, const FVector& CameraPos)
 {
     if (BeltEntityRegistry.IsEmpty()) return;
 
@@ -524,9 +507,9 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     BeltEntityRegistry.GetKeys(ActiveBelts);
     const int32 NumBelts = ActiveBelts.Num();
 
-    TArray<const FBeltData*> BeltDataPtrs;
+    TArray<const FBeltData*> BeltDataArr;
     TArray<bool> BeltIsVisible;
-    BeltDataPtrs.Reserve(NumBelts);
+    BeltDataArr.Reserve(NumBelts);
     BeltIsVisible.SetNumUninitialized(NumBelts);
 
     int32 TotalVisibleItems = 0;
@@ -534,18 +517,17 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     {
         const FBeltHandle& Handle = ActiveBelts[i];
         const FBeltData* Data = BeltEntityRegistry.Find(Handle);
-        BeltDataPtrs.Add(Data);
+        BeltDataArr.Add(Data);
 
         bool bVisible = false;
         if (BeltTrajectories.IsValidIndex(Handle.Index))
         {
-            const FBeltTrajectory& Traj = BeltTrajectories[Handle.Index];
+            const FBeltTrajectory& BeltDef = BeltTrajectories[Handle.Index];
             // 门控 1：距离上限（MaxRenderDistance）——飞高时截断覆盖面积
-            const float DistSq = FVector::DistSquared(CameraPos, Traj.RepresentativePosition);
-            if (DistSq <= MaxDistSq)
+            if (const float DistSq = FVector::DistSquared(CameraPos, BeltDef.RepresentativePosition); DistSq <= MaxDistSq)
             {
                 // 门控 2：视锥剔除（IntersectSphere）——平视时切掉侧面/背面
-                bVisible = ViewFrustum.IntersectSphere(Traj.RepresentativePosition, Traj.BoundRadius);
+                bVisible = ViewFrustum.IntersectSphere(BeltDef.RepresentativePosition, BeltDef.BoundRadius);
             }
         }
         BeltIsVisible[i] = bVisible;
@@ -568,8 +550,8 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     for (int32 i = 0; i < NumBelts; ++i)
     {
         BeltItemOffsets[i] = RunningOffset;
-        if (BeltIsVisible[i] && BeltDataPtrs[i])
-            RunningOffset += BeltDataPtrs[i]->ItemCache.Num();
+        if (BeltIsVisible[i] && BeltDataArr[i])
+            RunningOffset += BeltDataArr[i]->ItemCache.Num();
     }
 
     // ── Step 2: 预分配平坦输出数组（仅视锥内物品）──────────────────────────
@@ -586,7 +568,7 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     {
         if (!BeltIsVisible[BeltIdx]) return; // 视野外：完全跳过，零开销
 
-        const FBeltData* BeltData = BeltDataPtrs[BeltIdx];
+        const FBeltData* BeltData = BeltDataArr[BeltIdx];
         if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
 
         const FBeltHandle& Handle = ActiveBelts[BeltIdx];
@@ -761,24 +743,49 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
     return EntityHandle;
 }
 
-void UMassDspManager::FlushBeltMesh(UMaterialInterface* Material) const
+void UMassDspManager::FlushBeltMesh()
 {
     if (!BeltProceduralMesh) return;
 
-    // 所有传送带合并 = 永远只有Section 0 = 1个DrawCall
-    BeltProceduralMesh->CreateMeshSection_LinearColor(
-        0,
-        PendingBeltMesh.Vertices,
-        PendingBeltMesh.Triangles,
-        PendingBeltMesh.Normals,
-        PendingBeltMesh.UVs,
-        PendingBeltMesh.Colors,
-        PendingBeltMesh.Tangents,
-        false
-    );
+    TryGetGameMode();
 
-    if (Material)
+    // 每个 EBeltType 使用独立的 MeshSection，section 索引 = 枚举值
+    for (auto& [BeltType, MeshData] : PendingBeltMeshMap)
     {
-        BeltProceduralMesh->SetMaterial(0, Material);
+        const int32 SectionIdx = static_cast<int32>(BeltType);
+
+        BeltProceduralMesh->CreateMeshSection_LinearColor(
+            SectionIdx,
+            MeshData.Vertices,
+            MeshData.Triangles,
+            MeshData.Normals,
+            MeshData.UVs,
+            MeshData.Colors,
+            MeshData.Tangents,
+            false
+        );
+
+        // 按 BeltType 配置创建动态材质实例并应用到对应 Section
+        if (BeltMaterializedSet.Add(BeltType).IsValidId() && GameMode.IsValid() && GameMode->GameConfig)
+        {
+            if (const FBeltTypeConfig* Config = GameMode->GameConfig->GetBeltTypeConfig(BeltType))
+            {
+                if (Config->Material)
+                {
+                    // 公式推导:
+                    // 材质相位变化率 = Time * MatSpeed
+                    // 空间相位变化率 = (Dist / UVScale) * Tiling
+                    // => MatSpeed = PhysicalSpeed * Tiling / UVScale
+                    constexpr float UVScale = 100.0f;
+                    UMaterialInstanceDynamic* DynMat = UMaterialInstanceDynamic::Create(Config->Material, this);
+                    float MatTiling = 5.0f;
+                    DynMat->GetScalarParameterValue(TEXT("Tiling"), MatTiling);
+                    DynMat->SetVectorParameterValue(TEXT("BaseColor"), Config->Color);
+                    // DynMat->SetScalarParameterValue(TEXT("Tiling"), MatTiling);
+                    DynMat->SetScalarParameterValue(TEXT("Speed"), Config->Speed * MatTiling / UVScale);
+                    BeltProceduralMesh->SetMaterial(SectionIdx, DynMat);
+                }
+            }
+        }
     }
 }
