@@ -26,5 +26,11 @@ private:
     float AverageFPS = 0.0f;
     float OnePercentLowFPS = 0.0f;
 
+    // 游戏统计缓存（每秒刷新）
+    int32 CachedBuildingCount = 0;
+    int32 CachedBeltCount = 0;
+    int32 CachedBeltItemCount = 0;
+
     void UpdateFrameStats();
+    void UpdateGameStats();
 };

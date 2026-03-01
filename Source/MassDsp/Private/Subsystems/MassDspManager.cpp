@@ -731,6 +731,8 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
         }
     }
 
+    ++BuildingEntityCount;
+
     return EntityHandle;
 }
 

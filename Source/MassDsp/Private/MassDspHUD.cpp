@@ -1,6 +1,7 @@
 ﻿#include "MassDspHUD.h"
 
 #include "Engine/Engine.h"
+#include "Subsystems/MassDspManager.h"
 
 AMassDspHUD::AMassDspHUD()
 {
@@ -27,22 +28,30 @@ void AMassDspHUD::DrawHUD()
     if (TimeSinceLastUpdate >= StatUpdateInterval)
     {
         UpdateFrameStats();
+        UpdateGameStats();
         TimeSinceLastUpdate = 0.0f;
     }
 
     // 使用 Canvas 绘制（Shipping 下可见）
     const float CurrentFPS = 1.0f / DeltaTime;
-    const FString StatsText = FString::Printf(
+    const FString FpsText = FString::Printf(
         TEXT("Current: %.1f FPS | Avg: %.1f FPS | 1%% Low: %.1f FPS"),
         CurrentFPS, AverageFPS, OnePercentLowFPS
     );
+    const FString GameText = FString::Printf(TEXT("Buildings: %d | Belts: %d | Belt Items: %d"), CachedBuildingCount, CachedBeltCount, CachedBeltItemCount);
 
     constexpr float PosX = 10.0f;
     constexpr float PosY = 10.0f;
+    constexpr float LineStep = 20.0f;
 
-    // 绘制阴影（提升可读性）
-    DrawText(StatsText, FLinearColor::Black, PosX + 1.0f, PosY + 1.0f, GEngine->GetSmallFont(), 1.5f);
-    DrawText(StatsText, FLinearColor::Yellow, PosX, PosY, GEngine->GetSmallFont(), 1.5f);
+    auto DrawLine = [&](const FString& Text, float Y)
+    {
+        DrawText(Text, FLinearColor::Black, PosX + 1.0f, Y + 1.0f, GEngine->GetSmallFont(), 1.5f);
+        DrawText(Text, FLinearColor::Yellow, PosX, Y, GEngine->GetSmallFont(), 1.5f);
+    };
+
+    DrawLine(FpsText, PosY);
+    DrawLine(GameText, PosY + LineStep);
 }
 
 void AMassDspHUD::UpdateFrameStats()
@@ -68,4 +77,20 @@ void AMassDspHUD::UpdateFrameStats()
         OnePercentSum += SortedFrameTimes[i];
     }
     OnePercentLowFPS = static_cast<float>(OnePercentCount) / OnePercentSum;
+}
+
+void AMassDspHUD::UpdateGameStats()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return;
+
+    CachedBuildingCount = Manager->BuildingEntityCount;
+    CachedBeltCount = Manager->BeltEntityRegistry.Num();
+
+    int32 TotalItems = 0;
+    for (const auto& Pair : Manager->BeltEntityRegistry)
+    {
+        TotalItems += Pair.Value.ItemCache.Num();
+    }
+    CachedBeltItemCount = TotalItems;
 }

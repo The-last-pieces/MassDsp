@@ -37,7 +37,7 @@ void AMassDspGameMode::BeginPlay()
     // 大规模创建
 
     // TODO 5w建筑的时候帧率跌得有点夸张,得优化下
-    constexpr int N = 40;
+    constexpr int N = 100;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据

@@ -55,6 +55,9 @@ public:
 
     TSparseArray<FBeltTrajectory> BeltTrajectories;
 
+    // 已创建的建筑 Mass Entity 数量（在 CreateBuildingEntityInternal 中自增）
+    int32 BuildingEntityCount = 0;
+
     TWeakObjectPtr<AMassDspGameMode> GameMode;
 
     // ISM 物品渲染池，按物品类型分组，一种物品一个 ISM 组件
