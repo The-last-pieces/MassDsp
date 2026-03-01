@@ -85,6 +85,11 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     NewTrajectory.Speed = FGameConst::ItemSpace * 2; // 1秒6个物品
 
     int32 Index = BeltTrajectories.Add(NewTrajectory);
+
+    // 预烘焙 Spline 为 LUT：只在传送带创建时采样一次（50cm 间距）
+    // 之后 GetTransformAtDistance 走 O(1) 数组查表，不再访问 USplineComponent
+    BeltTrajectories[Index].BakeLUT(50.0f);
+
     FBeltHandle NewHandle;
     NewHandle.Index = Index;
     NewHandle.Generation = 0; // TODO Implement generation check if needed
@@ -510,27 +515,71 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
 // TODO 支持LOD
 void UMassDspManager::UpdateAllBeltItemTransforms()
 {
-    // Step 1: Reset per-type transform 缓存（不释放内存）
+    if (BeltEntityRegistry.IsEmpty()) return;
+
+    // ── Step 0: 缓存所有 Belt 指针（避免 ParallelFor 中访问 TMap）────────────
+    TArray<FBeltHandle> ActiveBelts;
+    BeltEntityRegistry.GetKeys(ActiveBelts);
+    const int32 NumBelts = ActiveBelts.Num();
+
+    TArray<const FBeltData*> BeltDataPtrs;
+    BeltDataPtrs.Reserve(NumBelts);
+    for (const FBeltHandle& Handle : ActiveBelts)
+        BeltDataPtrs.Add(BeltEntityRegistry.Find(Handle));
+
+    // ── Step 1: 前缀和预计算每条传送带在平坦数组中的写偏移 ─────────────────
+    TArray<int32> BeltItemOffsets;
+    BeltItemOffsets.SetNumUninitialized(NumBelts);
+    int32 TotalItems = 0;
+    for (int32 i = 0; i < NumBelts; ++i)
+    {
+        BeltItemOffsets[i] = TotalItems;
+        TotalItems += (BeltDataPtrs[i] ? BeltDataPtrs[i]->ItemCache.Num() : 0);
+    }
+    if (TotalItems == 0) return;
+
+    // ── Step 2: 预分配平坦输出数组（各 Belt 写入不同段，无竞争）─────────────
+    struct FItemEntry
+    {
+        EItemType Type;
+        FTransform T;
+    };
+    TArray<FItemEntry> FlatEntries;
+    FlatEntries.SetNumUninitialized(TotalItems);
+
+    // ── Step 3: ParallelFor 并行查表（LUT 是纯数据，线程安全）────────────────
+    ParallelFor(NumBelts, [&](int32 BeltIdx)
+    {
+        const FBeltData* BeltData = BeltDataPtrs[BeltIdx];
+        if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
+
+        const FBeltHandle& Handle = ActiveBelts[BeltIdx];
+        if (!BeltTrajectories.IsValidIndex(Handle.Index)) return;
+
+        const FBeltTrajectory& Trajectory = BeltTrajectories[Handle.Index];
+        if (!Trajectory.IsValid()) return;
+
+        int32 WriteIdx = BeltItemOffsets[BeltIdx];
+        for (const FBeltItemCache& Cache : BeltData->ItemCache)
+        {
+            FItemEntry& Entry = FlatEntries[WriteIdx++];
+            Entry.Type = Cache.ItemType;
+            if (Cache.ItemType != EItemType::None)
+                Trajectory.GetTransformAtDistance(Cache.DistanceAlongBelt, Entry.T);
+        }
+    });
+
+    // ── Step 4: 单线程 Bucket Sort，归并到按类型分组的缓存 ──────────────────
     for (auto& [Type, Arr] : CachedTransformsByType)
         Arr.Reset();
 
-    // Step 2: 遍历所有 Belt 的 ItemCache（连续内存，Cache 友好）
-    for (auto& [Handle, BeltData] : BeltEntityRegistry)
+    for (const FItemEntry& Entry : FlatEntries)
     {
-        if (!BeltTrajectories.IsValidIndex(Handle.Index)) continue;
-        const FBeltTrajectory& Trajectory = BeltTrajectories[Handle.Index];
-        if (!Trajectory.IsValid()) continue;
-
-        for (const FBeltItemCache& Cache : BeltData.ItemCache)
-        {
-            if (Cache.ItemType == EItemType::None) continue;
-            FTransform T;
-            Trajectory.GetTransformAtDistance(Cache.DistanceAlongBelt, T);
-            CachedTransformsByType.FindOrAdd(Cache.ItemType).Add(T);
-        }
+        if (Entry.Type != EItemType::None)
+            CachedTransformsByType.FindOrAdd(Entry.Type).Add(Entry.T);
     }
 
-    // Step 3: 每种物品类型一次 BatchUpdate = 1 个 DrawCall
+    // ── Step 5: 每种物品类型 1 次 BatchUpdate = 1 个 DrawCall ────────────────
     for (auto& [Type, Transforms] : CachedTransformsByType)
     {
         UInstancedStaticMeshComponent* ISM = GetOrCreateIsmForItemType(Type);
@@ -548,7 +597,6 @@ void UMassDspManager::UpdateAllBeltItemTransforms()
         }
         else if (NewCount < OldCount)
         {
-            // 缩容：移除多余 Instance
             TArray<int32> ToRemove;
             ToRemove.Reserve(OldCount - NewCount);
             for (int32 i = NewCount; i < OldCount; ++i)
@@ -558,7 +606,7 @@ void UMassDspManager::UpdateAllBeltItemTransforms()
 
         if (NewCount > 0)
         {
-            // 一次 BatchUpdate 刷新全部 Transform，bTeleport=true 跳过插值
+            // bTeleport=true：跳过物理插值，直接刷新 GPU buffer
             ISM->BatchUpdateInstancesTransforms(0, Transforms, false, true, true);
         }
     }
