@@ -73,9 +73,9 @@ enum class EBuildingType : uint8
 UENUM(BlueprintType)
 enum class EBeltType : uint8
 {
-    None    = 0 UMETA(DisplayName = "无"),
-    Normal  = 1 UMETA(DisplayName = "普通传送带"),
-    Fast    = 2 UMETA(DisplayName = "快速传送带"),
+    None = 0 UMETA(DisplayName = "无"),
+    Normal = 1 UMETA(DisplayName = "普通传送带"),
+    Fast = 2 UMETA(DisplayName = "快速传送带"),
     Express = 3 UMETA(DisplayName = "极速传送带"),
 };
 
@@ -258,6 +258,8 @@ struct FBuildingTypeConfig
             FStaticMeshInstanceVisualizationDesc Desc;
 
             FMassStaticMeshInstanceVisualizationMeshDesc MeshDesc;
+            MeshDesc.Mobility = EComponentMobility::Stationary;
+            MeshDesc.bRequiresExternalInstanceIDTracking = true;
             MeshDesc.Mesh = Mesh;
 
             if (Material)

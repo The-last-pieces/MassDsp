@@ -141,6 +141,7 @@ struct FConveyorSlice
     float Distance;
 };
 
+// TODO 有些传送带是扁的
 void UMassDspManager::GenerateConveyorMesh(
     FMergedBeltMeshData& OutMesh,
     const USplineComponent* Spline,
@@ -663,6 +664,7 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
     // 批量创建（同步）
     for (const FBuildingSpawnData& SpawnData : SpawnDataList)
     {
+        // TODO 改成调用 BatchCreateEntity
         if (FMassEntityHandle EntityHandle = CreateBuildingEntityInternal(EntityManager, SpawnData); EntityHandle.IsValid())
         {
             CreatedEntities.Add(EntityHandle);
@@ -723,11 +725,14 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
     // 设置Representation（ISM渲染）
     if (FMassRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(EntityHandle))
     {
-        if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(SpawnData.BuildingType))
+        if (auto Cached = CachedBuildingMeshDesc.Find(SpawnData.BuildingType))
+        {
+            RepFrag->StaticMeshDescHandle = *Cached;
+        }
+        else if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(SpawnData.BuildingType))
         {
             RepFrag->StaticMeshDescHandle = BuildingConfig->GetOrCreateMeshHandle(GetWorld());
-            RepFrag->CurrentRepresentation = EMassRepresentationType::StaticMeshInstance;
-            RepFrag->PrevRepresentation = EMassRepresentationType::None;
+            CachedBuildingMeshDesc.Add(SpawnData.BuildingType, RepFrag->StaticMeshDescHandle);
         }
     }
 

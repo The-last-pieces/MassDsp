@@ -44,12 +44,12 @@ void AMassDspGameMode::BeginPlay()
     TArray<FBuildingSpawnData> AllBuildingDataList;
     AllBuildingDataList.Reserve(N * N * BuildingsPerGroup);
 
-    for (int i = -N / 2; i < N / 2; ++i)
+    for (int i = 0; i < N; ++i)
     {
-        for (int j = -N / 2; j < N / 2; ++j)
+        for (int j = 0; j < N; ++j)
         {
             constexpr int GridSize = 2800;
-            FVector SpawnLocation = FVector(i * GridSize, j * GridSize, 0);
+            FVector SpawnLocation = FVector((i - N / 2) * GridSize, (j - N / 2) * GridSize, 0);
 
             // 3个矿机
             AllBuildingDataList.Add(FBuildingSpawnData(

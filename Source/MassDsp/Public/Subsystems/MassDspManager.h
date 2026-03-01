@@ -67,6 +67,8 @@ public:
 
     // 每帧（降频）重建的 Transform 缓存（仅近处物品），避免堆分配
     TMap<EItemType, TArray<FTransform>> CachedTransformsByType;
+    
+    TMap<EBuildingType, FStaticMeshInstanceVisualizationDescHandle> CachedBuildingMeshDesc;
 
     // Transform 同步累计时间（~30fps）
     float SyncAccum = 0.f;
