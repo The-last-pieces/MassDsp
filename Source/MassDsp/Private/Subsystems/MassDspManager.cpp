@@ -512,17 +512,19 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
     return ISM;
 }
 
-void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum)
+void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, FVector CameraPos)
 {
     if (BeltEntityRegistry.IsEmpty()) return;
 
-    // ── Step 0: 缓存 Belt 指针，同时做视锥剔除（IntersectSphere），跳过视野外 Belt ─
+    const float MaxDistSq = MaxRenderDistance * MaxRenderDistance;
+
+    // ── Step 0: 双重门控：视锥剔除（平视侧面/背面）+ 距离上限（飞高时防覆盖写） ───
     TArray<FBeltHandle> ActiveBelts;
     BeltEntityRegistry.GetKeys(ActiveBelts);
     const int32 NumBelts = ActiveBelts.Num();
 
     TArray<const FBeltData*> BeltDataPtrs;
-    TArray<bool> BeltIsVisible; // true = 传送带包围球与视锥相交（需要渲染）
+    TArray<bool> BeltIsVisible;
     BeltDataPtrs.Reserve(NumBelts);
     BeltIsVisible.SetNumUninitialized(NumBelts);
 
@@ -537,8 +539,13 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
         if (BeltTrajectories.IsValidIndex(Handle.Index))
         {
             const FBeltTrajectory& Traj = BeltTrajectories[Handle.Index];
-            // IntersectSphere: 传送带包围球与视锥体相交则可见
-            bVisible = ViewFrustum.IntersectSphere(Traj.RepresentativePosition, Traj.BoundRadius);
+            // 门控 1：距离上限（MaxRenderDistance）——飞高时截断覆盖面积
+            const float DistSq = FVector::DistSquared(CameraPos, Traj.RepresentativePosition);
+            if (DistSq <= MaxDistSq)
+            {
+                // 门控 2：视锥剔除（IntersectSphere）——平视时切掉侧面/背面
+                bVisible = ViewFrustum.IntersectSphere(Traj.RepresentativePosition, Traj.BoundRadius);
+            }
         }
         BeltIsVisible[i] = bVisible;
         if (bVisible && Data) TotalVisibleItems += Data->ItemCache.Num();

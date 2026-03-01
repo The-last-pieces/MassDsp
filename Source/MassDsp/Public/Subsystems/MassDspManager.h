@@ -68,6 +68,10 @@ public:
     // Transform 同步累计时间（~30fps）
     float SyncAccum = 0.f;
 
+    // 最大渲染距离（cm）：超过此距离的传送带即使在视锥内也不渲染
+    // 解决飞高时视锥裆盖大量传送带的问题，默认 150m
+    float MaxRenderDistance = 50000.f;
+
 protected:
     UPROPERTY()
     AActor* BeltsContainerActor;
@@ -111,9 +115,9 @@ public:
 
     EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
 
-    // ISM 渲染：只把位于视锥体内（FConvexVolume）的传送带物品放入 ISM 并上传 GPU
-    // 视野外传送带完全跳过，GPU 上传量 = O(可见物品数)
-    void UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum);
+    // ISM 渲染：只把位于视锥体内且距离小于 MaxRenderDistance 的传送带物品放入 ISM
+    // 平视：视锥剔除侧面/背面；飞高：距离上限截断覆盖面积，两者互补
+    void UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, FVector CameraPos);
 
     // 新增：从蓝图类创建单个Building Entity（运行时动态创建）
     FMassEntityHandle SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,

@@ -219,6 +219,7 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
 
         // 构建当前帧视锥体（ViewProjectionMatrix → FConvexVolume）
         FConvexVolume ViewFrustum;
+        FVector CamLoc = FVector::ZeroVector;
         APlayerController* PC = GetWorld()->GetFirstPlayerController();
         ULocalPlayer* LP = PC ? PC->GetLocalPlayer() : nullptr;
         if (LP && LP->ViewportClient && LP->ViewportClient->Viewport)
@@ -228,9 +229,10 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
             {
                 GetViewFrustumBounds(ViewFrustum, ProjData.ComputeViewProjectionMatrix(),
                                      /*bUseNearPlane=*/true);
+                CamLoc = ProjData.ViewOrigin;
             }
         }
-        Manager->UpdateAllBeltItemTransforms(ViewFrustum);
+        Manager->UpdateAllBeltItemTransforms(ViewFrustum, CamLoc);
     }
 }
 
