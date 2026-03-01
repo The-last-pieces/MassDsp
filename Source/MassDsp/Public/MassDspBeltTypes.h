@@ -2,9 +2,30 @@
 
 #include "CoreMinimal.h"
 #include "Components/SplineComponent.h"
+#include "GameConst.h"
+
+#include "Containers/Deque.h"
+
 #include "MassDspBeltTypes.generated.h"
 
 struct FTransformFragment;
+
+// 传送带物品的逻辑数据，连续内存存储，不依赖 Mass Entity
+struct MASSDSP_API FBeltItemCache
+{
+    float DistanceAlongBelt = 0.0f;
+    bool bIsBlocked = false;
+    EItemType ItemType = EItemType::None;
+};
+
+// 传送带逻辑数据（替代 FBeltEntityArray）
+struct MASSDSP_API FBeltData
+{
+    // 按传送带顺序排列的物品缓存，连续内存，Cache 友好
+    TDeque<FBeltItemCache> ItemCache;
+    float BeltLength = 0.0f;
+    float BeltSpeed = 0.0f;
+};
 
 USTRUCT()
 struct MASSDSP_API FBeltHandle
@@ -49,4 +70,7 @@ struct MASSDSP_API FBeltTrajectory
     FVector GetTangentAtDistance(float Distance) const;
 
     void ApplyTransform(FTransformFragment& Transform, float Distance) const;
+
+    // 直接计算 FTransform，不依赖 FTransformFragment（供 ISM 批量更新使用）
+    void GetTransformAtDistance(float Distance, FTransform& OutTransform) const;
 };

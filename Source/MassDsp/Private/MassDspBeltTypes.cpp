@@ -37,3 +37,15 @@ void FBeltTrajectory::ApplyTransform(FTransformFragment& Transform, float Distan
     TargetTransform.SetLocation(OutPos);
     TargetTransform.SetRotation(OutTangent.Rotation().Quaternion());
 }
+
+void FBeltTrajectory::GetTransformAtDistance(float Distance, FTransform& OutTransform) const
+{
+    FVector OutPos = GetLocationAtDistance(Distance);
+    FVector OutTangent = GetTangentAtDistance(Distance);
+
+    OutPos.Z += FGameConst::ZOffset;
+
+    OutTransform.SetLocation(OutPos);
+    OutTransform.SetRotation(OutTangent.Rotation().Quaternion());
+    OutTransform.SetScale3D(FVector(1, 1, 0.2));
+}

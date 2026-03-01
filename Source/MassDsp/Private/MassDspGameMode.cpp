@@ -122,6 +122,8 @@ void AMassDspGameMode::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
+    ProcessConveyor(DeltaTime);
+
     // 记录帧时间
     FrameTimeHistory.Add(DeltaTime);
     if (FrameTimeHistory.Num() > MaxHistorySize)
@@ -150,6 +152,69 @@ void AMassDspGameMode::Tick(float DeltaTime)
             true,
             FVector2D(1.5f, 1.5f)
         );
+    }
+}
+
+void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
+{
+    UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
+    if (!Manager || Manager->BeltEntityRegistry.IsEmpty()) return;
+
+    // --- Step 1: 缓存所有 Belt 指针，避免 ParallelFor 里访问 TMap ---
+    TArray<FBeltHandle> ActiveBelts;
+    Manager->BeltEntityRegistry.GetKeys(ActiveBelts);
+
+    TArray<FBeltData*> BeltDataPtrs;
+    BeltDataPtrs.Reserve(ActiveBelts.Num());
+    for (const FBeltHandle& Handle : ActiveBelts)
+    {
+        BeltDataPtrs.Add(Manager->BeltEntityRegistry.Find(Handle));
+    }
+
+    // --- Step 2: 并行更新各传送带物品位置（纯连续 TArray，无随机内存访问）---
+    //for (int BeltIdx = 0; BeltIdx < BeltDataPtrs.Num(); BeltIdx++)
+    ParallelFor(BeltDataPtrs.Num(), [&](int BeltIdx)
+    {
+        FBeltData* BeltData = BeltDataPtrs[BeltIdx];
+        if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
+
+        const FBeltHandle& Handle = ActiveBelts[BeltIdx];
+        if (!Manager->BeltTrajectories.IsValidIndex(Handle.Index)) return;
+
+        const float BeltLength = BeltData->BeltLength;
+
+        const float Speed = BeltData->BeltSpeed;
+
+        // 末端阻挡位：最后一个物品不能超过传送带末端
+        float LastItemTail = BeltLength - FGameConst::HalfLength;
+
+        // 同一 Belt 内必须顺序遍历（前驱物品决定后驱物品的上限）
+        for (FBeltItemCache& Item : BeltData->ItemCache)
+        {
+            if (float Desired = Item.DistanceAlongBelt + Speed * DeltaTime; Desired > LastItemTail)
+            {
+                Item.DistanceAlongBelt = LastItemTail;
+                Item.bIsBlocked = true;
+            }
+            else
+            {
+                Item.DistanceAlongBelt = Desired;
+                Item.bIsBlocked = false;
+            }
+
+            LastItemTail = Item.DistanceAlongBelt
+                - FGameConst::HalfLength * 2.f
+                - FGameConst::MinSpacing;
+        }
+    });
+
+    // --- Step 3: 降频至 ~30fps 同步 Transform 到 ISM（肉眼无感）---
+    Manager->SyncAccum += DeltaTime;
+    if (Manager->SyncAccum >= 1.0f / 30)
+    {
+        Manager->SyncAccum = 0.f;
+        // TODO 这里物体多了帧率就炸了,需要优化(比如远处的不更新或者降频)
+        Manager->UpdateAllBeltItemTransforms();
     }
 }
 

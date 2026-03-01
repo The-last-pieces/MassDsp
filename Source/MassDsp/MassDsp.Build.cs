@@ -27,10 +27,11 @@ public class MassDsp : ModuleRules
             "MassActors",
             "MassSmartObjects",
             "MassSpawner",
+            "ProceduralMeshComponent",
         ]);
 
         PrivateDependencyModuleNames.AddRange([
-            "MassMovement", "ProceduralMeshComponent", // "CableComponent",
+            "MassMovement",
         ]);
 
         if (Target.bBuildEditor)

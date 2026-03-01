@@ -14,6 +14,7 @@ UMassDspBuildingProcessor::UMassDspBuildingProcessor()
 {
     // 设置处理器执行顺序
     ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::SyncWorldToMass;
+    bRequiresGameThreadExecution = true;
 }
 
 void UMassDspBuildingProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
@@ -92,7 +93,7 @@ void UMassDspBuildingProcessor::ProcessSlots(FMassDspBuildingSlotsFragment& Slot
 
         if (!Slot.CheckCooldown(DeltaTime)) continue;
 
-        if (DspManager->ProvideItemToBelt(Context.Defer(), Slot.ConnectedLaneHandle, [&Fragment,Idx]()
+        if (DspManager->ProvideItemToBelt(Slot.ConnectedLaneHandle, [&Fragment,Idx]()
         {
             return Fragment.TryProvideItemToSlot(Idx);
         }))
@@ -119,7 +120,7 @@ void UMassDspBuildingProcessor::ProcessSlots(FMassDspBuildingSlotsFragment& Slot
 
         if (!Slot.CheckCooldown(DeltaTime)) continue;
 
-        if (DspManager->ConsumeItemFromBelt(Context.Defer(), Slot.ConnectedLaneHandle, [&Fragment](auto ItemType)
+        if (DspManager->ConsumeItemFromBelt(Slot.ConnectedLaneHandle, [&Fragment](auto ItemType)
         {
             return Fragment.TryConsumeItemFromSlot(ItemType);
         }) != EItemType::None)

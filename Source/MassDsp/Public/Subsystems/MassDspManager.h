@@ -6,22 +6,17 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "MassEntityTemplate.h"
 #include "MassDspBeltTypes.h"
+#include "ProceduralMeshComponent.h"
 
-#include "Containers/Deque.h"
 #include "Containers/SparseArray.h"
+#include "Components/InstancedStaticMeshComponent.h"
 
 #include "MassDspManager.generated.h"
 
-struct FProcMeshTangent;
 class UProceduralMeshComponent;
 class AMassDspGameMode;
 class AMassDspBuilding;
 class UMassEntityConfigAsset;
-
-struct FBeltEntityArray
-{
-    TDeque<FMassEntityHandle> Entities;
-};
 
 // Building实体生成数据
 USTRUCT(BlueprintType)
@@ -56,11 +51,21 @@ protected:
     virtual void Deinitialize() override;
 
 public:
-    TMap<FBeltHandle, FBeltEntityArray> BeltEntityRegistry;
+    TMap<FBeltHandle, FBeltData> BeltEntityRegistry;
 
     TSparseArray<FBeltTrajectory> BeltTrajectories;
 
     TWeakObjectPtr<AMassDspGameMode> GameMode;
+
+    // ISM 物品渲染池，按物品类型分组，一种物品一个 ISM 组件
+    UPROPERTY()
+    TMap<EItemType, UInstancedStaticMeshComponent*> ItemISMPool;
+
+    // 每帧（降频）重建的 Transform 缓存，避免堆分配
+    TMap<EItemType, TArray<FTransform>> CachedTransformsByType;
+
+    // 降频累计时间（~30fps 更新 Transform）
+    float SyncAccum = 0.f;
 
 protected:
     UPROPERTY()
@@ -101,9 +106,12 @@ public:
 
     void FlushBeltMesh(UMaterialInterface* Material) const;
 
-    bool ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
+    bool ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
 
-    EItemType ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
+    EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
+
+    // ISM 渲染：按物品类型分池，每帧（降频至~30fps）批量更新 Transform，绕开 Mass 渲染层
+    void UpdateAllBeltItemTransforms();
 
     // 新增：从蓝图类创建单个Building Entity（运行时动态创建）
     FMassEntityHandle SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,
@@ -115,6 +123,9 @@ public:
 private:
     // 内部辅助方法：创建Building Entity的核心逻辑
     FMassEntityHandle CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData);
+
+    // 按需懒创建指定物品类型的 ISM 组件
+    UInstancedStaticMeshComponent* GetOrCreateIsmForItemType(EItemType ItemType);
 
     // 新增：合并缓存
     struct FMergedBeltMeshData

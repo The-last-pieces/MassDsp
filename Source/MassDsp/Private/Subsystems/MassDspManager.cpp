@@ -17,6 +17,7 @@
 
 #include "ProceduralMeshComponent.h"
 #include "Components/SplineComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 
 void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -87,6 +88,11 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
     FBeltHandle NewHandle;
     NewHandle.Index = Index;
     NewHandle.Generation = 0; // TODO Implement generation check if needed
+
+    // 预登记传送带数据（后续 ProvideItemToBelt 用）
+    FBeltData& BeltData = BeltEntityRegistry.Add(NewHandle);
+    BeltData.BeltLength = NewTrajectory.TotalLength;
+    BeltData.BeltSpeed = NewTrajectory.Speed;
 
     // TODO 大规模测试时性能有很大问题
     if (Material)
@@ -419,97 +425,143 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     return BeltHandle;
 }
 
-bool UMassDspManager::ProvideItemToBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc)
+bool UMassDspManager::ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc)
 {
-    TryGetGameMode();
-    if (!GameMode.IsValid()) return false;
     if (!BeltHandle.IsValid()) return false;
 
-    auto ItemConfig = GameMode->BeltItemConfigAsset;
-    if (!ItemConfig) return false;
-
-    UWorld* World = GetWorld();
-    UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
-
-    // 检查这条车道的最后一个物品是否还在附近
-    if (auto Items = BeltEntityRegistry.Find(BeltHandle); Items && !Items->Entities.IsEmpty())
+    // 检查入口是否有空间（最新的物品是数组末尾）
+    if (const FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle))
     {
-        if (const FBeltItemFragment* Item = MassSubsystem->GetEntityManager().GetFragmentDataPtr<FBeltItemFragment>(Items->Entities.Last());
-            Item && Item->DistanceAlongBelt <= FGameConst::HalfLength * 3 + FGameConst::MinSpacing)
+        if (!BeltData->ItemCache.IsEmpty())
         {
-            return false;
+            if (BeltData->ItemCache.Last().DistanceAlongBelt <= FGameConst::HalfLength * 3 + FGameConst::MinSpacing)
+                return false;
         }
     }
 
-    EItemType ItemType = GetItemFunc();
-
+    const EItemType ItemType = GetItemFunc();
     if (ItemType == EItemType::None) return false;
 
-    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, World, ItemConfig, BeltHandle, ItemType](FMassEntityManager& InEntityManager)
+    FBeltData& BeltData = BeltEntityRegistry.FindOrAdd(BeltHandle);
+
+    // 如果还没有初始化传送带参数，从轨迹同步
+    if (BeltData.BeltLength <= 0.f && BeltTrajectories.IsValidIndex(BeltHandle.Index))
     {
-        if (!BeltTrajectories.IsValidIndex(BeltHandle.Index)) return;
+        const FBeltTrajectory& Belt = BeltTrajectories[BeltHandle.Index];
+        BeltData.BeltLength = Belt.TotalLength;
+        BeltData.BeltSpeed = Belt.Speed;
+    }
 
-        const FBeltTrajectory& Trajectory = BeltTrajectories[BeltHandle.Index];
-
-        const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*World);
-
-        FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
-        Composition.Add<FBeltItemFragment>();
-
-        FMassArchetypeHandle CustomArchetype = InEntityManager.CreateArchetype(Composition);
-
-        auto Entity = InEntityManager.CreateEntity(CustomArchetype, EntityTemplate.GetSharedFragmentValues());
-        InEntityManager.SetEntityFragmentValues(Entity, EntityTemplate.GetInitialFragmentValues());
-
-        if (FMassRepresentationFragment* RepFrag = InEntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(Entity))
-        {
-            if (const FItemConfigData* ItemConfigData = GameMode->GameConfig->GetItemConfig(ItemType))
-            {
-                RepFrag->StaticMeshDescHandle = ItemConfigData->GetOrCreateMeshHandle(World);
-                RepFrag->CurrentRepresentation = EMassRepresentationType::StaticMeshInstance;
-                RepFrag->PrevRepresentation = EMassRepresentationType::None;
-            }
-        }
-
-        constexpr float InitialDistance = FGameConst::HalfLength;
-
-        FBeltItemFragment& Item = InEntityManager.GetFragmentDataChecked<FBeltItemFragment>(Entity);
-
-        Item.DistanceAlongBelt = InitialDistance;
-        Item.BeltHandle = BeltHandle;
-        Item.ItemType = ItemType;
-        Item.bIsBlocked = false;
-
-        FTransformFragment& TransformFrag = InEntityManager.GetFragmentDataChecked<FTransformFragment>(Entity);
-        Trajectory.ApplyTransform(TransformFrag, InitialDistance);
-
-        BeltEntityRegistry.FindOrAdd(BeltHandle).Entities.EmplaceLast(Entity);
-    });
+    FBeltItemCache NewItem;
+    NewItem.DistanceAlongBelt = FGameConst::HalfLength;
+    NewItem.ItemType = ItemType;
+    NewItem.bIsBlocked = false;
+    BeltData.ItemCache.PushLast(NewItem);
 
     return true;
 }
 
-EItemType UMassDspManager::ConsumeItemFromBelt(FMassCommandBuffer& CommandBuffer, FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc)
+EItemType UMassDspManager::ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc)
 {
-    // 检查注册表
-    if (FBeltEntityArray* BeltItems = BeltEntityRegistry.Find(BeltHandle))
+    FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle);
+    if (!BeltData || BeltData->ItemCache.IsEmpty()) return EItemType::None;
+
+    // 第一个物品是最老的（最靠近末端）
+    FBeltItemCache& FirstItem = BeltData->ItemCache[0];
+    if (FirstItem.bIsBlocked && ValidateItemFunc(FirstItem.ItemType))
     {
-        auto& Entities = BeltItems->Entities;
-        if (Entities.IsEmpty()) return EItemType::None;
+        const EItemType ConsumedType = FirstItem.ItemType;
+        BeltData->ItemCache.PopFirst();
+        return ConsumedType;
+    }
 
-        UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
-        FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    return EItemType::None;
+}
 
-        FMassEntityHandle Entity = Entities.First();
+// ===== ISM 物品渲染池 =====
 
-        if (FBeltItemFragment& ItemFrag = EntityManager.GetFragmentDataChecked<FBeltItemFragment>(Entity); ItemFrag.bIsBlocked && ValidateItemFunc(ItemFrag.ItemType))
+UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemType ItemType)
+{
+    if (UInstancedStaticMeshComponent** Found = ItemISMPool.Find(ItemType))
+        return *Found;
+
+    TryGetGameMode();
+    if (!GameMode.IsValid() || !BeltsContainerActor) return nullptr;
+    if (!GameMode->GameConfig) return nullptr;
+
+    const FItemConfigData* ConfigData = GameMode->GameConfig->GetItemConfig(ItemType);
+    if (!ConfigData || !ConfigData->Mesh) return nullptr;
+
+    UInstancedStaticMeshComponent* ISM = NewObject<UInstancedStaticMeshComponent>(BeltsContainerActor);
+    ISM->SetupAttachment(BeltsContainerActor->GetRootComponent());
+    ISM->SetStaticMesh(ConfigData->Mesh);
+    if (ConfigData->Material)
+    {
+        ISM->SetMaterial(0, ConfigData->Material);
+    }
+    ISM->SetCastShadow(false);
+    ISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    ISM->RegisterComponent();
+
+    ItemISMPool.Add(ItemType, ISM);
+    return ISM;
+}
+
+// TODO 支持LOD
+void UMassDspManager::UpdateAllBeltItemTransforms()
+{
+    // Step 1: Reset per-type transform 缓存（不释放内存）
+    for (auto& [Type, Arr] : CachedTransformsByType)
+        Arr.Reset();
+
+    // Step 2: 遍历所有 Belt 的 ItemCache（连续内存，Cache 友好）
+    for (auto& [Handle, BeltData] : BeltEntityRegistry)
+    {
+        if (!BeltTrajectories.IsValidIndex(Handle.Index)) continue;
+        const FBeltTrajectory& Trajectory = BeltTrajectories[Handle.Index];
+        if (!Trajectory.IsValid()) continue;
+
+        for (const FBeltItemCache& Cache : BeltData.ItemCache)
         {
-            CommandBuffer.DestroyEntity(Entity);
-            Entities.PopFirst();
-            return ItemFrag.ItemType;
+            if (Cache.ItemType == EItemType::None) continue;
+            FTransform T;
+            Trajectory.GetTransformAtDistance(Cache.DistanceAlongBelt, T);
+            CachedTransformsByType.FindOrAdd(Cache.ItemType).Add(T);
         }
     }
-    return EItemType::None;
+
+    // Step 3: 每种物品类型一次 BatchUpdate = 1 个 DrawCall
+    for (auto& [Type, Transforms] : CachedTransformsByType)
+    {
+        UInstancedStaticMeshComponent* ISM = GetOrCreateIsmForItemType(Type);
+        if (!ISM) continue;
+
+        const int32 NewCount = Transforms.Num();
+        const int32 OldCount = ISM->GetInstanceCount();
+
+        if (NewCount > OldCount)
+        {
+            // 扩容：追加新 Instance（先隐藏）
+            const FTransform HiddenTransform(FVector(0.f, 0.f, -99999.f));
+            for (int32 i = OldCount; i < NewCount; ++i)
+                ISM->AddInstance(HiddenTransform, false);
+        }
+        else if (NewCount < OldCount)
+        {
+            // 缩容：移除多余 Instance
+            TArray<int32> ToRemove;
+            ToRemove.Reserve(OldCount - NewCount);
+            for (int32 i = NewCount; i < OldCount; ++i)
+                ToRemove.Add(i);
+            ISM->RemoveInstances(ToRemove);
+        }
+
+        if (NewCount > 0)
+        {
+            // 一次 BatchUpdate 刷新全部 Transform，bTeleport=true 跳过插值
+            ISM->BatchUpdateInstancesTransforms(0, Transforms, false, true, true);
+        }
+    }
 }
 
 // ===== 新增：Building Entity批量创建系统 =====

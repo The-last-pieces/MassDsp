@@ -22,6 +22,8 @@ protected:
     virtual void BeginPlay() override;
 
     virtual void Tick(float DeltaTime) override;
+    
+    void ProcessConveyor(float DeltaTime) const;
 
 private:
     // 帧率统计
