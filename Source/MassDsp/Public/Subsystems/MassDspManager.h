@@ -58,14 +58,19 @@ public:
     TWeakObjectPtr<AMassDspGameMode> GameMode;
 
     // ISM 物品渲染池，按物品类型分组，一种物品一个 ISM 组件
+    // 注意：只存储近处物品（距离 < NearDistanceThreshold），远处物品不放入 ISM
     UPROPERTY()
     TMap<EItemType, UInstancedStaticMeshComponent*> ItemISMPool;
 
-    // 每帧（降频）重建的 Transform 缓存，避免堆分配
+    // 每帧（降频）重建的 Transform 缓存（仅近处物品），避免堆分配
     TMap<EItemType, TArray<FTransform>> CachedTransformsByType;
 
-    // 降频累计时间（~30fps 更新 Transform）
+    // Transform 同步累计时间（~30fps）
     float SyncAccum = 0.f;
+
+    // 摄像机距离阈值（cm）：超过此距离的传送带物品不放入 ISM，也不上传 GPU
+    // 远处物品肉眼不可见（80m 外为点），彻底省去 GPU 上传开销
+    float NearDistanceThreshold = 8000.f;
 
 protected:
     UPROPERTY()
@@ -110,8 +115,9 @@ public:
 
     EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
 
-    // ISM 渲染：按物品类型分池，每帧（降频至~30fps）批量更新 Transform，绕开 Mass 渲染层
-    void UpdateAllBeltItemTransforms();
+    // ISM 渲染：只把近处（< NearDistanceThreshold）物品放入 ISM 并上传 GPU
+    // 远处物品完全不渲染（80m 外肉眼不可见），GPU 上传量 = O(近处物品数)
+    void UpdateAllBeltItemTransforms(FVector CameraPos);
 
     // 新增：从蓝图类创建单个Building Entity（运行时动态创建）
     FMassEntityHandle SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,

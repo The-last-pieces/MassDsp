@@ -208,13 +208,18 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
         }
     });
 
-    // --- Step 3: 降频至 ~30fps 同步 Transform 到 ISM（肉眼无感）---
+    // --- Step 3: ~30fps 同步近处物品 Transform 到 ISM ---
+    // 远处物品（> NearDistanceThreshold）完全不放入 ISM，GPU 上传量 = O(近处物品数)
+    APlayerController* PC = GetWorld()->GetFirstPlayerController();
+    const FVector CamLoc = (PC && PC->GetViewTarget())
+                               ? PC->GetViewTarget()->GetActorLocation()
+                               : FVector::ZeroVector;
+
     Manager->SyncAccum += DeltaTime;
-    if (Manager->SyncAccum >= 1.0f / 30)
+    if (Manager->SyncAccum >= 1.0f / 30.0f)
     {
         Manager->SyncAccum = 0.f;
-        // TODO 这里物体多了帧率就炸了,需要优化(比如远处的不更新或者降频)
-        Manager->UpdateAllBeltItemTransforms();
+        Manager->UpdateAllBeltItemTransforms(CamLoc);
     }
 }
 

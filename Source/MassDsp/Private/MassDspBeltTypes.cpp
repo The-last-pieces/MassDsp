@@ -60,6 +60,9 @@ void FBeltTrajectory::BakeLUT(float Step)
         LUT[i].Position = Pos;
         LUT[i].Rotation  = FQuat(Tangent.Rotation());
     }
+
+    // 取 LUT 中点作为本条传送带的代表位置，供摄像机距离剔除使用
+    RepresentativePosition = LUT[NumSamples / 2].Position;
 }
 
 void FBeltTrajectory::GetTransformAtDistance(float Distance, FTransform& OutTransform) const

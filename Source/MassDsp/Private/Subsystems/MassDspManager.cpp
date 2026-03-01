@@ -506,50 +506,82 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
     }
     ISM->SetCastShadow(false);
     ISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    // 超出阈值距离后 GPU 自动剔除渲染，与 CPU 侧距离裁剪形成双层保护
+    ISM->SetCullDistances(NearDistanceThreshold * 0.8f, NearDistanceThreshold);
     ISM->RegisterComponent();
 
     ItemISMPool.Add(ItemType, ISM);
     return ISM;
 }
 
-// TODO 支持LOD
-void UMassDspManager::UpdateAllBeltItemTransforms()
+void UMassDspManager::UpdateAllBeltItemTransforms(FVector CameraPos)
 {
     if (BeltEntityRegistry.IsEmpty()) return;
 
-    // ── Step 0: 缓存所有 Belt 指针（避免 ParallelFor 中访问 TMap）────────────
+    const float NearDistSq = NearDistanceThreshold * NearDistanceThreshold;
+
+    // ── Step 0: 缓存 Belt 指针，同时做距离判断，跳过远处 Belt ─────────────────
     TArray<FBeltHandle> ActiveBelts;
     BeltEntityRegistry.GetKeys(ActiveBelts);
     const int32 NumBelts = ActiveBelts.Num();
 
     TArray<const FBeltData*> BeltDataPtrs;
+    TArray<bool> BeltIsNear;
     BeltDataPtrs.Reserve(NumBelts);
-    for (const FBeltHandle& Handle : ActiveBelts)
-        BeltDataPtrs.Add(BeltEntityRegistry.Find(Handle));
+    BeltIsNear.SetNumUninitialized(NumBelts);
 
-    // ── Step 1: 前缀和预计算每条传送带在平坦数组中的写偏移 ─────────────────
-    TArray<int32> BeltItemOffsets;
-    BeltItemOffsets.SetNumUninitialized(NumBelts);
-    int32 TotalItems = 0;
+    int32 TotalNearItems = 0;
     for (int32 i = 0; i < NumBelts; ++i)
     {
-        BeltItemOffsets[i] = TotalItems;
-        TotalItems += (BeltDataPtrs[i] ? BeltDataPtrs[i]->ItemCache.Num() : 0);
-    }
-    if (TotalItems == 0) return;
+        const FBeltHandle& Handle = ActiveBelts[i];
+        const FBeltData* Data = BeltEntityRegistry.Find(Handle);
+        BeltDataPtrs.Add(Data);
 
-    // ── Step 2: 预分配平坦输出数组（各 Belt 写入不同段，无竞争）─────────────
+        bool bNear = false;
+        if (BeltTrajectories.IsValidIndex(Handle.Index))
+        {
+            const float DistSq = FVector::DistSquared(
+                BeltTrajectories[Handle.Index].RepresentativePosition, CameraPos);
+            bNear = (DistSq <= NearDistSq);
+        }
+        BeltIsNear[i] = bNear;
+        if (bNear && Data) TotalNearItems += Data->ItemCache.Num();
+    }
+
+    if (TotalNearItems == 0)
+    {
+        // 近处无物品：清空 ISM 实例
+        for (auto& [Type, ISM] : ItemISMPool)
+            if (ISM && ISM->GetInstanceCount() > 0)
+                ISM->ClearInstances();
+        return;
+    }
+
+    // ── Step 1: 前缀和（仅近处 Belt）────────────────────────────────────────
+    TArray<int32> BeltItemOffsets;
+    BeltItemOffsets.SetNumUninitialized(NumBelts);
+    int32 RunningOffset = 0;
+    for (int32 i = 0; i < NumBelts; ++i)
+    {
+        BeltItemOffsets[i] = RunningOffset;
+        if (BeltIsNear[i] && BeltDataPtrs[i])
+            RunningOffset += BeltDataPtrs[i]->ItemCache.Num();
+    }
+
+    // ── Step 2: 预分配平坦输出数组（仅近处物品，无远处开销）──────────────────
     struct FItemEntry
     {
         EItemType Type;
         FTransform T;
     };
     TArray<FItemEntry> FlatEntries;
-    FlatEntries.SetNumUninitialized(TotalItems);
+    FlatEntries.SetNumUninitialized(TotalNearItems);
 
-    // ── Step 3: ParallelFor 并行查表（LUT 是纯数据，线程安全）────────────────
+    // ── Step 3: ParallelFor 并行查 LUT（仅近处 Belt，零远处开销）──────────────
     ParallelFor(NumBelts, [&](int32 BeltIdx)
     {
+        if (!BeltIsNear[BeltIdx]) return; // 远处：完全跳过，零开销
+
         const FBeltData* BeltData = BeltDataPtrs[BeltIdx];
         if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
 
@@ -569,17 +601,15 @@ void UMassDspManager::UpdateAllBeltItemTransforms()
         }
     });
 
-    // ── Step 4: 单线程 Bucket Sort，归并到按类型分组的缓存 ──────────────────
+    // ── Step 4: Bucket Sort ──────────────────────────────────────────────────
     for (auto& [Type, Arr] : CachedTransformsByType)
         Arr.Reset();
 
     for (const FItemEntry& Entry : FlatEntries)
-    {
         if (Entry.Type != EItemType::None)
             CachedTransformsByType.FindOrAdd(Entry.Type).Add(Entry.T);
-    }
 
-    // ── Step 5: 每种物品类型 1 次 BatchUpdate = 1 个 DrawCall ────────────────
+    // ── Step 5: 每种物品类型 1 次 BatchUpdate，数据量 = 近处物品数 ────────────
     for (auto& [Type, Transforms] : CachedTransformsByType)
     {
         UInstancedStaticMeshComponent* ISM = GetOrCreateIsmForItemType(Type);
@@ -605,11 +635,13 @@ void UMassDspManager::UpdateAllBeltItemTransforms()
         }
 
         if (NewCount > 0)
-        {
-            // bTeleport=true：跳过物理插值，直接刷新 GPU buffer
             ISM->BatchUpdateInstancesTransforms(0, Transforms, false, true, true);
-        }
     }
+
+    // 清理本帧不再需要实例的 ISM 类型（物品耗尽时）
+    for (auto& [Type, ISM] : ItemISMPool)
+        if (ISM && !CachedTransformsByType.Contains(Type) && ISM->GetInstanceCount() > 0)
+            ISM->ClearInstances();
 }
 
 // ===== 新增：Building Entity批量创建系统 =====
