@@ -61,8 +61,13 @@ void FBeltTrajectory::BakeLUT(float Step)
         LUT[i].Rotation  = FQuat(Tangent.Rotation());
     }
 
-    // 取 LUT 中点作为本条传送带的代表位置，供摄像机距离剔除使用
+    // 取 LUT 中点作为代表位置，并计算包围球半径（所有采样点到中点的最大距离）
     RepresentativePosition = LUT[NumSamples / 2].Position;
+    BoundRadius = 0.f;
+    for (const FBeltLUTSample& Sample : LUT)
+        BoundRadius = FMath::Max(BoundRadius, FVector::Dist(RepresentativePosition, Sample.Position));
+    // 额外加一点裕量，避免边界处物品闪烁
+    BoundRadius += 200.f;
 }
 
 void FBeltTrajectory::GetTransformAtDistance(float Distance, FTransform& OutTransform) const

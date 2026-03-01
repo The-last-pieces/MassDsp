@@ -7,6 +7,8 @@
 #include "Actors/MassDspAssembler.h"
 
 #include "Misc/CoreDelegates.h"
+#include "Engine/LocalPlayer.h"
+#include "SceneManagement.h"
 
 AMassDspGameMode::AMassDspGameMode()
 {
@@ -208,18 +210,27 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
         }
     });
 
-    // --- Step 3: ~30fps 同步近处物品 Transform 到 ISM ---
-    // 远处物品（> NearDistanceThreshold）完全不放入 ISM，GPU 上传量 = O(近处物品数)
-    APlayerController* PC = GetWorld()->GetFirstPlayerController();
-    const FVector CamLoc = (PC && PC->GetViewTarget())
-                               ? PC->GetViewTarget()->GetActorLocation()
-                               : FVector::ZeroVector;
-
+    // --- Step 3: ~30fps 同步视锥体内物品 Transform 到 ISM ---
+    // 视野外传送带完全跳过（CPU 侧视锥剔除），GPU 上传量 = O(可见物品数)
     Manager->SyncAccum += DeltaTime;
     if (Manager->SyncAccum >= 1.0f / 30.0f)
     {
         Manager->SyncAccum = 0.f;
-        Manager->UpdateAllBeltItemTransforms(CamLoc);
+
+        // 构建当前帧视锥体（ViewProjectionMatrix → FConvexVolume）
+        FConvexVolume ViewFrustum;
+        APlayerController* PC = GetWorld()->GetFirstPlayerController();
+        ULocalPlayer* LP = PC ? PC->GetLocalPlayer() : nullptr;
+        if (LP && LP->ViewportClient && LP->ViewportClient->Viewport)
+        {
+            FSceneViewProjectionData ProjData;
+            if (LP->GetProjectionData(LP->ViewportClient->Viewport, ProjData))
+            {
+                GetViewFrustumBounds(ViewFrustum, ProjData.ComputeViewProjectionMatrix(),
+                                     /*bUseNearPlane=*/true);
+            }
+        }
+        Manager->UpdateAllBeltItemTransforms(ViewFrustum);
     }
 }
 

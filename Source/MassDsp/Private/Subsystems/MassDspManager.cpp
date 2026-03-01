@@ -506,81 +506,77 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
     }
     ISM->SetCastShadow(false);
     ISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    // 超出阈值距离后 GPU 自动剔除渲染，与 CPU 侧距离裁剪形成双层保护
-    ISM->SetCullDistances(NearDistanceThreshold * 0.8f, NearDistanceThreshold);
     ISM->RegisterComponent();
 
     ItemISMPool.Add(ItemType, ISM);
     return ISM;
 }
 
-void UMassDspManager::UpdateAllBeltItemTransforms(FVector CameraPos)
+void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum)
 {
     if (BeltEntityRegistry.IsEmpty()) return;
 
-    const float NearDistSq = NearDistanceThreshold * NearDistanceThreshold;
-
-    // ── Step 0: 缓存 Belt 指针，同时做距离判断，跳过远处 Belt ─────────────────
+    // ── Step 0: 缓存 Belt 指针，同时做视锥剔除（IntersectSphere），跳过视野外 Belt ─
     TArray<FBeltHandle> ActiveBelts;
     BeltEntityRegistry.GetKeys(ActiveBelts);
     const int32 NumBelts = ActiveBelts.Num();
 
     TArray<const FBeltData*> BeltDataPtrs;
-    TArray<bool> BeltIsNear;
+    TArray<bool> BeltIsVisible; // true = 传送带包围球与视锥相交（需要渲染）
     BeltDataPtrs.Reserve(NumBelts);
-    BeltIsNear.SetNumUninitialized(NumBelts);
+    BeltIsVisible.SetNumUninitialized(NumBelts);
 
-    int32 TotalNearItems = 0;
+    int32 TotalVisibleItems = 0;
     for (int32 i = 0; i < NumBelts; ++i)
     {
         const FBeltHandle& Handle = ActiveBelts[i];
         const FBeltData* Data = BeltEntityRegistry.Find(Handle);
         BeltDataPtrs.Add(Data);
 
-        bool bNear = false;
+        bool bVisible = false;
         if (BeltTrajectories.IsValidIndex(Handle.Index))
         {
-            const float DistSq = FVector::DistSquared(
-                BeltTrajectories[Handle.Index].RepresentativePosition, CameraPos);
-            bNear = (DistSq <= NearDistSq);
+            const FBeltTrajectory& Traj = BeltTrajectories[Handle.Index];
+            // IntersectSphere: 传送带包围球与视锥体相交则可见
+            bVisible = ViewFrustum.IntersectSphere(Traj.RepresentativePosition, Traj.BoundRadius);
         }
-        BeltIsNear[i] = bNear;
-        if (bNear && Data) TotalNearItems += Data->ItemCache.Num();
+        BeltIsVisible[i] = bVisible;
+        if (bVisible && Data) TotalVisibleItems += Data->ItemCache.Num();
     }
 
-    if (TotalNearItems == 0)
+    if (TotalVisibleItems == 0)
     {
-        // 近处无物品：清空 ISM 实例
+        // 视野内无物品：清空 ISM 实例
         for (auto& [Type, ISM] : ItemISMPool)
             if (ISM && ISM->GetInstanceCount() > 0)
                 ISM->ClearInstances();
         return;
     }
 
-    // ── Step 1: 前缀和（仅近处 Belt）────────────────────────────────────────
+    // ── Step 1: 前缀和（仅视锥内 Belt）─────────────────────────────────────
     TArray<int32> BeltItemOffsets;
     BeltItemOffsets.SetNumUninitialized(NumBelts);
     int32 RunningOffset = 0;
     for (int32 i = 0; i < NumBelts; ++i)
     {
         BeltItemOffsets[i] = RunningOffset;
-        if (BeltIsNear[i] && BeltDataPtrs[i])
+        if (BeltIsVisible[i] && BeltDataPtrs[i])
             RunningOffset += BeltDataPtrs[i]->ItemCache.Num();
     }
 
-    // ── Step 2: 预分配平坦输出数组（仅近处物品，无远处开销）──────────────────
+    // ── Step 2: 预分配平坦输出数组（仅视锥内物品）──────────────────────────
     struct FItemEntry
     {
         EItemType Type;
         FTransform T;
     };
     TArray<FItemEntry> FlatEntries;
-    FlatEntries.SetNumUninitialized(TotalNearItems);
+    FlatEntries.SetNumUninitialized(TotalVisibleItems);
 
-    // ── Step 3: ParallelFor 并行查 LUT（仅近处 Belt，零远处开销）──────────────
+    // ── Step 3: ParallelFor 并行查 LUT（仅视锥内 Belt，视野外零开销）─────────
     ParallelFor(NumBelts, [&](int32 BeltIdx)
     {
-        if (!BeltIsNear[BeltIdx]) return; // 远处：完全跳过，零开销
+        if (!BeltIsVisible[BeltIdx]) return; // 视野外：完全跳过，零开销
 
         const FBeltData* BeltData = BeltDataPtrs[BeltIdx];
         if (!BeltData || BeltData->ItemCache.IsEmpty()) return;

@@ -68,10 +68,6 @@ public:
     // Transform 同步累计时间（~30fps）
     float SyncAccum = 0.f;
 
-    // 摄像机距离阈值（cm）：超过此距离的传送带物品不放入 ISM，也不上传 GPU
-    // 远处物品肉眼不可见（80m 外为点），彻底省去 GPU 上传开销
-    float NearDistanceThreshold = 8000.f;
-
 protected:
     UPROPERTY()
     AActor* BeltsContainerActor;
@@ -115,9 +111,9 @@ public:
 
     EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
 
-    // ISM 渲染：只把近处（< NearDistanceThreshold）物品放入 ISM 并上传 GPU
-    // 远处物品完全不渲染（80m 外肉眼不可见），GPU 上传量 = O(近处物品数)
-    void UpdateAllBeltItemTransforms(FVector CameraPos);
+    // ISM 渲染：只把位于视锥体内（FConvexVolume）的传送带物品放入 ISM 并上传 GPU
+    // 视野外传送带完全跳过，GPU 上传量 = O(可见物品数)
+    void UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum);
 
     // 新增：从蓝图类创建单个Building Entity（运行时动态创建）
     FMassEntityHandle SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,

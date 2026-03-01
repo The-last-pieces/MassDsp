@@ -74,8 +74,11 @@ struct MASSDSP_API FBeltTrajectory
     TArray<FBeltLUTSample> LUT;
     float LUTStep = 50.0f; // LUT 采样间距（单位：cm），50cm 误差 < 0.5cm
 
-    /** 传送带中点世界坐标（BakeLUT 时计算），用于每帧 O(1) 摄像机距离判断 */
+    /** 传送带中点世界坐标（BakeLUT 时计算），用于每帧视锥剔除 */
     FVector RepresentativePosition = FVector::ZeroVector;
+
+    /** 围绕 RepresentativePosition 的包围球半径（BakeLUT 时计算），视锥剔除用 IntersectSphere 测试整条传送带 */
+    float BoundRadius = 0.f;
 
     /**
      * 将 SplineComponent 预烘焙为离散采样表，之后 GetTransformAtDistance 用此表插值。
