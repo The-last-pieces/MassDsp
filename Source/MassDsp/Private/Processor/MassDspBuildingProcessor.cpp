@@ -56,12 +56,13 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
 template <class TT> requires IsDspBuildFragment<TT>
 void UMassDspBuildingProcessor::ProcessBuilding(FMassEntityQuery& Query, FMassExecutionContext& Context) const
 {
-    Query.ForEachEntityChunk(Context, [this](FMassExecutionContext& InContext)
+    Query.ParallelForEachEntityChunk(Context, [this](FMassExecutionContext& InContext)
     {
         const int32 NumEntities = InContext.GetNumEntities();
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
         const TArrayView<FMassDspBuildingSlotsFragment> SlotsList = InContext.GetMutableFragmentView<FMassDspBuildingSlotsFragment>();
 
+        // TODO 考虑用并行for
         for (int32 i = 0; i < NumEntities; ++i)
         {
             TT& Building = BuildingFragments[i];

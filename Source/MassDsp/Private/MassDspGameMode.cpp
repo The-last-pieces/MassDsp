@@ -38,16 +38,17 @@ void AMassDspGameMode::BeginPlay()
 
     // 大规模创建
 
-    constexpr int N = 40;
+    // TODO 5w建筑的时候帧率跌得有点夸张,得优化下
+    constexpr int N = 100;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据
     TArray<FBuildingSpawnData> AllBuildingDataList;
     AllBuildingDataList.Reserve(N * N * BuildingsPerGroup);
 
-    for (int i = 0; i < N; ++i)
+    for (int i = -N / 2; i < N / 2; ++i)
     {
-        for (int j = 0; j < N; ++j)
+        for (int j = -N / 2; j < N / 2; ++j)
         {
             constexpr int GridSize = 4000;
             FVector SpawnLocation = FVector(i * GridSize, j * GridSize, 0);

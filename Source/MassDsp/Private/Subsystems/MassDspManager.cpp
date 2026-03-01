@@ -114,6 +114,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
             BeltProceduralMesh->SetVisibility(true);
             BeltProceduralMesh->SetCastShadow(false);
             BeltProceduralMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision); // 禁用碰撞以避免Chaos错误
+            BeltProceduralMesh->SetCullDistance(MaxRenderDistance * 2); // 设置裁剪距离
             BeltProceduralMesh->RegisterComponent();
         }
 
