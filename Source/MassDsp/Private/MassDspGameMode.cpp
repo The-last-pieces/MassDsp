@@ -126,36 +126,6 @@ void AMassDspGameMode::Tick(float DeltaTime)
     Super::Tick(DeltaTime);
 
     ProcessConveyor(DeltaTime);
-
-    // 记录帧时间
-    FrameTimeHistory.Add(DeltaTime);
-    if (FrameTimeHistory.Num() > MaxHistorySize)
-    {
-        FrameTimeHistory.RemoveAt(0);
-    }
-
-    // 定期更新统计
-    TimeSinceLastUpdate += DeltaTime;
-    if (TimeSinceLastUpdate >= StatUpdateInterval)
-    {
-        UpdateFrameStats();
-        TimeSinceLastUpdate = 0.0f;
-    }
-
-    // 显示统计信息
-    if (GEngine)
-    {
-        float CurrentFPS = 1.0f / DeltaTime;
-        GEngine->AddOnScreenDebugMessage(
-            INDEX_NONE,
-            0.0f,
-            FColor::Yellow,
-            FString::Printf(TEXT("Current: %.1f FPS | Avg: %.1f FPS | 1%% Low: %.1f FPS"),
-                            CurrentFPS, AverageFPS, OnePercentLowFPS),
-            true,
-            FVector2D(1.5f, 1.5f)
-        );
-    }
 }
 
 void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
@@ -235,29 +205,4 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
         }
         Manager->UpdateAllBeltItemTransforms(ViewFrustum, CamLoc);
     }
-}
-
-void AMassDspGameMode::UpdateFrameStats()
-{
-    if (FrameTimeHistory.Num() < 10) return;
-
-    // 计算平均FPS
-    float TotalFrameTime = 0.0f;
-    for (float FrameTime : FrameTimeHistory)
-    {
-        TotalFrameTime += FrameTime;
-    }
-    AverageFPS = FrameTimeHistory.Num() / TotalFrameTime;
-
-    // 计算1% Low FPS
-    TArray<float> SortedFrameTimes = FrameTimeHistory;
-    SortedFrameTimes.Sort([](float A, float B) { return A > B; }); // 降序排序
-
-    int32 OnePercentCount = FMath::Max(1, FMath::CeilToInt(SortedFrameTimes.Num() * 0.01f));
-    float OnePercentSum = 0.0f;
-    for (int32 i = 0; i < OnePercentCount; ++i)
-    {
-        OnePercentSum += SortedFrameTimes[i];
-    }
-    OnePercentLowFPS = OnePercentCount / OnePercentSum;
 }

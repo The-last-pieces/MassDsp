@@ -22,20 +22,8 @@ protected:
     virtual void BeginPlay() override;
 
     virtual void Tick(float DeltaTime) override;
-    
+
     void ProcessConveyor(float DeltaTime) const;
-
-private:
-    // 帧率统计
-    TArray<float> FrameTimeHistory;
-    int32 MaxHistorySize = 300; // 保留5秒数据(60fps)
-    float StatUpdateInterval = 1.0f; // 每秒更新统计
-    float TimeSinceLastUpdate = 0.0f;
-
-    float AverageFPS = 0.0f;
-    float OnePercentLowFPS = 0.0f;
-
-    void UpdateFrameStats();
 
 public:
     UPROPERTY(EditDefaultsOnly, Category = "DSP")
