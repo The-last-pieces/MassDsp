@@ -136,22 +136,20 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
     TArray<FBeltHandle> ActiveBelts;
     Manager->BeltEntityRegistry.GetKeys(ActiveBelts);
 
-    TArray<FBeltData*> BeltDataPtrs;
-    BeltDataPtrs.Reserve(ActiveBelts.Num());
+    TArray<FBeltData*> BeltDataArray;
+    BeltDataArray.Reserve(ActiveBelts.Num());
     for (const FBeltHandle& Handle : ActiveBelts)
     {
-        BeltDataPtrs.Add(Manager->BeltEntityRegistry.Find(Handle));
+        BeltDataArray.Add(Manager->BeltEntityRegistry.Find(Handle));
     }
 
     // --- Step 2: 并行更新各传送带物品位置（纯连续 TArray，无随机内存访问）---
-    //for (int BeltIdx = 0; BeltIdx < BeltDataPtrs.Num(); BeltIdx++)
-    ParallelFor(BeltDataPtrs.Num(), [&](int BeltIdx)
+    ParallelFor(BeltDataArray.Num(), [&](int BeltIdx)
     {
-        FBeltData* BeltData = BeltDataPtrs[BeltIdx];
+        FBeltData* BeltData = BeltDataArray[BeltIdx];
         if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
 
-        const FBeltHandle& Handle = ActiveBelts[BeltIdx];
-        if (!Manager->BeltTrajectories.IsValidIndex(Handle.Index)) return;
+        if (const auto& [Index, Generation] = ActiveBelts[BeltIdx]; !Manager->BeltTrajectories.IsValidIndex(Index)) return;
 
         const float BeltLength = BeltData->BeltLength;
 
@@ -183,7 +181,7 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
     // --- Step 3: ~30fps 同步视锥体内物品 Transform 到 ISM ---
     // 视野外传送带完全跳过（CPU 侧视锥剔除），GPU 上传量 = O(可见物品数)
     Manager->SyncAccum += DeltaTime;
-    if (Manager->SyncAccum >= 1.0f / 30.0f)
+    if (Manager->SyncAccum >= 1.0f / 60.0f)
     {
         Manager->SyncAccum = 0.f;
 

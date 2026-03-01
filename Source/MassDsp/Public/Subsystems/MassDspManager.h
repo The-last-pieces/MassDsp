@@ -95,6 +95,10 @@ private:
         TArray<FLinearColor> Colors; // R通道存Speed
     };
 
+    static constexpr float C_Width = 110.0f;
+    static constexpr float C_BeltThickness = 20.0f;
+    static constexpr float C_UVScale = 100.0f;
+
     /**
       * 静态生成传送带网格
       * @param OutMesh
@@ -103,12 +107,10 @@ private:
       * @param Thickness        传送带厚度
       * @param UVScale          UV平铺比例 (通常设为 100.0，即 1米重复一次)
       * @param AngleThreshold   自适应细分角度阈值 (建议 5.0 度)
-      * @param BeltSpeed
       */
     static void GenerateConveyorMesh(
         FMergedBeltMeshData& OutMesh,
         const USplineComponent* Spline,
-        float BeltSpeed,
         float Width = 200.0f,
         float Thickness = 20.0f,
         float UVScale = 100.0f,

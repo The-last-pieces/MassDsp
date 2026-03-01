@@ -125,10 +125,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
         }
 
         FMergedBeltMeshData& MeshData = PendingBeltMeshMap.FindOrAdd(BeltType);
-        constexpr float Width = 110.0f;
-        constexpr float BeltThickness = 20.0f;
-        constexpr float UVScale = 100.0f;
-        GenerateConveyorMesh(MeshData, NewSpline, BeltSpeed, Width, BeltThickness, UVScale, 5.0f);
+        GenerateConveyorMesh(MeshData, NewSpline, C_Width, C_BeltThickness, C_UVScale, 5.0f);
     }
 
     return NewHandle;
@@ -144,11 +141,9 @@ struct FConveyorSlice
     float Distance;
 };
 
-// TODO 通过枚举管理传送带类型，支持不同的材质实例
 void UMassDspManager::GenerateConveyorMesh(
     FMergedBeltMeshData& OutMesh,
     const USplineComponent* Spline,
-    float BeltSpeed,
     float Width,
     float Thickness,
     float UVScale,
@@ -223,10 +218,6 @@ void UMassDspManager::GenerateConveyorMesh(
     const float HalfWidth = Width * 0.5f;
     const float HalfThick = Thickness * 0.5f;
 
-    // Speed编码到顶点色R通道
-    FLinearColor TopColor(BeltSpeed / 1000.f, 0, 0, 1);
-    FLinearColor SideColor(0, 0, 0, 1);
-
     auto AddQuad = [&](int32 V0, int32 V1, int32 V2, int32 V3)
     {
         OutMesh.Triangles.Add(IndexOffset + V0);
@@ -254,8 +245,8 @@ void UMassDspManager::GenerateConveyorMesh(
         OutMesh.UVs.Add(FVector2D(1.0f, Distance / UVScale));
         OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
         OutMesh.Tangents.Add(FProcMeshTangent(Tangent, false));
-        OutMesh.Colors.Add(TopColor);
-        OutMesh.Colors.Add(TopColor);
+        OutMesh.Colors.Add(FLinearColor::White);
+        OutMesh.Colors.Add(FLinearColor::White);
     }
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
@@ -277,8 +268,8 @@ void UMassDspManager::GenerateConveyorMesh(
         OutMesh.UVs.Add(FVector2D(1.0f, Slice.Distance / UVScale));
         OutMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
         OutMesh.Tangents.Add(FProcMeshTangent(Slice.Tangent, false));
-        OutMesh.Colors.Add(SideColor);
-        OutMesh.Colors.Add(SideColor);
+        OutMesh.Colors.Add(FLinearColor::White);
+        OutMesh.Colors.Add(FLinearColor::White);
     }
     for (int32 i = 0; i < NumSlices - 1; i++)
     {
@@ -772,17 +763,11 @@ void UMassDspManager::FlushBeltMesh()
             {
                 if (Config->Material)
                 {
-                    // 公式推导:
-                    // 材质相位变化率 = Time * MatSpeed
-                    // 空间相位变化率 = (Dist / UVScale) * Tiling
-                    // => MatSpeed = PhysicalSpeed * Tiling / UVScale
-                    constexpr float UVScale = 100.0f;
+                    // Speed 参数单位：UV/s = BeltSpeed(cm/s) / UVScale(100cm)
+                    // ArrowColor 对应 BeltType 配置中的 Color
                     UMaterialInstanceDynamic* DynMat = UMaterialInstanceDynamic::Create(Config->Material, this);
-                    float MatTiling = 5.0f;
-                    DynMat->GetScalarParameterValue(TEXT("Tiling"), MatTiling);
-                    DynMat->SetVectorParameterValue(TEXT("BaseColor"), Config->Color);
-                    // DynMat->SetScalarParameterValue(TEXT("Tiling"), MatTiling);
-                    DynMat->SetScalarParameterValue(TEXT("Speed"), Config->Speed * MatTiling / UVScale);
+                    DynMat->SetVectorParameterValue(TEXT("ArrowColor"), Config->Color);
+                    DynMat->SetScalarParameterValue(TEXT("Speed"), Config->Speed / C_UVScale);
                     BeltProceduralMesh->SetMaterial(SectionIdx, DynMat);
                 }
             }
