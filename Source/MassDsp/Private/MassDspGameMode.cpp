@@ -6,9 +6,7 @@
 #include "Actors/MassDspStorage.h"
 #include "Actors/MassDspAssembler.h"
 
-#include "Misc/CoreDelegates.h"
 #include "Engine/LocalPlayer.h"
-#include "SceneManagement.h"
 
 AMassDspGameMode::AMassDspGameMode()
 {
@@ -50,7 +48,7 @@ void AMassDspGameMode::BeginPlay()
     {
         for (int j = -N / 2; j < N / 2; ++j)
         {
-            constexpr int GridSize = 4000;
+            constexpr int GridSize = 2800;
             FVector SpawnLocation = FVector(i * GridSize, j * GridSize, 0);
 
             // 3个矿机
