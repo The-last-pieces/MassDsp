@@ -1,5 +1,7 @@
 ﻿#include "Tools/MaterialGeneratorUtils.h"
 
+#if WITH_EDITOR
+
 // 核心依赖
 #include "Materials/Material.h"
 #include "Factories/MaterialFactoryNew.h"
@@ -27,6 +29,8 @@
 #include "Materials/MaterialExpressionDivide.h"
 #include "Materials/MaterialExpressionClamp.h"
 #include "Materials/MaterialExpressionPower.h"
+
+#endif
 
 // TODO 先把抗锯齿从TSR改成TAA临时处理下材质残影问题,后续考虑在材质中设置像素速度解决
 void UMaterialGeneratorUtils::CreateConveyorMaterial()
