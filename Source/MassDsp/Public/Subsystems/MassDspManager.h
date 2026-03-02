@@ -182,14 +182,15 @@ public:
      * - 第 1 次调用：选中最近的 Output 槽作为起点
      * - 第 2 次调用：选中最近的 Input 槽作为终点，返回 true（两端锁定，可确认）
      */
-    bool SelectBeltSlot(FVector WorldPos);
+    bool SelectBeltSlot(const FVector& WorldPos);
 
     /**
      * 已有起点时，每帧将预览终点刷新到 EndWorldPos（鼠标跟随）
+     * @param EndWorldPos
      * @param EndSlotRotation  终点槽口的世界旋转（吸附到槽口时传入；无吸附时使用默认值）
      * @param EndSlotExtend    终点槽口的延伸距离（cm）；0 表示无吸附，自动推算方向
      */
-    void UpdateBeltPreviewEndPoint(FVector EndWorldPos, FQuat EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);
+    void UpdateBeltPreviewEndPoint(const FVector& EndWorldPos, const FQuat& EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);
 
     /** 确认创建传送带；返回 FBeltHandle，并清除预览 */
     FBeltHandle ConfirmPreviewBelt();
@@ -203,7 +204,9 @@ public:
     void CancelAnyPreview();
 
     /** 传送带最大允许长度（cm），超出时预览变红且无法确认 */
-    static constexpr float MaxBeltLength = 100000.f;
+    static constexpr float MaxBeltLength = 20000.f;
+
+    static constexpr float MinBeltLength = 300.f;
 
     /** 显示附近槽口高亮时使用的搜索半径（cm） */
     static constexpr float SlotHighlightRadius = 5000.f;
@@ -302,7 +305,7 @@ private:
     static void BuildBeltSplineFromPoints(USplineComponent* Spline, FVector A, FVector B, FVector C, FVector D);
 
     /** 使用 PreviewSpline + GenerateConveyorMesh 重建预览传送带网格 */
-    void RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);
+    void RebuildPreviewBeltMesh(const FVector& EndWorldPos, const FQuat& EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);
 
     /** 清除预览传送带网格（不销毁组件）*/
     void ClearPreviewBeltMesh() const;

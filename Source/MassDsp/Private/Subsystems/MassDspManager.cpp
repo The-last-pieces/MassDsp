@@ -1057,8 +1057,7 @@ void UMassDspManager::BeginPreviewBuilding(EBuildingType BuildingType, const FTr
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     SpawnParams.ObjectFlags |= RF_Transient;
 
-    AActor* Ghost = World->SpawnActor<AActor>(AActor::StaticClass(), InitialTransform, SpawnParams);
-    if (Ghost)
+    if (AActor* Ghost = World->SpawnActor<AActor>(AActor::StaticClass(), InitialTransform, SpawnParams))
     {
         UStaticMeshComponent* SMC = NewObject<UStaticMeshComponent>(Ghost, TEXT("GhostMesh"));
         Ghost->SetRootComponent(SMC);
@@ -1145,7 +1144,7 @@ void UMassDspManager::BeginPreviewBelt(EBeltType BeltType)
     CurrentPlaceMode = EBuildPlaceMode::Belt;
 }
 
-bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
+bool UMassDspManager::SelectBeltSlot(const FVector& WorldPos)
 {
     constexpr float SnapRadius = 200.f;
 
@@ -1198,14 +1197,6 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
             return false;
         }
 
-        // 距离超限拒绝确认
-        const float BeltDist = FVector::Dist(BeltStartSlotLocation, FoundSlotLoc);
-        if (BeltDist > MaxBeltLength)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("SelectBeltSlot: 传送带距离 %.0fcm 超出最大限制 %.0fcm"), BeltDist, MaxBeltLength);
-            return false;
-        }
-
         BeltEndEntity = FoundEntity;
         BeltEndSlotIndex = FoundSlotIndex;
 
@@ -1217,7 +1208,7 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
     }
 }
 
-void UMassDspManager::UpdateBeltPreviewEndPoint(FVector EndWorldPos, FQuat EndSlotRotation, float EndSlotExtend)
+void UMassDspManager::UpdateBeltPreviewEndPoint(const FVector& EndWorldPos, const FQuat& EndSlotRotation, float EndSlotExtend)
 {
     if (!bBeltHasStart) return;
     RebuildPreviewBeltMesh(EndWorldPos, EndSlotRotation, EndSlotExtend);
@@ -1271,7 +1262,7 @@ void UMassDspManager::CancelAnyPreview()
 
 // ──── 预览传送带网格重建（通用接口：复用 GenerateConveyorMesh）────
 
-void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotRotation, float EndSlotExtend)
+void UMassDspManager::RebuildPreviewBeltMesh(const FVector& EndWorldPos, const FQuat& EndSlotRotation, float EndSlotExtend)
 {
     if (!BeltsContainerActor) return;
 
@@ -1297,7 +1288,8 @@ void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotR
 
     // 距离校验：超出上限时标记为无效（预览继续显示但变红，禁止确认）
     const float CurrentDist = FVector::Dist(BeltStartSlotLocation, EndWorldPos);
-    bPreviewBeltDistanceValid = (CurrentDist <= MaxBeltLength);
+    bPreviewBeltDistanceValid = (CurrentDist >= MinBeltLength && CurrentDist <= MaxBeltLength);
+    if (!bPreviewBeltDistanceValid) return;
 
     // 根据起点/终点槽口数据计算四个控制点（与 CreateAndLinkBeltForSlot 逻辑相同）
     // A = 起点槽口向后退一个 Extend 距离

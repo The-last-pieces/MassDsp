@@ -2,6 +2,7 @@
 
 #include "Engine/Engine.h"
 #include "Subsystems/MassDspManager.h"
+#include "Actors/MassDspBuilding.h"
 
 #include "GameFramework/PlayerController.h"
 #include "Components/InputComponent.h"
@@ -41,6 +42,9 @@ void AMassDspHUD::BeginPlay()
     // 鼠标点击
     InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AMassDspHUD::OnLeftMouseButtonPressed);
     InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AMassDspHUD::OnRightMouseButtonPressed);
+    // 鼠标滚轮：预览建筑旋转
+    InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &AMassDspHUD::OnMouseWheelUp);
+    InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AMassDspHUD::OnMouseWheelDown);
 }
 
 void AMassDspHUD::Tick(float DeltaSeconds)
@@ -81,7 +85,7 @@ bool AMassDspHUD::GetMouseWorldHitLocation(FVector& OutHitLocation) const
     {
         const float T = -WorldLoc.Z / WorldDir.Z;
         if (T > 0.f) OutHitLocation = WorldLoc + WorldDir * T;
-        else         OutHitLocation = WorldLoc;
+        else OutHitLocation = WorldLoc;
     }
     else
     {
@@ -110,22 +114,22 @@ void AMassDspHUD::UpdateBuildPreview(float /*DeltaSeconds*/)
     // Phase 2（已选起点）：吸附最近 Input 槽，优先让终点落到槽口上
     constexpr float SnapRadius = 200.f;
     const EBuildingSlotType TargetSlotType = Manager->BeltHasStartSlot()
-        ? EBuildingSlotType::Input
-        : EBuildingSlotType::Output;
+                                                 ? EBuildingSlotType::Input
+                                                 : EBuildingSlotType::Output;
 
     FMassEntityHandle DummyEntity;
     int32 DummySlotIndex;
     FVector SnappedPos;
-    FQuat  SnappedRot   = FQuat::Identity;
-    float  SnappedExtend = 0.f;
+    FQuat SnappedRot = FQuat::Identity;
+    float SnappedExtend = 0.f;
 
     bBeltHoverSnapped = Manager->FindNearestBuildingSlot(
         CachedHitLocation, TargetSlotType, SnapRadius,
         DummyEntity, DummySlotIndex, SnappedPos, SnappedRot, SnappedExtend);
 
-    BeltHoverSnapLocation = bBeltHoverSnapped ? SnappedPos    : CachedHitLocation;
-    BeltHoverSnapRotation = bBeltHoverSnapped ? SnappedRot    : FQuat::Identity;
-    BeltHoverSnapExtend   = bBeltHoverSnapped ? SnappedExtend : 0.f;
+    BeltHoverSnapLocation = bBeltHoverSnapped ? SnappedPos : CachedHitLocation;
+    BeltHoverSnapRotation = bBeltHoverSnapped ? SnappedRot : FQuat::Identity;
+    BeltHoverSnapExtend = bBeltHoverSnapped ? SnappedExtend : 0.f;
 
     // Phase 2：每帧用（已吸附的）终点坐标+旋转重建预览网格
     if (Manager->BeltHasStartSlot())
@@ -288,6 +292,9 @@ void AMassDspHUD::DrawHUD()
     // ── 建造模式提示 ──
     DrawBuildSystemHint();
 
+    // ── 预览建筑槽口指示圈 ──
+    DrawBuildingPreviewSlots();
+
     // ── 传送带吸附指示圈 ──
     DrawBeltSnapIndicator();
 }
@@ -362,6 +369,84 @@ void AMassDspHUD::DrawBuildSystemHint()
     DrawText(CheatSheet, FLinearColor(0.8f, 0.8f, 0.8f), CsX, CsY, GEngine->GetSmallFont(), 1.3f);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  鼠标滚轮：旋转预览建筑
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AMassDspHUD::OnMouseWheelUp()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager || !Manager->IsPreviewingBuilding()) return;
+    CurrentBuildingRotation.Yaw += BuildingRotationStep;
+    Manager->UpdateBuildingPreviewTransform(FTransform(CurrentBuildingRotation, CachedHitLocation));
+}
+
+void AMassDspHUD::OnMouseWheelDown()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager || !Manager->IsPreviewingBuilding()) return;
+    CurrentBuildingRotation.Yaw -= BuildingRotationStep;
+    Manager->UpdateBuildingPreviewTransform(FTransform(CurrentBuildingRotation, CachedHitLocation));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  预览建筑槽口指示圈
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AMassDspHUD::DrawBuildingPreviewSlots()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager || !Manager->IsPreviewingBuilding()) return;
+    if (!Canvas) return;
+
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return;
+
+    // 从 CDO 读取槽口定义
+    TSubclassOf<AMassDspBuilding> BuildingClass =
+        Manager->GetBuildingClassForType(Manager->GetPreviewBuildingType());
+    if (!BuildingClass) return;
+
+    const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(BuildingClass);
+    if (!CDO || CDO->Slots.IsEmpty()) return;
+
+    // 当前预览 Transform（与 UpdateBuildPreview 保持同步）
+    const FTransform PreviewTransform(CurrentBuildingRotation, CachedHitLocation);
+
+    // 与 DrawBeltSnapIndicator 相同的屏幕圆圈绘制 lambda
+    auto DrawWorldRing = [&](FVector WorldPos, FLinearColor Color, float Radius, float Thickness = 2.0f)
+    {
+        FVector2D ScreenPos;
+        if (!PC->ProjectWorldLocationToScreen(WorldPos, ScreenPos, true)) return;
+
+        constexpr int32 Segs = 16;
+        for (int32 i = 0; i < Segs; ++i)
+        {
+            const float A0 = (i / (float)Segs) * 2.f * UE_PI;
+            const float A1 = ((i + 1) / (float)Segs) * 2.f * UE_PI;
+            DrawLine(
+                ScreenPos.X + FMath::Cos(A0) * Radius,
+                ScreenPos.Y + FMath::Sin(A0) * Radius,
+                ScreenPos.X + FMath::Cos(A1) * Radius,
+                ScreenPos.Y + FMath::Sin(A1) * Radius,
+                Color, Thickness);
+        }
+    };
+
+    for (const FBuildingSlotDef& SlotDef : CDO->Slots)
+    {
+        // 本地变换叠加预览变换 → 世界坐标
+        const FTransform WorldSlotTransform = SlotDef.LocalTransform * PreviewTransform;
+        const FVector SlotWorldPos = WorldSlotTransform.GetLocation();
+
+        // 与 DrawBeltSnapIndicator 颜色约定保持一致
+        const FLinearColor Color = (SlotDef.SlotType == EBuildingSlotType::Output)
+                                       ? FLinearColor(0.1f, 1.0f, 0.3f) // Output → 绿
+                                       : FLinearColor(0.2f, 0.6f, 1.0f); // Input  → 蓝
+        DrawWorldRing(SlotWorldPos, Color, 12.f, 2.f);
+    }
+}
+
 void AMassDspHUD::DrawBeltSnapIndicator()
 {
     UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
@@ -380,7 +465,7 @@ void AMassDspHUD::DrawBeltSnapIndicator()
         constexpr int32 Segs = 16;
         for (int32 i = 0; i < Segs; ++i)
         {
-            const float A0 = (i       / (float)Segs) * 2.f * UE_PI;
+            const float A0 = (i / (float)Segs) * 2.f * UE_PI;
             const float A1 = ((i + 1) / (float)Segs) * 2.f * UE_PI;
             DrawLine(
                 ScreenPos.X + FMath::Cos(A0) * Radius,
@@ -419,8 +504,8 @@ void AMassDspHUD::DrawBeltSnapIndicator()
     {
         // Phase 1：最近 Output 槽 → 绿色大圈（或灰色表示附近无槽）
         const FLinearColor RingColor = bBeltHoverSnapped
-            ? FLinearColor(0.1f, 1.0f, 0.3f)
-            : FLinearColor(0.5f, 0.5f, 0.5f);
+                                           ? FLinearColor(0.1f, 1.0f, 0.3f)
+                                           : FLinearColor(0.5f, 0.5f, 0.5f);
         DrawWorldRing(BeltHoverSnapLocation, RingColor, 14.f, 2.5f);
     }
     else
@@ -432,20 +517,21 @@ void AMassDspHUD::DrawBeltSnapIndicator()
         const bool bValid = Manager->IsPreviewBeltValid();
         FLinearColor EndColor;
         if (!bValid)
-            EndColor = FLinearColor(1.f, 0.15f, 0.15f);       // 超出最大距离 → 红
+            EndColor = FLinearColor(1.f, 0.15f, 0.15f); // 超出最大距离 → 红
         else if (bBeltHoverSnapped)
-            EndColor = FLinearColor(0.2f, 0.6f, 1.0f);        // 有效 Input 槽 → 蓝
+            EndColor = FLinearColor(0.2f, 0.6f, 1.0f); // 有效 Input 槽 → 蓝
         else
-            EndColor = FLinearColor(0.5f, 0.5f, 0.5f);        // 无吸附 → 灰
+            EndColor = FLinearColor(0.5f, 0.5f, 0.5f); // 无吸附 → 灰
         DrawWorldRing(BeltHoverSnapLocation, EndColor, 14.f, 2.5f);
 
         // 距离超限时在屏幕中间偏上显示红字警告
         if (!bValid && Canvas)
         {
             const float Dist = FVector::Dist(Manager->GetBeltStartSlotLocation(), BeltHoverSnapLocation);
-            const FString WarnText = FString::Printf(
-                TEXT("距离过远！%.0f m / 最大 %.0f m"),
-                Dist / 100.f, UMassDspManager::MaxBeltLength / 100.f);
+            const FString WarnText =
+                Dist > UMassDspManager::MaxBeltLength
+                    ? FString::Printf(TEXT("距离过远！%.0f m / 最大 %.0f m"), Dist / 100.f, UMassDspManager::MaxBeltLength / 100.f)
+                    : FString::Printf(TEXT("距离过近！%.0f m / 最小 %.0f m"), Dist / 100.f, UMassDspManager::MinBeltLength / 100.f);
             float TW = 0.f, TH = 0.f;
             GetTextSize(WarnText, TW, TH, GEngine->GetSmallFont(), 1.5f);
             const float TX = (Canvas->SizeX - TW) * 0.5f;

@@ -83,4 +83,13 @@ private:
     void OnLeftMouseButtonPressed();
     // 鼠标右键：取消
     void OnRightMouseButtonPressed();
+    // 鼠标滚轮：预览建筑绕 Z 轴旋转
+    void OnMouseWheelUp();
+    void OnMouseWheelDown();
+
+    /** 预览建筑时绘制所有槽口指示圈 */
+    void DrawBuildingPreviewSlots();
+
+    /** 每次滚轮的旋转步进（度） */
+    static constexpr float BuildingRotationStep = 15.f;
 };
