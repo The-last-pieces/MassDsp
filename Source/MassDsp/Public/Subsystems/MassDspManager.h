@@ -139,7 +139,11 @@ private:
     );
 
 public:
-    FBeltHandle CreateAndLinkBeltForSlot(FMassEntityHandle SBuilding, int32 StartSlotIndex, FMassEntityHandle EBuilding, int32 EndSlotIndex, EBeltType BeltType);
+    FBeltHandle CreateAndLinkBeltForSlot(
+        FMassEntityHandle SBuilding, int32 StartSlotIndex,
+        FMassEntityHandle EBuilding, int32 EndSlotIndex,
+        EBeltType BeltType,
+        EBeltSplineType SplineType = EBeltSplineType::Default);
 
     void FlushBeltMesh();
 
@@ -175,7 +179,7 @@ public:
     // ──────────────────────────── 传送带预览接口 ────────────────────────────
 
     /** 开始传送带连接预览，设置当前要放置的传送带类型 */
-    void BeginPreviewBelt(EBeltType BeltType);
+    void BeginPreviewBelt(EBeltType BeltType, EBeltSplineType SplineType = EBeltSplineType::Default);
 
     /**
      * 尝试在 WorldPos 附近自动吸附槽口
@@ -282,6 +286,7 @@ private:
 
     // 传送带预览
     EBeltType PreviewBeltType = EBeltType::None;
+    EBeltSplineType PreviewBeltSplineType = EBeltSplineType::Spline;
     bool bBeltHasStart = false;
     bool bPreviewBeltDistanceValid = true;
     FMassEntityHandle BeltStartEntity;
@@ -303,6 +308,24 @@ private:
      * 传入的坐标为原始世界坐标（Z 偏移在函数内部处理）。
      */
     static void BuildBeltSplineFromPoints(USplineComponent* Spline, FVector A, FVector B, FVector C, FVector D);
+
+    /**
+     * 计算从起点到终点的最短 Dubins 路径2D。
+     * @param StartPos      起点世界 XY
+     * @param StartHeading  起点朝向（rad，从 +X 逆时针）
+     * @param EndPos        终点世界 XY
+     * @param EndHeading    终点朝向（rad）
+     * @param r             最小转弯半径（cm）
+     */
+    static FDubinsPathData ComputeDubinsPath(
+        const FVector2D& StartPos, float StartHeading,
+        const FVector2D& EndPos,   float EndHeading,
+        float r = DubinsMinTurningRadius);
+
+    /**
+     * 根据 Dubins 路径数据构建样条（采样 50cm 间隔，Z 轴线性插岜）。
+     */
+    static void BuildBeltSplineFromDubins(USplineComponent* Spline, const FDubinsPathData& Path);
 
     /** 使用 PreviewSpline + GenerateConveyorMesh 重建预览传送带网格 */
     void RebuildPreviewBeltMesh(const FVector& EndWorldPos, const FQuat& EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);

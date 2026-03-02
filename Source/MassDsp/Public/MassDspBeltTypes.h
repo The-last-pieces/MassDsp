@@ -99,3 +99,72 @@ struct MASSDSP_API FBeltTrajectory
     // 优先从 LUT 查表，LUT 为空时 fallback 到 SplineComponent
     void GetTransformAtDistance(float Distance, FTransform& OutTransform) const;
 };
+
+// ============================================================
+//  传送带样条类型
+// ============================================================
+
+/** 样条生成算法枚举 */
+UENUM(BlueprintType)
+enum class EBeltSplineType : uint8
+{
+    /** Hermite 4点样条（默认）*/
+    Spline     = 0 UMETA(DisplayName = "Hermite样条"),
+    /** Dubins 最短路径 + Z 轴线性插值 */
+    DubinsPath = 1 UMETA(DisplayName = "Dubins最短路径"),
+    
+    Default = DubinsPath UMETA(Hidden)
+};
+
+/** Dubins 路径最小转弯半径（cm）*/
+static constexpr float DubinsMinTurningRadius = 300.f;
+
+/** Dubins 路径词型（三段组合方式）*/
+enum class EDubinsWordType : uint8
+{
+    LSL, LSR, RSL, RSR, LRL, RLR, Invalid
+};
+
+/** Dubins 段类型 */
+enum class EDubinsSegType : uint8
+{
+    Left,      ///< CCW 圆弧
+    Straight,  ///< 直线
+    Right,     ///< CW  圆弧
+};
+
+/**
+ * Dubins 路径2D 计算结枚封装。
+ * 存储最短賓型、三段实际长度（cm）以及重建效线所需的全部输入数据。
+ */
+struct MASSDSP_API FDubinsPathData
+{
+    /** 最优词型 */
+    EDubinsWordType WordType = EDubinsWordType::Invalid;
+
+    /** 三段实际长度（cm）：圆弧段 = 弧长，直线段 = 直线长 */
+    float SegLen[3] = { 0.f, 0.f, 0.f };
+
+    /** 路径总长度（cm）*/
+    float TotalLength = 0.f;
+
+    /** 最小转弯半径（cm）*/
+    float TurningRadius = DubinsMinTurningRadius;
+
+    /** 2D 起始位置（世界 XY）*/
+    FVector2D StartPos = FVector2D::ZeroVector;
+    /** 起始朝向（rad，从 +X 轴逆时针为正）*/
+    float StartHeading = 0.f;
+
+    /** 2D 终点位置（世界 XY）*/
+    FVector2D EndPos = FVector2D::ZeroVector;
+    /** 终点朝向（rad）*/
+    float EndHeading = 0.f;
+
+    /** 3D 起点 Z 坐标（用于 Z 轴线性插岜）*/
+    float StartZ = 0.f;
+    /** 3D 终点 Z 坐标 */
+    float EndZ = 0.f;
+
+    bool IsValid() const { return WordType != EDubinsWordType::Invalid && TotalLength > 0.f; }
+};
