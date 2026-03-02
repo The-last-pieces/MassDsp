@@ -58,8 +58,14 @@ bool AMassDspHUD::GetMouseWorldHitLocation(FVector& OutHitLocation) const
     APlayerController* PC = GetOwningPlayerController();
     if (!PC) return false;
 
+    // 从屏幕中心投射射线，而非跟随鼠标光标，保证交互点始终在屏幕正中
+    int32 ViewW = 0, ViewH = 0;
+    PC->GetViewportSize(ViewW, ViewH);
+    const float CenterX = ViewW * 0.5f;
+    const float CenterY = ViewH * 0.5f;
+
     FVector WorldLoc, WorldDir;
-    if (!PC->DeprojectMousePositionToWorld(WorldLoc, WorldDir)) return false;
+    if (!PC->DeprojectScreenPositionToWorld(CenterX, CenterY, WorldLoc, WorldDir)) return false;
 
     // 射线检测（与场景可见几何体交叉）
     FHitResult Hit;
@@ -75,7 +81,7 @@ bool AMassDspHUD::GetMouseWorldHitLocation(FVector& OutHitLocation) const
     {
         const float T = -WorldLoc.Z / WorldDir.Z;
         if (T > 0.f) OutHitLocation = WorldLoc + WorldDir * T;
-        else OutHitLocation = WorldLoc;
+        else         OutHitLocation = WorldLoc;
     }
     else
     {
@@ -110,16 +116,21 @@ void AMassDspHUD::UpdateBuildPreview(float /*DeltaSeconds*/)
     FMassEntityHandle DummyEntity;
     int32 DummySlotIndex;
     FVector SnappedPos;
+    FQuat  SnappedRot   = FQuat::Identity;
+    float  SnappedExtend = 0.f;
 
     bBeltHoverSnapped = Manager->FindNearestBuildingSlot(
         CachedHitLocation, TargetSlotType, SnapRadius,
-        DummyEntity, DummySlotIndex, SnappedPos);
-    BeltHoverSnapLocation = bBeltHoverSnapped ? SnappedPos : CachedHitLocation;
+        DummyEntity, DummySlotIndex, SnappedPos, SnappedRot, SnappedExtend);
 
-    // Phase 2：每帧用（已吸附的）终点坐标重建预览网格
+    BeltHoverSnapLocation = bBeltHoverSnapped ? SnappedPos    : CachedHitLocation;
+    BeltHoverSnapRotation = bBeltHoverSnapped ? SnappedRot    : FQuat::Identity;
+    BeltHoverSnapExtend   = bBeltHoverSnapped ? SnappedExtend : 0.f;
+
+    // Phase 2：每帧用（已吸附的）终点坐标+旋转重建预览网格
     if (Manager->BeltHasStartSlot())
     {
-        Manager->UpdateBeltPreviewEndPoint(BeltHoverSnapLocation);
+        Manager->UpdateBeltPreviewEndPoint(BeltHoverSnapLocation, BeltHoverSnapRotation, BeltHoverSnapExtend);
     }
 }
 

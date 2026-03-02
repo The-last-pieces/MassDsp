@@ -23,9 +23,9 @@ class UMassEntityConfigAsset;
 UENUM(BlueprintType)
 enum class EBuildPlaceMode : uint8
 {
-    None     = 0 UMETA(DisplayName = "空闲"),
+    None = 0 UMETA(DisplayName = "空闲"),
     Building = 1 UMETA(DisplayName = "放置建筑"),
-    Belt     = 2 UMETA(DisplayName = "连接传送带"),
+    Belt = 2 UMETA(DisplayName = "连接传送带"),
 };
 
 // Building实体生成数据
@@ -80,7 +80,7 @@ public:
 
     // 每帧（降频）重建的 Transform 缓存（仅近处物品），避免堆分配
     TMap<EItemType, TArray<FTransform>> CachedTransformsByType;
-    
+
     TMap<EBuildingType, FStaticMeshInstanceVisualizationDescHandle> CachedBuildingMeshDesc;
 
     // Cache: EBuildingType => Archetype（避免每次重建，在 CreateBuildingEntityInternal / BatchSpawnBuildings 中懒初始化）
@@ -184,8 +184,12 @@ public:
      */
     bool SelectBeltSlot(FVector WorldPos);
 
-    /** 已有起点时，每帧将预览终点刷新到 EndWorldPos（鼠标跟随） */
-    void UpdateBeltPreviewEndPoint(FVector EndWorldPos);
+    /**
+     * 已有起点时，每帧将预览终点刷新到 EndWorldPos（鼠标跟随）
+     * @param EndSlotRotation  终点槽口的世界旋转（吸附到槽口时传入；无吸附时使用默认值）
+     * @param EndSlotExtend    终点槽口的延伸距离（cm）；0 表示无吸附，自动推算方向
+     */
+    void UpdateBeltPreviewEndPoint(FVector EndWorldPos, FQuat EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);
 
     /** 确认创建传送带；返回 FBeltHandle，并清除预览 */
     FBeltHandle ConfirmPreviewBelt();
@@ -200,10 +204,10 @@ public:
 
     EBuildPlaceMode GetCurrentPlaceMode() const { return CurrentPlaceMode; }
     bool IsPreviewingBuilding() const { return CurrentPlaceMode == EBuildPlaceMode::Building; }
-    bool IsPreviewingBelt()     const { return CurrentPlaceMode == EBuildPlaceMode::Belt; }
-    bool BeltHasStartSlot()     const { return bBeltHasStart; }
+    bool IsPreviewingBelt() const { return CurrentPlaceMode == EBuildPlaceMode::Belt; }
+    bool BeltHasStartSlot() const { return bBeltHasStart; }
     EBuildingType GetPreviewBuildingType() const { return PreviewBuildingType; }
-    EBeltType     GetPreviewBeltType()     const { return PreviewBeltType; }
+    EBeltType GetPreviewBeltType() const { return PreviewBeltType; }
     /** 起点槽口的世界坐标（Phase 2 时用于 HUD 绘制金色锁定圈） */
     FVector GetBeltStartSlotLocation() const { return BeltStartSlotLocation; }
 
@@ -215,6 +219,8 @@ public:
      * @param OutEntity       结果实体句柄
      * @param OutSlotIndex    槽口在 Input/Output 数组中的下标（0-based）
      * @param OutSlotLocation 槽口世界坐标
+     * @param OutSlotRotation
+     * @param OutSlotExtend
      * @return                是否找到有效槽口
      */
     bool FindNearestBuildingSlot(
@@ -223,7 +229,9 @@ public:
         float SearchRadius,
         FMassEntityHandle& OutEntity,
         int32& OutSlotIndex,
-        FVector& OutSlotLocation);
+        FVector& OutSlotLocation,
+        FQuat& OutSlotRotation,
+        float& OutSlotExtend);
 
     /** 根据 EBuildingType 取对应建筑蓝图类（从 GameConfig 读取） */
     TSubclassOf<AMassDspBuilding> GetBuildingClassForType(EBuildingType BuildingType);
@@ -249,15 +257,15 @@ private:
     AActor* PreviewBuildingActor = nullptr;
 
     // 传送带预览
-    EBeltType         PreviewBeltType         = EBeltType::None;
-    bool              bBeltHasStart           = false;
+    EBeltType PreviewBeltType = EBeltType::None;
+    bool bBeltHasStart = false;
     FMassEntityHandle BeltStartEntity;
-    int32             BeltStartSlotIndex      = -1;
-    FVector           BeltStartSlotLocation   = FVector::ZeroVector;
-    FQuat             BeltStartSlotRotation   = FQuat::Identity;
-    float             BeltStartSlotExtend     = 100.f;
+    int32 BeltStartSlotIndex = -1;
+    FVector BeltStartSlotLocation = FVector::ZeroVector;
+    FQuat BeltStartSlotRotation = FQuat::Identity;
+    float BeltStartSlotExtend = 100.f;
     FMassEntityHandle BeltEndEntity;
-    int32             BeltEndSlotIndex        = -1;
+    int32 BeltEndSlotIndex = -1;
 
     UPROPERTY()
     UProceduralMeshComponent* PreviewBeltMesh = nullptr;

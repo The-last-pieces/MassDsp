@@ -65,6 +65,12 @@ private:
     /** 当前帧是否成功吸附到有效槽口 */
     bool bBeltHoverSnapped = false;
 
+    /** 当前帧吸附槽口的世界旋转（吸附失败时为 Identity） */
+    FQuat BeltHoverSnapRotation = FQuat::Identity;
+
+    /** 当前帧吸附槽口的延伸距离（cm）；吸附失败时为 0 */
+    float BeltHoverSnapExtend = 0.f;
+
     // 数字键 1-6：切换建造模式
     void OnKey1Pressed(); // 矿机
     void OnKey2Pressed(); // 合成台

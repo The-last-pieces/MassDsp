@@ -986,7 +986,9 @@ bool UMassDspManager::FindNearestBuildingSlot(
     float SearchRadius,
     FMassEntityHandle& OutEntity,
     int32& OutSlotIndex,
-    FVector& OutSlotLocation)
+    FVector& OutSlotLocation,
+    FQuat& OutSlotRotation,
+    float& OutSlotExtend)
 {
     UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
     if (!ESub) return false;
@@ -1011,10 +1013,12 @@ bool UMassDspManager::FindNearestBuildingSlot(
             const float DSq = FVector::DistSquared(WorldPos, Slots[i].WorldLocation);
             if (DSq < BestDistSq)
             {
-                BestDistSq = DSq;
-                OutEntity = Entity;
-                OutSlotIndex = i;
+                BestDistSq      = DSq;
+                OutEntity       = Entity;
+                OutSlotIndex    = i;
                 OutSlotLocation = Slots[i].WorldLocation;
+                OutSlotRotation = Slots[i].WorldRotation;
+                OutSlotExtend   = Slots[i].SlotExtend;
                 bFound = true;
             }
         }
@@ -1141,35 +1145,22 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
         FMassEntityHandle FoundEntity;
         int32 FoundSlotIndex = -1;
         FVector FoundSlotLoc;
+        FQuat   FoundSlotRot  = FQuat::Identity;
+        float   FoundSlotExt  = 100.f;
 
         if (!FindNearestBuildingSlot(WorldPos, EBuildingSlotType::Output, SnapRadius,
-                                     FoundEntity, FoundSlotIndex, FoundSlotLoc))
+                                     FoundEntity, FoundSlotIndex, FoundSlotLoc, FoundSlotRot, FoundSlotExt))
         {
             UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 附近没有可用 Output 槽口（搜索半径 %.0fcm）"), SnapRadius);
             return false;
         }
 
-        // 缓存起点槽口的旋转和延伸距离
-        BeltStartSlotRotation = FQuat::Identity;
-        BeltStartSlotExtend = 100.f;
-        if (UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>())
-        {
-            FMassEntityManager& EM = ESub->GetMutableEntityManager();
-            if (FMassDspBuildingSlotsFragment* SF = EM.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(FoundEntity))
-            {
-                TArrayView<FBuildingSlotState> OutSlots = SF->GetOutputSlots();
-                if (OutSlots.IsValidIndex(FoundSlotIndex))
-                {
-                    BeltStartSlotRotation = OutSlots[FoundSlotIndex].WorldRotation;
-                    BeltStartSlotExtend = OutSlots[FoundSlotIndex].SlotExtend;
-                }
-            }
-        }
-
-        BeltStartEntity = FoundEntity;
-        BeltStartSlotIndex = FoundSlotIndex;
+        BeltStartSlotRotation = FoundSlotRot;
+        BeltStartSlotExtend   = FoundSlotExt;
+        BeltStartEntity       = FoundEntity;
+        BeltStartSlotIndex    = FoundSlotIndex;
         BeltStartSlotLocation = FoundSlotLoc;
-        bBeltHasStart = true;
+        bBeltHasStart         = true;
 
         UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 起点已选 @ (%.0f, %.0f, %.0f)，请继续选择终点"),
                FoundSlotLoc.X, FoundSlotLoc.Y, FoundSlotLoc.Z);
@@ -1181,9 +1172,11 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
         FMassEntityHandle FoundEntity;
         int32 FoundSlotIndex = -1;
         FVector FoundSlotLoc;
+        FQuat   FoundSlotRot  = FQuat::Identity;
+        float   FoundSlotExt  = 100.f;
 
         if (!FindNearestBuildingSlot(WorldPos, EBuildingSlotType::Input, SnapRadius,
-                                     FoundEntity, FoundSlotIndex, FoundSlotLoc))
+                                     FoundEntity, FoundSlotIndex, FoundSlotLoc, FoundSlotRot, FoundSlotExt))
         {
             UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 附近没有可用 Input 槽口（搜索半径 %.0fcm）"), SnapRadius);
             return false;
@@ -1195,28 +1188,10 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
             return false;
         }
 
-        BeltEndEntity = FoundEntity;
+        BeltEndEntity    = FoundEntity;
         BeltEndSlotIndex = FoundSlotIndex;
 
-        // 精确终点：从槽片段重新读取位置 / 旋转 / 延伸
-        FQuat EndRot = FQuat::Identity;
-        float EndExtend = 100.f;
-        if (UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>())
-        {
-            FMassEntityManager& EM = ESub->GetMutableEntityManager();
-            if (FMassDspBuildingSlotsFragment* SF = EM.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BeltEndEntity))
-            {
-                TArrayView<FBuildingSlotState> InSlots = SF->GetInputSlots();
-                if (InSlots.IsValidIndex(BeltEndSlotIndex))
-                {
-                    EndRot = InSlots[BeltEndSlotIndex].WorldRotation;
-                    EndExtend = InSlots[BeltEndSlotIndex].SlotExtend;
-                    FoundSlotLoc = InSlots[BeltEndSlotIndex].WorldLocation;
-                }
-            }
-        }
-
-        RebuildPreviewBeltMesh(FoundSlotLoc, EndRot, EndExtend);
+        RebuildPreviewBeltMesh(FoundSlotLoc, FoundSlotRot, FoundSlotExt);
 
         UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 终点已选 @ (%.0f, %.0f, %.0f)，可调用 ConfirmPreviewBelt"),
                FoundSlotLoc.X, FoundSlotLoc.Y, FoundSlotLoc.Z);
@@ -1224,10 +1199,10 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
     }
 }
 
-void UMassDspManager::UpdateBeltPreviewEndPoint(FVector EndWorldPos)
+void UMassDspManager::UpdateBeltPreviewEndPoint(FVector EndWorldPos, FQuat EndSlotRotation, float EndSlotExtend)
 {
     if (!bBeltHasStart) return;
-    RebuildPreviewBeltMesh(EndWorldPos);
+    RebuildPreviewBeltMesh(EndWorldPos, EndSlotRotation, EndSlotExtend);
 }
 
 FBeltHandle UMassDspManager::ConfirmPreviewBelt()
@@ -1311,7 +1286,7 @@ void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotR
     const FVector C = EndWorldPos;
     const FVector D = (EndSlotExtend > 0.f)
                           ? EndWorldPos - EndSlotRotation * FVector(EndSlotExtend, 0.f, 0.f)
-                          : EndWorldPos - (EndWorldPos - BeltStartSlotLocation).GetSafeNormal() * 100.f;
+                          : EndWorldPos - (BeltStartSlotLocation - EndWorldPos).GetSafeNormal() * 100.f;
 
     // 重用通用接口构建样条
     BuildBeltSplineFromPoints(PreviewSpline, A, B, C, D);
