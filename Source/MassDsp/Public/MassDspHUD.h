@@ -99,7 +99,16 @@ private:
     // ─── 建筑交互 UI ──────────────────────────────────────────────────
 
     /** 按 F 时搜索最近建筑的交互半径（cm） */
-    static constexpr float BuildingInteractRadius = 500.f;
+    static constexpr float BuildingInteractRadius = 4000.f;
+
+    /** 绘制可交互建筑的 HUD 提示（每帧在 DrawHUD 中调用） */
+    void DrawInteractionHint();
+
+    /**
+     * 视锥检测：将世界坐标投影到屏幕，判断是否落在屏幕中央 2/3 区域内。
+     * 结合半径检测一同使用，避免身后的建筑触发提示/交互。
+     */
+    bool IsBuildingInViewCone(const FVector& WorldLoc) const;
 
     /** 当前已打开的建筑交互 Widget（同时只存在一个） */
     UPROPERTY()

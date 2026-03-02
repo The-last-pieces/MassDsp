@@ -276,12 +276,17 @@ public:
      * @param OutLocation     最近建筑的世界坐标
      * @return                是否找到有效建筑
      */
+    /**
+     * @param LocationFilter  可选过滤器，传入建筑世界坐标，返回 false 则跳过该建筑。
+     *                        可用于视锥检测等额外筛选。
+     */
     bool FindNearestBuilding(
         const FVector& PlayerLocation,
         float SearchRadius,
         FMassEntityHandle& OutEntity,
         EBuildingType& OutBuildingType,
-        FVector& OutLocation);
+        FVector& OutLocation,
+        const TFunction<bool(const FVector&)>& LocationFilter = nullptr);
 
 private:
     // 内部辅助方法：创建Building Entity的核心逻辑

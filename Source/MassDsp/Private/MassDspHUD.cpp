@@ -55,6 +55,13 @@ void AMassDspHUD::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     UpdateBuildPreview(DeltaSeconds);
+
+    // 若关闭按钮在 Widget 内部触发了 CloseWidget()，RemoveFromParent 后
+    // HUD 的指针并不会自动清零，这里每帧检测一次并修正。
+    if (CurrentBuildingWidget && !CurrentBuildingWidget->IsInViewport())
+    {
+        CurrentBuildingWidget = nullptr;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,23 +291,44 @@ void AMassDspHUD::DrawHUD()
     constexpr float PosY = 10.0f;
     constexpr float LineStep = 20.0f;
 
-    auto DrawLine = [&](const FString& Text, float Y)
+    auto DrawLineText = [&](const FString& Text, float Y)
     {
         DrawText(Text, FLinearColor::Black, PosX + 1.0f, Y + 1.0f, GEngine->GetSmallFont(), 1.5f);
         DrawText(Text, FLinearColor::Yellow, PosX, Y, GEngine->GetSmallFont(), 1.5f);
     };
 
-    DrawLine(FpsText, PosY);
-    DrawLine(GameText, PosY + LineStep);
+    DrawLineText(FpsText, PosY);
+    DrawLineText(GameText, PosY + LineStep);
 
     // ── 建造模式提示 ──
     DrawBuildSystemHint();
+
+    // ── 可交互建筑提示（未开 UI 时显示） ──
+    DrawInteractionHint();
 
     // ── 预览建筑槽口指示圈 ──
     DrawBuildingPreviewSlots();
 
     // ── 传送带吸附指示圈 ──
     DrawBeltSnapIndicator();
+
+    // ── [DEBUG] 视锥检测范围红框 ──
+#if WITH_EDITOR
+    {
+        const float W = Canvas->SizeX;
+        const float H = Canvas->SizeY;
+        const float L = W / 2.f - W / 10.f; // 左
+        const float R = W / 2.f + W / 10.f; // 右
+        const float T = H / 2.f - H / 10.f; // 上
+        const float B = H / 2.f + H / 10.f; // 下
+        const FLinearColor DbgColor(1.f, 0.1f, 0.1f, 0.7f);
+        constexpr float Th = 1.5f;
+        DrawLine(L, T, R, T, DbgColor, Th);
+        DrawLine(R, T, R, B, DbgColor, Th);
+        DrawLine(R, B, L, B, DbgColor, Th);
+        DrawLine(L, B, L, T, DbgColor, Th);
+    }
+#endif
 }
 
 void AMassDspHUD::DrawBuildSystemHint()
@@ -374,6 +402,95 @@ void AMassDspHUD::DrawBuildSystemHint()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  可交互建筑 HUD 提示
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AMassDspHUD::DrawInteractionHint()
+{
+    // 已打开交互 UI 时跳过
+    if (CurrentBuildingWidget) return;
+    if (!Canvas) return;
+
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return;
+
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC || !PC->GetPawn()) return;
+
+    const FVector PlayerLoc = PC->GetPawn()->GetActorLocation();
+
+    FMassEntityHandle NearestEntity;
+    EBuildingType NearestType = EBuildingType::None;
+    FVector NearestLoc;
+
+    if (!Manager->FindNearestBuilding(PlayerLoc, BuildingInteractRadius, NearestEntity, NearestType, NearestLoc,
+                                      [this](const FVector& Loc) { return IsBuildingInViewCone(Loc); }))
+        return;
+
+    static const TMap<EBuildingType, FString> BuildingNames =
+    {
+        {EBuildingType::Miner, TEXT("矿机")},
+        {EBuildingType::Storage, TEXT("仓库")},
+        {EBuildingType::Assembler, TEXT("合成台")},
+    };
+
+    const FString BuildingName = BuildingNames.FindRef(NearestType);
+    const float DistM = FVector::Dist(PlayerLoc, NearestLoc) / 100.f;
+    const FString HintText = FString::Printf(TEXT("[F]  %s  (%.1f m)"), *BuildingName, DistM);
+
+    constexpr float Scale = 1.6f;
+    constexpr float PadX = 18.f;
+    constexpr float PadY = 8.f;
+
+    float TW = 0.f, TH = 0.f;
+    GetTextSize(HintText, TW, TH, GEngine->GetSmallFont(), Scale);
+
+    // 将建筑世界坐标投影到屏幕，文字水平居中、显示在投影点正上方
+    FVector2D BuildingScreenPos;
+    if (!PC->ProjectWorldLocationToScreen(NearestLoc, BuildingScreenPos, true))
+        return;
+
+    constexpr float OffsetY = 48.f; // 提示框底边距建筑投影点的像素距离
+    const float TX = BuildingScreenPos.X - TW * 0.5f;
+    const float TY = BuildingScreenPos.Y - TH - PadY * 2.f - OffsetY;
+
+    // 半透明背景
+    DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.50f),
+             TX - PadX, TY - PadY, TW + PadX * 2.f, TH + PadY * 2.f);
+
+    // 文字阴影 + 主色
+    DrawText(HintText, FLinearColor::Black, TX + 1.f, TY + 1.f, GEngine->GetSmallFont(), Scale);
+    DrawText(HintText, FLinearColor(1.f, 0.95f, 0.3f), TX, TY, GEngine->GetSmallFont(), Scale);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  视锥检测辅助
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool AMassDspHUD::IsBuildingInViewCone(const FVector& WorldLoc) const
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return false;
+
+    int32 ViewW = 0, ViewH = 0;
+    PC->GetViewportSize(ViewW, ViewH);
+    if (ViewW <= 0 || ViewH <= 0) return false;
+
+    FVector2D ScreenPos;
+    if (!PC->ProjectWorldLocationToScreen(WorldLoc, ScreenPos, /*bPlayerViewportRelative=*/true))
+        return false;
+
+    // 中央 2/3 区域：各轴偏中心不超过屏幕尺寸的 1/3
+    const float HalfW = ViewW * 0.5f;
+    const float HalfH = ViewH * 0.5f;
+    const float LimitX = ViewW / 5; // = ViewW / 3
+    const float LimitY = ViewH / 5; // = ViewH / 3
+
+    return FMath::Abs(ScreenPos.X - HalfW) < LimitX
+        && FMath::Abs(ScreenPos.Y - HalfH) < LimitY;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  鼠标滚轮：旋转预览建筑
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -420,11 +537,9 @@ void AMassDspHUD::OnKeyFPressed()
     EBuildingType NearestType = EBuildingType::None;
     FVector NearestLoc;
 
-    if (!Manager->FindNearestBuilding(PlayerLoc, BuildingInteractRadius, NearestEntity, NearestType, NearestLoc))
-    {
-        // 范围内没有建筑
+    if (!Manager->FindNearestBuilding(PlayerLoc, BuildingInteractRadius, NearestEntity, NearestType, NearestLoc,
+                                      [this](const FVector& Loc) { return IsBuildingInViewCone(Loc); }))
         return;
-    }
 
     // 通过 GameMode 拿 GameConfig
     AMassDspGameMode* GM = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());

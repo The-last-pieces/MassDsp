@@ -459,7 +459,7 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
             FVector2D(C.X, C.Y), FMath::Atan2(-EF.Y, -EF.X),
             DubinsMinTurningRadius);
         DP.StartZ = B.Z;
-        DP.EndZ   = C.Z;
+        DP.EndZ = C.Z;
         if (DP.IsValid())
         {
             BeltHandle = CreateRuntimeBelt([DP](USplineComponent* NewSpline)
@@ -1043,15 +1043,15 @@ namespace
             const FVector2D C(Pos.X - r * FMath::Sin(H), Pos.Y + r * FMath::Cos(H));
             const float newH = H + dT;
             Pos = FVector2D(C.X + r * FMath::Sin(newH), C.Y - r * FMath::Cos(newH));
-            H   = newH;
+            H = newH;
         }
-        else  // Right
+        else // Right
         {
             const float dT = ArcLen / r;
             const FVector2D C(Pos.X + r * FMath::Sin(H), Pos.Y - r * FMath::Cos(H));
             const float newH = H - dT;
             Pos = FVector2D(C.X - r * FMath::Sin(newH), C.Y + r * FMath::Cos(newH));
-            H   = newH;
+            H = newH;
         }
     }
 } // namespace
@@ -1062,29 +1062,29 @@ namespace
 
 FDubinsPathData UMassDspManager::ComputeDubinsPath(
     const FVector2D& StartPos, float StartHeading,
-    const FVector2D& EndPos,   float EndHeading,
+    const FVector2D& EndPos, float EndHeading,
     float r)
 {
     FDubinsPathData Result;
-    Result.StartPos      = StartPos;
-    Result.StartHeading  = StartHeading;
-    Result.EndPos        = EndPos;
-    Result.EndHeading    = EndHeading;
+    Result.StartPos = StartPos;
+    Result.StartHeading = StartHeading;
+    Result.EndPos = EndPos;
+    Result.EndHeading = EndHeading;
     Result.TurningRadius = r;
 
     if (r <= 0.f) return Result;
 
-    const float dx    = EndPos.X - StartPos.X;
-    const float dy    = EndPos.Y - StartPos.Y;
-    const float D     = FMath::Sqrt(dx*dx + dy*dy) / r;   // 归一化距离
-    const float theta = FMath::Atan2(dy, dx);              // 起点→终点方向角
+    const float dx = EndPos.X - StartPos.X;
+    const float dy = EndPos.Y - StartPos.Y;
+    const float D = FMath::Sqrt(dx * dx + dy * dy) / r; // 归一化距离
+    const float theta = FMath::Atan2(dy, dx); // 起点→终点方向角
 
     // 关键：两个朝向角必须相对于 theta 计算，否则所有公式均错误
     const float alpha = DubNorm(StartHeading - theta);
-    const float beta  = DubNorm(EndHeading   - theta);
+    const float beta = DubNorm(EndHeading - theta);
 
     const float sa = FMath::Sin(alpha), ca = FMath::Cos(alpha);
-    const float sb = FMath::Sin(beta),  cb = FMath::Cos(beta);
+    const float sb = FMath::Sin(beta), cb = FMath::Cos(beta);
     const float cab = FMath::Cos(alpha - beta);
 
     float bestLen = FLT_MAX;
@@ -1094,78 +1094,78 @@ FDubinsPathData UMassDspManager::ComputeDubinsPath(
     auto TryWord = [&](EDubinsWordType W, float t_raw, float p_raw, float q_raw)
     {
         if (t_raw < -1e-6f || p_raw < -1e-6f || q_raw < -1e-6f) return;
-        const float t   = FMath::Max(0.f, t_raw);
-        const float p   = FMath::Max(0.f, p_raw);
-        const float q   = FMath::Max(0.f, q_raw);
+        const float t = FMath::Max(0.f, t_raw);
+        const float p = FMath::Max(0.f, p_raw);
+        const float q = FMath::Max(0.f, q_raw);
         const float len = (t + p + q) * r;
         if (len < bestLen)
         {
-            bestLen            = len;
-            Result.WordType    = W;
-            Result.SegLen[0]   = t * r;
-            Result.SegLen[1]   = p * r;
-            Result.SegLen[2]   = q * r;
+            bestLen = len;
+            Result.WordType = W;
+            Result.SegLen[0] = t * r;
+            Result.SegLen[1] = p * r;
+            Result.SegLen[2] = q * r;
             Result.TotalLength = len;
         }
     };
 
     // ――― LSL ―――
     {
-        const float pSq = 2.f + D*D - 2.f*cab + 2.f*D*(sa - sb);
+        const float pSq = 2.f + D * D - 2.f * cab + 2.f * D * (sa - sb);
         if (pSq >= 0.f)
         {
-            const float p   = FMath::Sqrt(pSq);
+            const float p = FMath::Sqrt(pSq);
             const float tmp = FMath::Atan2(cb - ca, D + sa - sb);
             TryWord(EDubinsWordType::LSL, DubNorm(-alpha + tmp), p, DubNorm(beta - tmp));
         }
     }
     // ――― RSR ―――
     {
-        const float pSq = 2.f + D*D - 2.f*cab + 2.f*D*(sb - sa);
+        const float pSq = 2.f + D * D - 2.f * cab + 2.f * D * (sb - sa);
         if (pSq >= 0.f)
         {
-            const float p   = FMath::Sqrt(pSq);
+            const float p = FMath::Sqrt(pSq);
             const float tmp = FMath::Atan2(ca - cb, D - sa + sb);
             TryWord(EDubinsWordType::RSR, DubNorm(alpha - tmp), p, DubNorm(-beta + tmp));
         }
     }
     // ――― LSR ―――
     {
-        const float pSq = -2.f + D*D + 2.f*cab + 2.f*D*(sa + sb);
+        const float pSq = -2.f + D * D + 2.f * cab + 2.f * D * (sa + sb);
         if (pSq >= 0.f)
         {
-            const float p   = FMath::Sqrt(pSq);
+            const float p = FMath::Sqrt(pSq);
             const float tmp = FMath::Atan2(-ca - cb, D + sa + sb) - FMath::Atan2(-2.f, p);
             TryWord(EDubinsWordType::LSR, DubNorm(-alpha + tmp), p, DubNorm(-beta + tmp));
         }
     }
     // ――― RSL ―――
     {
-        const float pSq = -2.f + D*D + 2.f*cab - 2.f*D*(sa + sb);
+        const float pSq = -2.f + D * D + 2.f * cab - 2.f * D * (sa + sb);
         if (pSq >= 0.f)
         {
-            const float p   = FMath::Sqrt(pSq);
+            const float p = FMath::Sqrt(pSq);
             const float tmp = FMath::Atan2(ca + cb, D - sa - sb) - FMath::Atan2(2.f, p);
             TryWord(EDubinsWordType::RSL, DubNorm(alpha - tmp), p, DubNorm(beta - tmp));
         }
     }
     // ――― RLR ―――
     {
-        const float tmp = (6.f - D*D + 2.f*cab + 2.f*D*(sa - sb)) / 8.f;
+        const float tmp = (6.f - D * D + 2.f * cab + 2.f * D * (sa - sb)) / 8.f;
         if (FMath::Abs(tmp) <= 1.f)
         {
-            const float p     = DubNorm(2.f*PI - FMath::Acos(tmp));
-            const float t_raw = DubNorm(alpha - FMath::Atan2(ca - cb, D - sa + sb) + p*0.5f);
+            const float p = DubNorm(2.f * PI - FMath::Acos(tmp));
+            const float t_raw = DubNorm(alpha - FMath::Atan2(ca - cb, D - sa + sb) + p * 0.5f);
             TryWord(EDubinsWordType::RLR, t_raw, p, DubNorm(alpha - beta - t_raw + p));
         }
     }
     // ――― LRL ―――
     {
-        const float tmp = (6.f - D*D + 2.f*cab + 2.f*D*(-sa + sb)) / 8.f;
+        const float tmp = (6.f - D * D + 2.f * cab + 2.f * D * (-sa + sb)) / 8.f;
         if (FMath::Abs(tmp) <= 1.f)
         {
-            const float p     = DubNorm(2.f*PI - FMath::Acos(tmp));
-            const float t_raw = DubNorm(-alpha + FMath::Atan2(-ca + cb, D + sa - sb) + p*0.5f);
+            const float p = DubNorm(2.f * PI - FMath::Acos(tmp));
+            const float t_raw = DubNorm(-alpha + FMath::Atan2(-ca + cb, D + sa - sb) + p * 0.5f);
             TryWord(EDubinsWordType::LRL, t_raw, p, DubNorm(beta - alpha - t_raw + p));
         }
     }
@@ -1178,14 +1178,14 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
 {
     if (!Spline || !Path.IsValid()) return;
 
-    constexpr float SampleStep = 10.f;  // cm，等距采样间距
-    constexpr float ZLift      = 20.f;  // cm，与 BuildBeltSplineFromPoints 保持一致
+    constexpr float SampleStep = 10.f; // cm，等距采样间距
+    constexpr float ZLift = 20.f; // cm，与 BuildBeltSplineFromPoints 保持一致
 
     EDubinsSegType SegTypes[3];
     DubSegs(Path.WordType, SegTypes);
 
     const float TotalLen = Path.TotalLength;
-    const float dZdCm    = (TotalLen > 0.f) ? (Path.EndZ - Path.StartZ) / TotalLen : 0.f;
+    const float dZdCm = (TotalLen > 0.f) ? (Path.EndZ - Path.StartZ) / TotalLen : 0.f;
 
     // ── 第一步：收集所有采样点（位置 + 朝向角）─────────────────────────────
     struct FSample { FVector Pos; float H; };
@@ -1193,13 +1193,13 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
     Samples.Reserve(FMath::CeilToInt(TotalLen / SampleStep) + 4);
 
     FVector2D Pos2D = Path.StartPos;
-    float     H     = Path.StartHeading;
-    float     Dist  = 0.f;
+    float H = Path.StartHeading;
+    float Dist = 0.f;
 
     auto AddSample = [&]()
     {
         const float z = Path.StartZ + dZdCm * Dist + ZLift;
-        Samples.Add({ FVector(Pos2D.X, Pos2D.Y, z), H });
+        Samples.Add({FVector(Pos2D.X, Pos2D.Y, z), H});
     };
 
     AddSample(); // 起点
@@ -1214,7 +1214,7 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
         {
             DubStep(Pos2D, H, SegTypes[Seg], r, SampleStep);
             Dist += SampleStep;
-            Rem  -= SampleStep;
+            Rem -= SampleStep;
             AddSample();
         }
         DubStep(Pos2D, H, SegTypes[Seg], r, Rem);
@@ -1223,8 +1223,8 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
 
     // 强制精确终点，消除浮点累积误差
     Pos2D = Path.EndPos;
-    H     = Path.EndHeading;
-    Dist  = TotalLen;
+    H = Path.EndHeading;
+    Dist = TotalLen;
     AddSample();
 
     // ── 第二步：去除过近重复点（防止退化段）─────────────────────────────────
@@ -1291,7 +1291,8 @@ bool UMassDspManager::FindNearestBuilding(
     float SearchRadius,
     FMassEntityHandle& OutEntity,
     EBuildingType& OutBuildingType,
-    FVector& OutLocation)
+    FVector& OutLocation,
+    const TFunction<bool(const FVector&)>& LocationFilter)
 {
     UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
     if (!ESub) return false;
@@ -1308,6 +1309,7 @@ bool UMassDspManager::FindNearestBuilding(
         if (!TF) continue;
 
         const FVector BuildingLoc = TF->GetTransform().GetLocation();
+        if (LocationFilter && !LocationFilter(BuildingLoc)) continue;
         const float DistSq = FVector::DistSquared(PlayerLocation, BuildingLoc);
         if (DistSq < BestDistSq)
         {
@@ -1472,7 +1474,7 @@ void UMassDspManager::BeginPreviewBelt(EBeltType BeltType, EBeltSplineType Splin
 {
     CancelAnyPreview();
 
-    PreviewBeltType       = BeltType;
+    PreviewBeltType = BeltType;
     PreviewBeltSplineType = SplineType;
     bBeltHasStart = false;
     bPreviewBeltDistanceValid = true;
@@ -1562,8 +1564,8 @@ FBeltHandle UMassDspManager::ConfirmPreviewBelt()
         return FBeltHandle();
     }
 
-    const EBeltType        BeltType   = PreviewBeltType;
-    const EBeltSplineType  SplineType = PreviewBeltSplineType;  // 在 Cancel 前捕捉
+    const EBeltType BeltType = PreviewBeltType;
+    const EBeltSplineType SplineType = PreviewBeltSplineType; // 在 Cancel 前捕捉
     const FMassEntityHandle StartEnt = BeltStartEntity;
     const int32 StartSlotIdx = BeltStartSlotIndex;
     const FMassEntityHandle EndEnt = BeltEndEntity;
@@ -1647,7 +1649,7 @@ void UMassDspManager::RebuildPreviewBeltMesh(const FVector& EndWorldPos, const F
     if (PreviewBeltSplineType == EBeltSplineType::DubinsPath)
     {
         const FVector SF = BeltStartSlotRotation.RotateVector(FVector(1.f, 0.f, 0.f));
-        const float   SH = FMath::Atan2(SF.Y, SF.X);
+        const float SH = FMath::Atan2(SF.Y, SF.X);
         float EH;
         if (EndSlotExtend > 0.f)
         {
@@ -1665,7 +1667,7 @@ void UMassDspManager::RebuildPreviewBeltMesh(const FVector& EndWorldPos, const F
             FVector2D(EndWorldPos.X, EndWorldPos.Y), EH,
             DubinsMinTurningRadius);
         DP.StartZ = BeltStartSlotLocation.Z;
-        DP.EndZ   = EndWorldPos.Z;
+        DP.EndZ = EndWorldPos.Z;
         if (DP.IsValid())
         {
             BuildBeltSplineFromDubins(PreviewSpline, DP);
