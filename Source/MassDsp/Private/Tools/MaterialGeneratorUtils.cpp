@@ -31,13 +31,10 @@
 #include "Materials/MaterialExpressionFrac.h"
 #include "Materials/MaterialExpressionVertexColor.h"
 
-#endif
-
 // 传送带材质：两侧白边 + 中间倒V形（∧）箭头动画
 // 动画速度由 Speed 标量参数控制（UV/s），不再依赖顶点色
 void UMaterialGeneratorUtils::CreateConveyorMaterial()
 {
-#if WITH_EDITOR
     const FString AssetName = TEXT("M_Belt");
     const FString PackageName = TEXT("/Game/Assets/") + AssetName;
     const FString SourceFilePath = FString(TEXT(__FILE__));
@@ -365,5 +362,6 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
     FAssetRegistryModule::AssetCreated(Material);
 
     UE_LOG(LogTemp, Log, TEXT("Conveyor Material Updated (Chevron Style). Hash: %s"), *CurrentHash);
-#endif
 }
+
+#endif

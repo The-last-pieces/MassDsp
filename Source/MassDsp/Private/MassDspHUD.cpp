@@ -3,6 +3,8 @@
 #include "Engine/Engine.h"
 #include "Subsystems/MassDspManager.h"
 #include "Actors/MassDspBuilding.h"
+#include "MassDspGameMode.h"
+#include "UI/MassDspBuildingWidget.h"
 
 #include "GameFramework/PlayerController.h"
 #include "Components/InputComponent.h"
@@ -45,6 +47,8 @@ void AMassDspHUD::BeginPlay()
     // 鼠标滚轮：预览建筑旋转
     InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &AMassDspHUD::OnMouseWheelUp);
     InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AMassDspHUD::OnMouseWheelDown);
+    // F 键：打开最近建筑交互界面
+    InputComponent->BindKey(EKeys::F, IE_Pressed, this, &AMassDspHUD::OnKeyFPressed);
 }
 
 void AMassDspHUD::Tick(float DeltaSeconds)
@@ -387,6 +391,63 @@ void AMassDspHUD::OnMouseWheelDown()
     if (!Manager || !Manager->IsPreviewingBuilding()) return;
     CurrentBuildingRotation.Yaw -= BuildingRotationStep;
     Manager->UpdateBuildingPreviewTransform(FTransform(CurrentBuildingRotation, CachedHitLocation));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  建筑交互界面（F 键）
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AMassDspHUD::OnKeyFPressed()
+{
+    // 如果当前已有交互界面打开，先关闭它（切换逻辑）
+    if (CurrentBuildingWidget)
+    {
+        CurrentBuildingWidget->CloseWidget();
+        CurrentBuildingWidget = nullptr;
+        return;
+    }
+
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return;
+
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC || !PC->GetPawn()) return;
+
+    // 以玩家 Pawn 当前位置为中心搜索最近的建筑
+    const FVector PlayerLoc = PC->GetPawn()->GetActorLocation();
+
+    FMassEntityHandle NearestEntity;
+    EBuildingType NearestType = EBuildingType::None;
+    FVector NearestLoc;
+
+    if (!Manager->FindNearestBuilding(PlayerLoc, BuildingInteractRadius, NearestEntity, NearestType, NearestLoc))
+    {
+        // 范围内没有建筑
+        return;
+    }
+
+    // 通过 GameMode 拿 GameConfig
+    AMassDspGameMode* GM = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode());
+    if (!GM || !GM->GameConfig) return;
+
+    const FBuildingTypeConfig* BuildingCfg = GM->GameConfig->GetBuildingConfig(NearestType);
+    if (!BuildingCfg || !BuildingCfg->InteractionWidgetClass) return;
+
+    // 创建并添加到视口
+    UMassDspBuildingWidget* BuildingWidget = CreateWidget<UMassDspBuildingWidget>(PC, BuildingCfg->InteractionWidgetClass);
+    if (!BuildingWidget) return;
+
+    // 传入目标实体，在 AddToViewport 前完成初始化（避免 NativeConstruct 时数据为空）
+    BuildingWidget->InitWidget(NearestEntity, NearestType);
+    BuildingWidget->AddToViewport();
+    CurrentBuildingWidget = BuildingWidget;
+
+    // 切换到 UI 输入模式，同时保留游戏输入（鼠标可操作 UI）
+    FInputModeGameAndUI UIMode;
+    UIMode.SetWidgetToFocus(CurrentBuildingWidget->TakeWidget());
+    UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+    PC->SetInputMode(UIMode);
+    PC->bShowMouseCursor = true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

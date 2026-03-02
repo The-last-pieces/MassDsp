@@ -823,6 +823,7 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
             ++SuccessCount;
             CreatedEntities[Indices[j]] = EntityHandle; // 按原始输入下标回写，保证顺序
             SpawnedBuildingEntities.Add(EntityHandle);
+            BuildingEntityTypeRegistry.Add(EntityHandle, BuildingType);
         }
     }
 
@@ -902,6 +903,7 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
 
     ++BuildingEntityCount;
     SpawnedBuildingEntities.Add(EntityHandle);
+    BuildingEntityTypeRegistry.Add(EntityHandle, SpawnData.BuildingType);
 
     return EntityHandle;
 }
@@ -1282,6 +1284,44 @@ TSubclassOf<AMassDspBuilding> UMassDspManager::GetBuildingClassForType(EBuilding
     if (const FBuildingTypeConfig* Cfg = GameMode->GameConfig->GetBuildingConfig(BuildingType))
         return Cfg->BuildingClass;
     return nullptr;
+}
+
+bool UMassDspManager::FindNearestBuilding(
+    const FVector& PlayerLocation,
+    float SearchRadius,
+    FMassEntityHandle& OutEntity,
+    EBuildingType& OutBuildingType,
+    FVector& OutLocation)
+{
+    UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+    if (!ESub) return false;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    float BestDistSq = SearchRadius * SearchRadius;
+    bool bFound = false;
+
+    for (const FMassEntityHandle& Entity : SpawnedBuildingEntities)
+    {
+        if (!EM.IsEntityValid(Entity)) continue;
+
+        const FTransformFragment* TF = EM.GetFragmentDataPtr<FTransformFragment>(Entity);
+        if (!TF) continue;
+
+        const FVector BuildingLoc = TF->GetTransform().GetLocation();
+        const float DistSq = FVector::DistSquared(PlayerLocation, BuildingLoc);
+        if (DistSq < BestDistSq)
+        {
+            BestDistSq = DistSq;
+            OutEntity = Entity;
+            OutLocation = BuildingLoc;
+            if (const EBuildingType* TypePtr = BuildingEntityTypeRegistry.Find(Entity))
+                OutBuildingType = *TypePtr;
+            else
+                OutBuildingType = EBuildingType::None;
+            bFound = true;
+        }
+    }
+    return bFound;
 }
 
 bool UMassDspManager::FindNearestBuildingSlot(

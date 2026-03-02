@@ -71,6 +71,9 @@ public:
     // 已生成建筑实体列表（用于槽口搜索）
     TArray<FMassEntityHandle> SpawnedBuildingEntities;
 
+    // 建筑实体 -> 建筑类型 映射（用于快速查找最近建筑的类型）
+    TMap<FMassEntityHandle, EBuildingType> BuildingEntityTypeRegistry;
+
     TWeakObjectPtr<AMassDspGameMode> GameMode;
 
     // ISM 物品渲染池，按物品类型分组，一种物品一个 ISM 组件
@@ -263,6 +266,22 @@ public:
 
     /** 根据 EBuildingType 取对应建筑蓝图类（从 GameConfig 读取） */
     TSubclassOf<AMassDspBuilding> GetBuildingClassForType(EBuildingType BuildingType);
+
+    /**
+     * 在 PlayerLocation 附近搜索最近的建筑实体
+     * @param PlayerLocation  搜索中心（世界坐标）
+     * @param SearchRadius    搜索半径（cm）
+     * @param OutEntity       结果实体句柄
+     * @param OutBuildingType 最近建筑的类型
+     * @param OutLocation     最近建筑的世界坐标
+     * @return                是否找到有效建筑
+     */
+    bool FindNearestBuilding(
+        const FVector& PlayerLocation,
+        float SearchRadius,
+        FMassEntityHandle& OutEntity,
+        EBuildingType& OutBuildingType,
+        FVector& OutLocation);
 
 private:
     // 内部辅助方法：创建Building Entity的核心逻辑

@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 
 #include "GameFramework/HUD.h"
-#include "Subsystems/MassDspManager.h"
+#include "UI/MassDspBuildingWidget.h"
 #include "MassDspHUD.generated.h"
 
 UCLASS()
@@ -87,9 +87,21 @@ private:
     void OnMouseWheelUp();
     void OnMouseWheelDown();
 
+    // F 键：打开 / 关闭最近建筑的交互界面
+    void OnKeyFPressed();
+
     /** 预览建筑时绘制所有槽口指示圈 */
     void DrawBuildingPreviewSlots();
 
     /** 每次滚轮的旋转步进（度） */
     static constexpr float BuildingRotationStep = 15.f;
+
+    // ─── 建筑交互 UI ──────────────────────────────────────────────────
+
+    /** 按 F 时搜索最近建筑的交互半径（cm） */
+    static constexpr float BuildingInteractRadius = 500.f;
+
+    /** 当前已打开的建筑交互 Widget（同时只存在一个） */
+    UPROPERTY()
+    TObjectPtr<UMassDspBuildingWidget> CurrentBuildingWidget;
 };

@@ -9,6 +9,7 @@
 
 #include "GameConst.generated.h"
 
+class UMassDspBuildingWidget;
 class AMassDspBuilding;
 
 struct FGameConst
@@ -247,6 +248,10 @@ struct FBuildingTypeConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Building")
     TObjectPtr<UMaterialInterface> Material;
+
+    // 建筑交互界面蓝图类（按 F 键时打开此 UMG Widget）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Building|UI")
+    TSubclassOf<UMassDspBuildingWidget> InteractionWidgetClass;
 
     // 获取或创建Building的ISM渲染Handle（复用物品的模式）
     FStaticMeshInstanceVisualizationDescHandle GetOrCreateMeshHandle(const UWorld* World) const

@@ -14,6 +14,7 @@ public class MassDsp : ModuleRules
             "Engine",
             "InputCore",
             "EnhancedInput",
+            "UMG",
             "MassEntity",
             "MassRepresentation",
             "MassCommon",
