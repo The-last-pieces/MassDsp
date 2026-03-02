@@ -94,10 +94,32 @@ void AMassDspHUD::UpdateBuildPreview(float /*DeltaSeconds*/)
     if (Manager->IsPreviewingBuilding())
     {
         Manager->UpdateBuildingPreviewTransform(FTransform(CurrentBuildingRotation, CachedHitLocation));
+        return;
     }
-    else if (Manager->IsPreviewingBelt() && Manager->BeltHasStartSlot())
+
+    if (!Manager->IsPreviewingBelt()) return;
+
+    // ── 传送带两阶段均做就近吸附 ──────────────────────────────────────
+    // Phase 1（未选起点）：吸附最近 Output 槽，供视觉高亮与左键选中
+    // Phase 2（已选起点）：吸附最近 Input 槽，优先让终点落到槽口上
+    constexpr float SnapRadius = 200.f;
+    const EBuildingSlotType TargetSlotType = Manager->BeltHasStartSlot()
+        ? EBuildingSlotType::Input
+        : EBuildingSlotType::Output;
+
+    FMassEntityHandle DummyEntity;
+    int32 DummySlotIndex;
+    FVector SnappedPos;
+
+    bBeltHoverSnapped = Manager->FindNearestBuildingSlot(
+        CachedHitLocation, TargetSlotType, SnapRadius,
+        DummyEntity, DummySlotIndex, SnappedPos);
+    BeltHoverSnapLocation = bBeltHoverSnapped ? SnappedPos : CachedHitLocation;
+
+    // Phase 2：每帧用（已吸附的）终点坐标重建预览网格
+    if (Manager->BeltHasStartSlot())
     {
-        Manager->UpdateBeltPreviewEndPoint(CachedHitLocation);
+        Manager->UpdateBeltPreviewEndPoint(BeltHoverSnapLocation);
     }
 }
 
@@ -179,10 +201,9 @@ void AMassDspHUD::OnLeftMouseButtonPressed()
         }
     case EBuildPlaceMode::Belt:
         {
-            // 左键尝试吸附槽口
-            // - 首次：锁定起始 Output 槽
-            // - 次次：锁定终止 Input 槽并立即确认
-            const bool bBothSelected = Manager->SelectBeltSlot(CachedHitLocation);
+            // 使用每帧 Tick 中已吸附的槽口坐标（而非裸鼠标位置），保证精确落点
+            const FVector SelectPos = bBeltHoverSnapped ? BeltHoverSnapLocation : CachedHitLocation;
+            const bool bBothSelected = Manager->SelectBeltSlot(SelectPos);
             if (bBothSelected)
             {
                 FBeltHandle Handle = Manager->ConfirmPreviewBelt();
@@ -255,6 +276,9 @@ void AMassDspHUD::DrawHUD()
 
     // ── 建造模式提示 ──
     DrawBuildSystemHint();
+
+    // ── 传送带吸附指示圈 ──
+    DrawBeltSnapIndicator();
 }
 
 void AMassDspHUD::DrawBuildSystemHint()
@@ -325,6 +349,59 @@ void AMassDspHUD::DrawBuildSystemHint()
     const float CsY = CanvasH - 30.f;
     DrawText(CheatSheet, FLinearColor::Black, CsX + 1.f, CsY + 1.f, GEngine->GetSmallFont(), 1.3f);
     DrawText(CheatSheet, FLinearColor(0.8f, 0.8f, 0.8f), CsX, CsY, GEngine->GetSmallFont(), 1.3f);
+}
+
+void AMassDspHUD::DrawBeltSnapIndicator()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager || !Manager->IsPreviewingBelt()) return;
+    if (!Canvas) return;
+
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return;
+
+    // ── 辅助：将世界坐标投影到屏幕并画实心圆点 ──
+    auto DrawWorldDot = [&](FVector WorldPos, FLinearColor Color, float Radius)
+    {
+        FVector2D ScreenPos;
+        if (!PC->ProjectWorldLocationToScreen(WorldPos, ScreenPos, true)) return;
+
+        constexpr int32 Segs = 16;
+        for (int32 i = 0; i < Segs; ++i)
+        {
+            const float A0 = (i      / (float)Segs) * 2.f * UE_PI;
+            const float A1 = ((i + 1) / (float)Segs) * 2.f * UE_PI;
+            DrawLine(
+                ScreenPos.X + FMath::Cos(A0) * Radius,
+                ScreenPos.Y + FMath::Sin(A0) * Radius,
+                ScreenPos.X + FMath::Cos(A1) * Radius,
+                ScreenPos.Y + FMath::Sin(A1) * Radius,
+                Color, 2.5f);
+        }
+    };
+
+    const bool bHasStart = Manager->BeltHasStartSlot();
+
+    // Phase 1：在鼠标附近最近的 Output 槽口处画绿圈（或灰圈表示无槽口）
+    // Phase 2：在鼠标附近最近的 Input 槽口处画蓝圈
+    if (!bHasStart)
+    {
+        const FLinearColor RingColor = bBeltHoverSnapped
+            ? FLinearColor(0.1f, 1.0f, 0.3f)    // 有效 Output 槽 → 绿
+            : FLinearColor(0.5f, 0.5f, 0.5f);   // 无槽口 → 灰
+        DrawWorldDot(BeltHoverSnapLocation, RingColor, 14.f);
+    }
+    else
+    {
+        // 起点：固定在已锁定的 Output 槽位置，画金色大圈表示「已选」
+        DrawWorldDot(Manager->GetBeltStartSlotLocation(), FLinearColor(1.f, 0.8f, 0.1f), 18.f);
+
+        // 终点跟随鼠标，就近吸附到 Input 槽 → 蓝圈
+        const FLinearColor EndColor = bBeltHoverSnapped
+            ? FLinearColor(0.2f, 0.6f, 1.0f)    // 有效 Input 槽 → 蓝
+            : FLinearColor(0.5f, 0.5f, 0.5f);   // 无槽口 → 灰
+        DrawWorldDot(BeltHoverSnapLocation, EndColor, 14.f);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

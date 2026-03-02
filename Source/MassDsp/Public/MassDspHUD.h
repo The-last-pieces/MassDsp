@@ -54,6 +54,17 @@ private:
     /** 在 HUD 上绘制当前建造模式提示 */
     void DrawBuildSystemHint();
 
+    /** 绘制槽口吸附指示圈 */
+    void DrawBeltSnapIndicator();
+
+    // ─── 传送带吸附状态（每帧 Tick 更新）──────────────────────────────
+
+    /** 当前帧吸附到的世界坐标（吸附成功时 = 槽口位置；否则 = 鼠标射线落点） */
+    FVector BeltHoverSnapLocation = FVector::ZeroVector;
+
+    /** 当前帧是否成功吸附到有效槽口 */
+    bool bBeltHoverSnapped = false;
+
     // 数字键 1-6：切换建造模式
     void OnKey1Pressed(); // 矿机
     void OnKey2Pressed(); // 合成台

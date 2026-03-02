@@ -204,6 +204,8 @@ public:
     bool BeltHasStartSlot()     const { return bBeltHasStart; }
     EBuildingType GetPreviewBuildingType() const { return PreviewBuildingType; }
     EBeltType     GetPreviewBeltType()     const { return PreviewBeltType; }
+    /** 起点槽口的世界坐标（Phase 2 时用于 HUD 绘制金色锁定圈） */
+    FVector GetBeltStartSlotLocation() const { return BeltStartSlotLocation; }
 
     /**
      * 搜索附近最近的建筑槽口
