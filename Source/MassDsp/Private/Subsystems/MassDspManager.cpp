@@ -735,8 +735,11 @@ FMassEntityHandle UMassDspManager::SpawnBuildingFromClass(FMassCommandBuffer& Co
 
 TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList)
 {
+    // 预分配与输入等长的数组，保证输出顺序与输入一致；未成功创建的槽位保持默认无效 Handle
     TArray<FMassEntityHandle> CreatedEntities;
-    CreatedEntities.Reserve(SpawnDataList.Num());
+    if (SpawnDataList.IsEmpty()) return CreatedEntities;
+    CreatedEntities.SetNum(SpawnDataList.Num());
+    int32 SuccessCount = 0;
 
     UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
     if (!EntitySubsystem)
@@ -745,19 +748,90 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
         return CreatedEntities;
     }
 
-    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-
-    // 批量创建（同步）
-    for (const FBuildingSpawnData& SpawnData : SpawnDataList)
+    TryGetGameMode();
+    if (!GameMode.IsValid() || !GameMode->BeltItemConfigAsset)
     {
-        // TODO 改成调用 BatchCreateEntity
-        if (FMassEntityHandle EntityHandle = CreateBuildingEntityInternal(EntityManager, SpawnData); EntityHandle.IsValid())
+        UE_LOG(LogTemp, Error, TEXT("BatchSpawnBuildings: GameMode or BeltItemConfigAsset is null"));
+        return CreatedEntities;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    const FMassEntityTemplate& EntityTemplate = GameMode->BeltItemConfigAsset->GetConfig().GetOrCreateEntityTemplate(*GetWorld());
+
+    // 按 BuildingType 分组，相同类型共用同一 Archetype，一次 BatchCreateEntities
+    TMap<EBuildingType, TArray<int32>> TypeToIndices;
+    for (int32 i = 0; i < SpawnDataList.Num(); ++i)
+    {
+        TypeToIndices.FindOrAdd(SpawnDataList[i].BuildingType).Add(i);
+    }
+
+    for (auto& [BuildingType, Indices] : TypeToIndices)
+    {
+        const FBuildingSpawnData& FirstData = SpawnDataList[Indices[0]];
+        if (!FirstData.BuildingClass) continue;
+
+        // 获取或创建 Archetype（有缓存则直接取，避免重复 CreateArchetype）
+        FMassArchetypeHandle Archetype;
+        if (FMassArchetypeHandle* Cached = CachedBuildingArchetypes.Find(BuildingType))
         {
-            CreatedEntities.Add(EntityHandle);
+            Archetype = *Cached;
+        }
+        else
+        {
+            const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(FirstData.BuildingClass);
+            if (!CDO) continue;
+
+            FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
+            for (const UScriptStruct* FragmentType : CDO->GetStaticStructs())
+            {
+                Composition.GetContainer<FMassFragment>().Add(*FragmentType);
+            }
+            Archetype = EntityManager.CreateArchetype(Composition);
+            CachedBuildingArchetypes.Add(BuildingType, Archetype);
+        }
+
+        if (!Archetype.IsValid()) continue;
+
+        // 一次性批量分配本类型全部实体（核心优化：避免逐个 CreateEntity 的内存碎片和锁开销）
+        TArray<FMassEntityHandle> BatchHandles;
+        BatchHandles.Reserve(Indices.Num());
+        EntityManager.BatchCreateEntities(Archetype, EntityTemplate.GetSharedFragmentValues(), Indices.Num(), BatchHandles);
+
+        // 逐实体初始化 Fragment 数据（创建后必须初始化，无法批量跳过）
+        const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(FirstData.BuildingClass);
+        for (int32 j = 0; j < BatchHandles.Num(); ++j)
+        {
+            const FMassEntityHandle EntityHandle = BatchHandles[j];
+            const FBuildingSpawnData& SpawnData = SpawnDataList[Indices[j]];
+
+            EntityManager.SetEntityFragmentValues(EntityHandle, EntityTemplate.GetInitialFragmentValues());
+            CDO->InitFragmentForEntity(EntityManager, EntityHandle, SpawnData.WorldTransform);
+
+            if (FTransformFragment* TransformFrag = EntityManager.GetFragmentDataPtr<FTransformFragment>(EntityHandle))
+            {
+                TransformFrag->SetTransform(SpawnData.WorldTransform);
+            }
+
+            if (FMassRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(EntityHandle))
+            {
+                if (auto CachedDesc = CachedBuildingMeshDesc.Find(BuildingType))
+                {
+                    RepFrag->StaticMeshDescHandle = *CachedDesc;
+                }
+                else if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(BuildingType))
+                {
+                    RepFrag->StaticMeshDescHandle = BuildingConfig->GetOrCreateMeshHandle(GetWorld());
+                    CachedBuildingMeshDesc.Add(BuildingType, RepFrag->StaticMeshDescHandle);
+                }
+            }
+
+            ++BuildingEntityCount;
+            ++SuccessCount;
+            CreatedEntities[Indices[j]] = EntityHandle;  // 按原始输入下标回写，保证顺序
         }
     }
 
-    UE_LOG(LogTemp, Log, TEXT("BatchSpawnBuildings: Created %d building entities"), CreatedEntities.Num());
+    UE_LOG(LogTemp, Log, TEXT("BatchSpawnBuildings: Created %d / %d building entities"), SuccessCount, SpawnDataList.Num());
 
     return CreatedEntities;
 }
@@ -788,13 +862,22 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
 
     const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*GetWorld());
 
-    FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
-    for (const UScriptStruct* FragmentType : BuildingCDO->GetStaticStructs())
+    // 使用缓存的 Archetype（避免每次重建 Composition + CreateArchetype）
+    FMassArchetypeHandle CustomArchetype;
+    if (FMassArchetypeHandle* Cached = CachedBuildingArchetypes.Find(SpawnData.BuildingType))
     {
-        Composition.GetContainer<FMassFragment>().Add(*FragmentType);
+        CustomArchetype = *Cached;
     }
-
-    FMassArchetypeHandle CustomArchetype = EntityManager.CreateArchetype(Composition);
+    else
+    {
+        FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
+        for (const UScriptStruct* FragmentType : BuildingCDO->GetStaticStructs())
+        {
+            Composition.GetContainer<FMassFragment>().Add(*FragmentType);
+        }
+        CustomArchetype = EntityManager.CreateArchetype(Composition);
+        CachedBuildingArchetypes.Add(SpawnData.BuildingType, CustomArchetype);
+    }
 
     auto EntityHandle = EntityManager.CreateEntity(CustomArchetype, EntityTemplate.GetSharedFragmentValues());
     EntityManager.SetEntityFragmentValues(EntityHandle, EntityTemplate.GetInitialFragmentValues());

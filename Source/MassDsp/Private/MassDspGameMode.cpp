@@ -36,7 +36,6 @@ void AMassDspGameMode::BeginPlay()
 
     // 大规模创建
 
-    // TODO 5w建筑的时候帧率跌得有点夸张,得优化下
     constexpr int N = 100;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
@@ -84,14 +83,21 @@ void AMassDspGameMode::BeginPlay()
         }
     }
 
+    auto Time1 = FPlatformTime::Seconds();
+
     // 第二步：单次批量创建所有Building Entity
     TArray<FMassEntityHandle> AllCreatedBuildings = DspManager->BatchSpawnBuildings(AllBuildingDataList);
+
+    auto Time2 = FPlatformTime::Seconds();
+
+    const double SpawnElapsed = Time2 - Time1;
+    const double AvgSpawnTimeMs = (AllCreatedBuildings.Num() > 0) ? (SpawnElapsed * 1000.0 / AllCreatedBuildings.Num()) : 0.0;
+    UE_LOG(LogTemp, Log, TEXT("[Spawn Profile] Total: %d entities | Total time: %.3f ms | Avg per entity: %.4f ms"),
+           AllCreatedBuildings.Num(), SpawnElapsed * 1000.0, AvgSpawnTimeMs);
 
     // 第三步：遍历每组，连接传送带
     constexpr int BeltsPerGroup = 4; // 每组传送带数量
     constexpr int TotalBelts = N * N * BeltsPerGroup;
-
-    const double BeltLinkStartTime = FPlatformTime::Seconds();
 
     for (int GroupIndex = 0; GroupIndex < N * N; ++GroupIndex)
     {
@@ -110,12 +116,14 @@ void AMassDspGameMode::BeginPlay()
         DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, EBeltType::Fast);
     }
 
-    const double BeltLinkElapsed = FPlatformTime::Seconds() - BeltLinkStartTime;
+    DspManager->FlushBeltMesh();
+
+    auto Time3 = FPlatformTime::Seconds();
+
+    const double BeltLinkElapsed = Time3 - Time2;
     const double AvgBeltTimeMs = (TotalBelts > 0) ? (BeltLinkElapsed * 1000.0 / TotalBelts) : 0.0;
     UE_LOG(LogTemp, Log, TEXT("[Belt Profile] Total: %d belts | Total time: %.3f ms | Avg per belt: %.4f ms"),
            TotalBelts, BeltLinkElapsed * 1000.0, AvgBeltTimeMs);
-
-    DspManager->FlushBeltMesh();
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)

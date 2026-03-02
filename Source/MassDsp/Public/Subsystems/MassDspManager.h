@@ -5,6 +5,7 @@
 
 #include "Subsystems/WorldSubsystem.h"
 #include "MassEntityTemplate.h"
+#include "MassEntityManager.h"
 #include "MassDspBeltTypes.h"
 #include "ProceduralMeshComponent.h"
 
@@ -69,6 +70,9 @@ public:
     TMap<EItemType, TArray<FTransform>> CachedTransformsByType;
     
     TMap<EBuildingType, FStaticMeshInstanceVisualizationDescHandle> CachedBuildingMeshDesc;
+
+    // Cache: EBuildingType => Archetype（避免每次重建，在 CreateBuildingEntityInternal / BatchSpawnBuildings 中懒初始化）
+    TMap<EBuildingType, FMassArchetypeHandle> CachedBuildingArchetypes;
 
     // Transform 同步累计时间（~30fps）
     float SyncAccum = 0.f;
