@@ -8,6 +8,7 @@
 #include "Tools/MaterialGeneratorUtils.h"
 #endif
 
+
 void FMassDspModule::StartupModule()
 {
 #if WITH_EDITOR
@@ -36,6 +37,14 @@ void FMassDspModule::RegisterMenus()
         FText::FromString(TEXT("自动生成传送带材质，包含MD5检测")),
         FSlateIcon(),
         FUIAction(FExecuteAction::CreateStatic(&UMaterialGeneratorUtils::CreateConveyorMaterial))
+    );
+
+    NewSection.AddMenuEntry(
+        "CreateBuildingWidgets",
+        FText::FromString(TEXT("生成建筑 UI 蓝图")),
+        FText::FromString(TEXT("程序化生成 BP_Miner / BP_Maker / BP_Storage 三个 Widget Blueprint")),
+        FSlateIcon(),
+        FUIAction(FExecuteAction::CreateStatic(&UMaterialGeneratorUtils::CreateBuildingWidgets))
     );
 
     UE_LOG(LogTemp, Log, TEXT("Menus Registered."));

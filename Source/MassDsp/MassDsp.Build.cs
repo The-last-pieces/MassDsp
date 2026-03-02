@@ -44,6 +44,9 @@ public class MassDsp : ModuleRules
                 "Slate",
                 "SlateCore",
                 "EditorStyle",
+                "UMGEditor",
+                "Kismet",
+                "BlueprintGraph",
             ]);
         }
 

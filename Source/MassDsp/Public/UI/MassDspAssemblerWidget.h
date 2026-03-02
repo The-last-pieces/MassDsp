@@ -56,8 +56,16 @@ private:
     UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Output_2;
     UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Output_3;
 
-    /** 内部：刷新缓冲区槽位 TextBlock 数组（避免重复代码） */
+    /**
+     * 内部：刷新缓冲区槽位 TextBlock 数组
+     * @param Buffers       当前缓冲区数组（实时数量）
+     * @param RecipeItems   对应的配方条目（用于获取物品名和需求量），可为 nullptr
+     * @param Count         配方中实际使用的槽位数
+     * @param Slots         目标 TextBlock 指针数组（长度 4）
+     */
     void RefreshBufferSlots(
-        const FBufferEntry* Buffers, int32 Count,
+        const FBufferEntry* Buffers,
+        const FRecipeEntry* RecipeItems,
+        int32 Count,
         UTextBlock* Slots[4]) const;
 };

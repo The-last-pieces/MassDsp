@@ -19,7 +19,9 @@ const FMassDspAssemblerFragment* UMassDspAssemblerWidget::GetFragment() const
 // 
 
 void UMassDspAssemblerWidget::RefreshBufferSlots(
-    const FBufferEntry* Buffers, int32 Count,
+    const FBufferEntry* Buffers,
+    const FRecipeEntry* RecipeItems,
+    int32 Count,
     UTextBlock* Slots[4]) const
 {
     for (int32 i = 0; i < 4; ++i)
@@ -29,18 +31,32 @@ void UMassDspAssemblerWidget::RefreshBufferSlots(
 
         if (i < Count)
         {
-            const FBufferEntry& Entry = Buffers[i];
-            if (Entry.ItemType != EItemType::None)
+            // 优先使用配方中的物品类型（当缓冲区还未入货时也能显示正确物品名）
+            const EItemType DisplayType =
+                (RecipeItems && RecipeItems[i].ItemType != EItemType::None)
+                    ? RecipeItems[i].ItemType
+                    : Buffers[i].ItemType;
+
+            if (DisplayType != EItemType::None)
             {
-                SlotText->SetText(FText::Format(
-                    NSLOCTEXT("MassDsp", "AssemblerBufferSlot", "{0} {1}"),
-                    GetItemTypeDisplayName(Entry.ItemType),
-                    FText::AsNumber(Entry.Amount)));
+                const int32 CurAmount = Buffers[i].Amount;
+                const int32 ReqAmount = RecipeItems ? RecipeItems[i].Amount : 0;
+
+                FString SlotStr;
+                if (ReqAmount > 0)
+                    SlotStr = FString::Printf(TEXT("%s  %d / %d"),
+                        *GetItemTypeDisplayName(DisplayType).ToString(), CurAmount, ReqAmount);
+                else
+                    SlotStr = FString::Printf(TEXT("%s  %d"),
+                        *GetItemTypeDisplayName(DisplayType).ToString(), CurAmount);
+
+                SlotText->SetText(FText::FromString(SlotStr));
                 SlotText->SetVisibility(ESlateVisibility::HitTestInvisible);
             }
             else
             {
-                SlotText->SetText(FText::FromString(TEXT("")));
+                // 配方未配置此槽
+                SlotText->SetText(FText::FromString(TEXT("—")));
                 SlotText->SetVisibility(ESlateVisibility::HitTestInvisible);
             }
         }
@@ -68,22 +84,21 @@ void UMassDspAssemblerWidget::RefreshWidgets()
     // 速度倍率（可选）
     if (TextBlock_Speed)
     {
-        TextBlock_Speed->SetText(FText::Format(
-            NSLOCTEXT("MassDsp", "AssemblerSpeed", "速度 {0}"),
-            FText::AsNumber(F->CraftingSpeedMultiplier)));
+        TextBlock_Speed->SetText(FText::FromString(
+            FString::Printf(TEXT("×%.2f"), F->CraftingSpeedMultiplier)));
     }
 
-    // 输入缓冲区槽
+    // 输入缓冲区槽（传入配方输入条目以评断物品类型和需求量）
     UTextBlock* InputSlots[4] = {
         TextBlock_Input_0, TextBlock_Input_1,
         TextBlock_Input_2, TextBlock_Input_3
     };
-    RefreshBufferSlots(F->InputBuffers, F->CurrentRecipe.InputsCount, InputSlots);
+    RefreshBufferSlots(F->InputBuffers, F->CurrentRecipe.Inputs, F->CurrentRecipe.InputsCount, InputSlots);
 
     // 输出缓冲区槽
     UTextBlock* OutputSlots[4] = {
         TextBlock_Output_0, TextBlock_Output_1,
         TextBlock_Output_2, TextBlock_Output_3
     };
-    RefreshBufferSlots(F->OutputBuffers, F->CurrentRecipe.OutputsCount, OutputSlots);
+    RefreshBufferSlots(F->OutputBuffers, F->CurrentRecipe.Outputs, F->CurrentRecipe.OutputsCount, OutputSlots);
 }

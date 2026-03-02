@@ -31,6 +31,25 @@
 #include "Materials/MaterialExpressionFrac.h"
 #include "Materials/MaterialExpressionVertexColor.h"
 
+#include "UI/MassDspMinerWidget.h"
+#include "UI/MassDspStorageWidget.h"
+#include "UI/MassDspAssemblerWidget.h"
+
+// UMG Editor
+#include "WidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
+#include "Kismet2/KismetEditorUtilities.h"
+
+// UMG Runtime Components
+#include "WidgetBlueprintFactory.h"
+
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/TextBlock.h"
+#include "Components/ProgressBar.h"
+#include "Components/Button.h"
+#include "Components/Border.h"
+
 // 传送带材质：两侧白边 + 中间倒V形（∧）箭头动画
 // 动画速度由 Speed 标量参数控制（UV/s），不再依赖顶点色
 void UMaterialGeneratorUtils::CreateConveyorMaterial()
@@ -362,6 +381,420 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
     FAssetRegistryModule::AssetCreated(Material);
 
     UE_LOG(LogTemp, Log, TEXT("Conveyor Material Updated (Chevron Style). Hash: %s"), *CurrentHash);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  UMG Widget 蓝图生成器
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ─── 颜色常量 ────────────────────────────────────────────────────────────────
+namespace WidgetColors
+{
+    // 背景
+    static const FLinearColor Overlay{0.02f, 0.02f, 0.05f, 0.82f};
+    static const FLinearColor CardBg{0.06f, 0.06f, 0.10f, 1.00f};
+    static const FLinearColor CardBorder{0.18f, 0.18f, 0.28f, 1.00f};
+    static const FLinearColor Divider{0.15f, 0.15f, 0.22f, 1.00f};
+    // 文字
+    static const FLinearColor TextTitle{0.95f, 0.95f, 1.00f, 1.00f};
+    static const FLinearColor TextLabel{0.55f, 0.55f, 0.70f, 1.00f};
+    static const FLinearColor TextValue{0.92f, 0.92f, 1.00f, 1.00f};
+    // 进度条填充（每种建筑不同色调）
+    static const FLinearColor FillMiner{0.22f, 0.56f, 0.90f, 1.00f}; // 蓝
+    static const FLinearColor FillStorage{0.20f, 0.78f, 0.42f, 1.00f}; // 绿
+    static const FLinearColor FillAssembler{0.92f, 0.64f, 0.18f, 1.00f}; // 琥珀
+    static const FLinearColor BarBg{0.06f, 0.08f, 0.12f, 1.00f};
+    // 按钮
+    static const FLinearColor BtnClose{0.40f, 0.08f, 0.08f, 1.00f};
+    static const FLinearColor BtnCloseHover{0.75f, 0.15f, 0.15f, 1.00f};
+}
+
+// ─── 内部构建辅助（文件作用域）────────────────────────────────────────────────
+
+struct FWidgetBuilder
+{
+    UWidgetTree* Tree = nullptr;
+    UCanvasPanel* Root = nullptr;
+    float OX = 0.f; // 卡片左上角 X（相对画布中心）
+    float OY = 0.f; // 卡片左上角 Y（相对画布中心）
+
+    // 在画布上放置控件（坐标以卡片左上角为原点）
+    UCanvasPanelSlot* Place(UWidget* W, float X, float Y, float W2, float H, FVector2D Align = FVector2D::ZeroVector)
+    {
+        UCanvasPanelSlot* Slot = Root->AddChildToCanvas(W);
+        Slot->SetAnchors(FAnchors(0.5f, 0.5f)); // 相对画布中心点
+        Slot->SetAlignment(Align);
+        Slot->SetPosition(FVector2D(OX + X, OY + Y));
+        Slot->SetSize(FVector2D(W2, H));
+        return Slot;
+    }
+
+    // 快速创建并放置 TextBlock
+    UTextBlock* Text(FName Name, const FString& Content, float X, float Y, float W, float H,
+                     FLinearColor Color, int32 Pt = 13, bool bBold = false)
+    {
+        UTextBlock* TB = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
+        TB->SetText(FText::FromString(Content));
+        TB->SetColorAndOpacity(FSlateColor(Color));
+        FSlateFontInfo F = TB->GetFont();
+        F.Size = Pt;
+        if (bBold) F.TypefaceFontName = FName("Bold");
+        TB->SetFont(F);
+        Place(TB, X, Y, W, H);
+        return TB;
+    }
+
+    // 创建并放置 ProgressBar
+    UProgressBar* Bar(FName Name, float X, float Y, float W, float H, FLinearColor FillColor)
+    {
+        UProgressBar* PB = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), Name);
+        PB->SetPercent(0.45f); // 预览值
+
+        FProgressBarStyle Style = PB->WidgetStyle;
+        FSlateBrush FillBrush;
+        FillBrush.TintColor = FSlateColor(FillColor);
+        FillBrush.DrawAs = ESlateBrushDrawType::Box;
+        Style.FillImage = FillBrush;
+
+        FSlateBrush BgBrush;
+        BgBrush.TintColor = FSlateColor(WidgetColors::BarBg);
+        BgBrush.DrawAs = ESlateBrushDrawType::Box;
+        Style.BackgroundImage = BgBrush;
+
+        PB->WidgetStyle = Style;
+        Place(PB, X, Y, W, H);
+        return PB;
+    }
+
+    // 创建并放置背景 Border（纯色填充矩形）
+    UBorder* Rect(FName Name, float X, float Y, float W, float H, FLinearColor Color)
+    {
+        UBorder* B = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), Name);
+        FSlateBrush Br;
+        Br.TintColor = FSlateColor(Color);
+        Br.DrawAs = ESlateBrushDrawType::Box;
+        B->SetBrush(Br);
+        B->SetPadding(FMargin(0.f));
+        Place(B, X, Y, W, H);
+        return B;
+    }
+
+    // 创建关闭按钮（右上角）
+    UButton* CloseButton(float CardW)
+    {
+        UButton* Btn = Tree->ConstructWidget<UButton>(UButton::StaticClass(), FName("Button_Close"));
+
+        FButtonStyle Style = Btn->WidgetStyle;
+        auto MakeBrush = [](FLinearColor C)
+        {
+            FSlateBrush Br;
+            Br.TintColor = FSlateColor(C);
+            Br.DrawAs = ESlateBrushDrawType::Box;
+            return Br;
+        };
+        Style.Normal = MakeBrush(WidgetColors::BtnClose);
+        Style.Hovered = MakeBrush(WidgetColors::BtnCloseHover);
+        Style.Pressed = MakeBrush(FLinearColor(0.25f, 0.04f, 0.04f, 1.f));
+        Style.SetNormalPadding(FMargin(0.f));
+        Style.SetPressedPadding(FMargin(0.f));
+        Btn->WidgetStyle = Style;
+
+        UTextBlock* X = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), FName("TextBlock_CloseX"));
+        X->SetText(FText::FromString(TEXT("✕")));
+        X->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        FSlateFontInfo F = X->GetFont();
+        F.Size = 12;
+        X->SetFont(F);
+        X->SetJustification(ETextJustify::Center);
+        Btn->SetContent(X);
+
+        Place(Btn, CardW - 38.f, 8.f, 30.f, 30.f);
+        return Btn;
+    }
+};
+
+// ─── 单个蓝图生成 ─────────────────────────────────────────────────────────────
+
+static UWidgetBlueprint* CreateWidgetBP(
+    const FString& PackagePath, const FString& AssetName, UClass* ParentClass)
+{
+    const FString FullPath = PackagePath + TEXT("/") + AssetName;
+
+    // 已存在则跳过
+    if (UObject* Existing = LoadObject<UObject>(nullptr, *FullPath))
+    {
+        UE_LOG(LogTemp, Log, TEXT("Widget BP already exists, skipping: %s"), *FullPath);
+        return nullptr;
+    }
+
+    UPackage* Package = CreatePackage(*FullPath);
+    if (!Package) return nullptr;
+
+    UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
+    Factory->ParentClass = ParentClass;
+
+    UWidgetBlueprint* WBP = Cast<UWidgetBlueprint>(
+        Factory->FactoryCreateNew(UWidgetBlueprint::StaticClass(),
+                                  Package, *AssetName, RF_Public | RF_Standalone, nullptr, GWarn));
+
+    return WBP;
+}
+
+static void FinalizeWidgetBP(UWidgetBlueprint* WBP)
+{
+    if (!WBP) return;
+
+    // 编译蓝图（仅更新 WidgetTree，无需完整 Kismet 图编译）
+    FKismetEditorUtilities::CompileBlueprint(WBP,
+                                             EBlueprintCompileOptions::SkipGarbageCollection |
+                                             EBlueprintCompileOptions::BatchCompile);
+
+    WBP->PostEditChange();
+    WBP->MarkPackageDirty();
+    FAssetRegistryModule::AssetCreated(WBP);
+    UE_LOG(LogTemp, Log, TEXT("Widget BP generated: %s"), *WBP->GetPathName());
+}
+
+// ─── 共同区段：标题栏 + 分割线 ──────────────────────────────────────────────
+
+static void BuildCommonHeader(FWidgetBuilder& B, const FString& Title, float CardW)
+{
+    // 标题文字
+    B.Text(FName("TextBlock_Title"), Title,
+           16.f, 13.f, CardW - 58.f, 26.f,
+           WidgetColors::TextTitle, 15, /*bBold*/ true);
+
+    // 关闭按钮
+    B.CloseButton(CardW);
+
+    // 分割线
+    B.Rect(FName("Border_Sep"), 0.f, 47.f, CardW, 1.f, WidgetColors::Divider);
+}
+
+// 灰色小标签 + 白色值 两行结构
+static void BuildLabelValue(FWidgetBuilder& B, FName LabelName, FName ValueName,
+                            const FString& Label, const FString& DefaultValue,
+                            float X, float Y, float W, float LH = 18.f, float VH = 22.f)
+{
+    B.Text(LabelName, Label, X, Y, W, LH, WidgetColors::TextLabel, 11);
+    B.Text(ValueName, DefaultValue, X, Y + LH + 2.f, W, VH, WidgetColors::TextValue, 14);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BP_Miner
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void BuildMinerLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 440.f, CH = 278.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    // ── 全屏半透明背景
+    {
+        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+        FSlateBrush Br;
+        Br.TintColor = FSlateColor(WidgetColors::Overlay);
+        Br.DrawAs = ESlateBrushDrawType::Box;
+        Overlay->SetBrush(Br);
+        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
+        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+        S->SetOffsets(FMargin(0.f));
+    }
+
+    // ── 卡片背景
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+
+    // ── 标题栏 + 分割线
+    BuildCommonHeader(B, TEXT("矿机"), CW);
+
+    // ── 内容（X=20 左边距，Y 从 60 开始）
+    constexpr float IX = 20.f, IW = CW - 40.f;
+
+    BuildLabelValue(B,
+                    FName("Label_ItemType"), FName("TextBlock_ItemType"),
+                    TEXT("资源类型"), TEXT("—"),
+                    IX, 60.f, IW);
+
+    BuildLabelValue(B,
+                    FName("Label_Inventory"), FName("TextBlock_Inventory"),
+                    TEXT("缓存库存"), TEXT("0 / 50"),
+                    IX, 108.f, IW / 2.f);
+
+    B.Text(FName("TextBlock_Interval"), TEXT("每 2 秒产出 1 个"),
+           IX + IW / 2.f, 108.f + 18.f + 2.f, IW / 2.f, 22.f,
+           WidgetColors::TextLabel, 12);
+
+    // 进度条区段
+    B.Text(FName("Label_Progress"), TEXT("生产进度"),
+           IX, 188.f, IW, 18.f, WidgetColors::TextLabel, 11);
+    B.Bar(FName("ProgressBar_Production"),
+          IX, 210.f, IW, 20.f, WidgetColors::FillMiner);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BP_Maker (Storage 仓库)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void BuildStorageLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 440.f, CH = 248.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    // 背景
+    {
+        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+        FSlateBrush Br;
+        Br.TintColor = FSlateColor(WidgetColors::Overlay);
+        Br.DrawAs = ESlateBrushDrawType::Box;
+        Overlay->SetBrush(Br);
+        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
+        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+        S->SetOffsets(FMargin(0.f));
+    }
+
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+    BuildCommonHeader(B, TEXT("仓库"), CW);
+
+    constexpr float IX = 20.f, IW = CW - 40.f;
+
+    BuildLabelValue(B,
+                    FName("Label_ItemType"), FName("TextBlock_ItemType"),
+                    TEXT("存储物品"), TEXT("—"),
+                    IX, 60.f, IW);
+
+    BuildLabelValue(B,
+                    FName("Label_Inventory"), FName("TextBlock_Inventory"),
+                    TEXT("库存数量"), TEXT("0 / 50"),
+                    IX, 108.f, IW);
+
+    B.Text(FName("Label_Fill"), TEXT("占用率"),
+           IX, 160.f, IW, 18.f, WidgetColors::TextLabel, 11);
+    B.Bar(FName("ProgressBar_Fill"),
+          IX, 182.f, IW, 20.f, WidgetColors::FillStorage);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BP_Assembler (Assembler 合成台)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 440.f, CH = 468.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    {
+        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+        FSlateBrush Br;
+        Br.TintColor = FSlateColor(WidgetColors::Overlay);
+        Br.DrawAs = ESlateBrushDrawType::Box;
+        Overlay->SetBrush(Br);
+        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
+        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+        S->SetOffsets(FMargin(0.f));
+    }
+
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+    BuildCommonHeader(B, TEXT("合成台"), CW);
+
+    constexpr float IX = 20.f, IW = CW - 40.f;
+
+    // 配方 + 进度
+    BuildLabelValue(B,
+                    FName("Label_Recipe"), FName("TextBlock_RecipeType"),
+                    TEXT("当前配方"), TEXT("—"),
+                    IX, 60.f, IW * 0.6f);
+
+    B.Text(FName("Label_Speed"), TEXT("速度倍率"),
+           IX + IW * 0.6f, 60.f, IW * 0.4f, 18.f, WidgetColors::TextLabel, 11);
+    B.Text(FName("TextBlock_Speed"), TEXT("×1.0"),
+           IX + IW * 0.6f, 80.f, IW * 0.4f, 22.f, WidgetColors::TextValue, 14);
+
+    B.Text(FName("Label_Crafting"), TEXT("合成进度"),
+           IX, 116.f, IW, 18.f, WidgetColors::TextLabel, 11);
+    B.Bar(FName("ProgressBar_Crafting"),
+          IX, 138.f, IW, 20.f, WidgetColors::FillAssembler);
+
+    // ── 输入区 ─────────────────────────────────────────────────────────────
+    B.Rect(FName("Border_InputSep"), 0.f, 172.f, CW, 1.f, WidgetColors::Divider);
+    B.Text(FName("Label_Input"), TEXT("输入材料"),
+           IX, 180.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+
+    const FName InputNames[4] = {
+        FName("TextBlock_Input_0"), FName("TextBlock_Input_1"),
+        FName("TextBlock_Input_2"), FName("TextBlock_Input_3")
+    };
+    for (int32 i = 0; i < 4; ++i)
+    {
+        const float Col = (i % 2) * (IW * 0.5f);
+        const float Row = (i / 2) * 40.f;
+        B.Text(InputNames[i], TEXT("—"), IX + Col, 204.f + Row, IW * 0.5f - 8.f, 30.f,
+               WidgetColors::TextValue, 12);
+    }
+
+    // ── 输出区 ─────────────────────────────────────────────────────────────
+    B.Rect(FName("Border_OutputSep"), 0.f, 288.f, CW, 1.f, WidgetColors::Divider);
+    B.Text(FName("Label_Output"), TEXT("输出产物"),
+           IX, 296.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+
+    const FName OutputNames[4] = {
+        FName("TextBlock_Output_0"), FName("TextBlock_Output_1"),
+        FName("TextBlock_Output_2"), FName("TextBlock_Output_3")
+    };
+    for (int32 i = 0; i < 4; ++i)
+    {
+        const float Col = (i % 2) * (IW * 0.5f);
+        const float Row = (i / 2) * 40.f;
+        B.Text(OutputNames[i], TEXT("—"), IX + Col, 320.f + Row, IW * 0.5f - 8.f, 30.f,
+               WidgetColors::TextValue, 12);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  公共入口
+// ─────────────────────────────────────────────────────────────────────────────
+
+void UMaterialGeneratorUtils::CreateBuildingWidgets()
+{
+    static const FString UIRoot = TEXT("/Game/Assets/UI");
+
+    struct FEntry
+    {
+        FString Name;
+        UClass* Parent;
+        void (*Build)(UWidgetBlueprint*);
+    };
+    const FEntry Entries[] = {
+        {TEXT("BP_Miner"), UMassDspMinerWidget::StaticClass(), &BuildMinerLayout},
+        {TEXT("BP_Maker"), UMassDspAssemblerWidget::StaticClass(), &BuildAssemblerLayout},
+        {TEXT("BP_Storage"), UMassDspStorageWidget::StaticClass(), &BuildStorageLayout},
+    };
+
+    for (const FEntry& E : Entries)
+    {
+        UWidgetBlueprint* WBP = CreateWidgetBP(UIRoot, E.Name, E.Parent);
+        if (!WBP) continue; // 已存在
+        E.Build(WBP);
+        FinalizeWidgetBP(WBP);
+    }
 }
 
 #endif
