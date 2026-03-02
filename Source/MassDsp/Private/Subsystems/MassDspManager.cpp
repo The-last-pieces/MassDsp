@@ -436,6 +436,12 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 
     if (!StartSlot || !EndSlot) return FBeltHandle();
 
+    if (StartSlot->ConnectedLaneHandle.IsValid() || EndSlot->ConnectedLaneHandle.IsValid())
+    {
+        // 已经有连接了，拒绝创建
+        return FBeltHandle();
+    }
+
     FVector A = StartSlot->WorldLocation - StartSlot->WorldRotation * FVector(StartSlot->SlotExtend, 0, 0);
     FVector B = StartSlot->WorldLocation;
     FVector C = EndSlot->WorldLocation;
@@ -1010,15 +1016,18 @@ bool UMassDspManager::FindNearestBuildingSlot(
 
         for (int32 i = 0; i < Slots.Num(); ++i)
         {
+            // 已被传送带占用的槽口不允许再次连接
+            if (Slots[i].ConnectedLaneHandle.IsValid()) continue;
+
             const float DSq = FVector::DistSquared(WorldPos, Slots[i].WorldLocation);
             if (DSq < BestDistSq)
             {
-                BestDistSq      = DSq;
-                OutEntity       = Entity;
-                OutSlotIndex    = i;
+                BestDistSq = DSq;
+                OutEntity = Entity;
+                OutSlotIndex = i;
                 OutSlotLocation = Slots[i].WorldLocation;
                 OutSlotRotation = Slots[i].WorldRotation;
-                OutSlotExtend   = Slots[i].SlotExtend;
+                OutSlotExtend = Slots[i].SlotExtend;
                 bFound = true;
             }
         }
@@ -1128,6 +1137,7 @@ void UMassDspManager::BeginPreviewBelt(EBeltType BeltType)
 
     PreviewBeltType = BeltType;
     bBeltHasStart = false;
+    bPreviewBeltDistanceValid = true;
     BeltStartEntity = FMassEntityHandle();
     BeltStartSlotIndex = -1;
     BeltEndEntity = FMassEntityHandle();
@@ -1145,8 +1155,8 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
         FMassEntityHandle FoundEntity;
         int32 FoundSlotIndex = -1;
         FVector FoundSlotLoc;
-        FQuat   FoundSlotRot  = FQuat::Identity;
-        float   FoundSlotExt  = 100.f;
+        FQuat FoundSlotRot = FQuat::Identity;
+        float FoundSlotExt = 100.f;
 
         if (!FindNearestBuildingSlot(WorldPos, EBuildingSlotType::Output, SnapRadius,
                                      FoundEntity, FoundSlotIndex, FoundSlotLoc, FoundSlotRot, FoundSlotExt))
@@ -1156,11 +1166,11 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
         }
 
         BeltStartSlotRotation = FoundSlotRot;
-        BeltStartSlotExtend   = FoundSlotExt;
-        BeltStartEntity       = FoundEntity;
-        BeltStartSlotIndex    = FoundSlotIndex;
+        BeltStartSlotExtend = FoundSlotExt;
+        BeltStartEntity = FoundEntity;
+        BeltStartSlotIndex = FoundSlotIndex;
         BeltStartSlotLocation = FoundSlotLoc;
-        bBeltHasStart         = true;
+        bBeltHasStart = true;
 
         UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 起点已选 @ (%.0f, %.0f, %.0f)，请继续选择终点"),
                FoundSlotLoc.X, FoundSlotLoc.Y, FoundSlotLoc.Z);
@@ -1172,8 +1182,8 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
         FMassEntityHandle FoundEntity;
         int32 FoundSlotIndex = -1;
         FVector FoundSlotLoc;
-        FQuat   FoundSlotRot  = FQuat::Identity;
-        float   FoundSlotExt  = 100.f;
+        FQuat FoundSlotRot = FQuat::Identity;
+        float FoundSlotExt = 100.f;
 
         if (!FindNearestBuildingSlot(WorldPos, EBuildingSlotType::Input, SnapRadius,
                                      FoundEntity, FoundSlotIndex, FoundSlotLoc, FoundSlotRot, FoundSlotExt))
@@ -1188,7 +1198,15 @@ bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
             return false;
         }
 
-        BeltEndEntity    = FoundEntity;
+        // 距离超限拒绝确认
+        const float BeltDist = FVector::Dist(BeltStartSlotLocation, FoundSlotLoc);
+        if (BeltDist > MaxBeltLength)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("SelectBeltSlot: 传送带距离 %.0fcm 超出最大限制 %.0fcm"), BeltDist, MaxBeltLength);
+            return false;
+        }
+
+        BeltEndEntity = FoundEntity;
         BeltEndSlotIndex = FoundSlotIndex;
 
         RebuildPreviewBeltMesh(FoundSlotLoc, FoundSlotRot, FoundSlotExt);
@@ -1235,6 +1253,7 @@ void UMassDspManager::CancelBeltPreview()
 {
     ClearPreviewBeltMesh();
     bBeltHasStart = false;
+    bPreviewBeltDistanceValid = true;
     BeltStartEntity = FMassEntityHandle();
     BeltStartSlotIndex = -1;
     BeltEndEntity = FMassEntityHandle();
@@ -1276,6 +1295,10 @@ void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotR
         PreviewBeltMesh->RegisterComponent();
     }
 
+    // 距离校验：超出上限时标记为无效（预览继续显示但变红，禁止确认）
+    const float CurrentDist = FVector::Dist(BeltStartSlotLocation, EndWorldPos);
+    bPreviewBeltDistanceValid = (CurrentDist <= MaxBeltLength);
+
     // 根据起点/终点槽口数据计算四个控制点（与 CreateAndLinkBeltForSlot 逻辑相同）
     // A = 起点槽口向后退一个 Extend 距离
     // B = 起点槽口位置
@@ -1308,7 +1331,7 @@ void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotR
         false
     );
 
-    // 应用对应类型的传送带材质（可后续替换为专用半透明预览材质）
+    // 应用材质：距离超限时覆盖为红色警告；正常时使用对应传送带类型材质
     TryGetGameMode();
     if (GameMode.IsValid() && GameMode->GameConfig)
     {
@@ -1317,10 +1340,55 @@ void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotR
             if (Cfg->Material)
             {
                 UMaterialInstanceDynamic* DM = UMaterialInstanceDynamic::Create(Cfg->Material, PreviewBeltMesh);
-                DM->SetVectorParameterValue(TEXT("ArrowColor"), Cfg->Color);
-                DM->SetScalarParameterValue(TEXT("Speed"), Cfg->Speed / C_UVScale);
+                if (bPreviewBeltDistanceValid)
+                {
+                    DM->SetVectorParameterValue(TEXT("ArrowColor"), Cfg->Color);
+                    DM->SetScalarParameterValue(TEXT("Speed"), Cfg->Speed / C_UVScale);
+                }
+                else
+                {
+                    // 超出最大距离 → 红色警告，速度为零（静止）
+                    DM->SetVectorParameterValue(TEXT("ArrowColor"), FLinearColor(1.f, 0.1f, 0.1f));
+                    DM->SetScalarParameterValue(TEXT("Speed"), 0.f);
+                }
                 PreviewBeltMesh->SetMaterial(0, DM);
             }
+        }
+    }
+}
+
+void UMassDspManager::GetNearbySlotsForHighlight(
+    const FVector& WorldPos,
+    float HighlightRadius,
+    TArray<FVector>& OutOutputLocs,
+    TArray<FVector>& OutInputLocs) const
+{
+    UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+    if (!ESub) return;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    const float RadiusSq = HighlightRadius * HighlightRadius;
+
+    for (const FMassEntityHandle& Entity : SpawnedBuildingEntities)
+    {
+        if (!EM.IsEntityValid(Entity)) continue;
+
+        FMassDspBuildingSlotsFragment* SF = EM.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Entity);
+        if (!SF) continue;
+
+        for (const FBuildingSlotState& Slot : SF->GetOutputSlots())
+        {
+            // 已占用的槽口不参与高亮
+            if (Slot.ConnectedLaneHandle.IsValid()) continue;
+            if (FVector::DistSquared(WorldPos, Slot.WorldLocation) <= RadiusSq)
+                OutOutputLocs.Add(Slot.WorldLocation);
+        }
+        for (const FBuildingSlotState& Slot : SF->GetInputSlots())
+        {
+            // 已占用的槽口不参与高亮
+            if (Slot.ConnectedLaneHandle.IsValid()) continue;
+            if (FVector::DistSquared(WorldPos, Slot.WorldLocation) <= RadiusSq)
+                OutInputLocs.Add(Slot.WorldLocation);
         }
     }
 }

@@ -202,6 +202,12 @@ public:
     /** 取消任意当前预览（兼容两种模式） */
     void CancelAnyPreview();
 
+    /** 传送带最大允许长度（cm），超出时预览变红且无法确认 */
+    static constexpr float MaxBeltLength = 100000.f;
+
+    /** 显示附近槽口高亮时使用的搜索半径（cm） */
+    static constexpr float SlotHighlightRadius = 5000.f;
+
     EBuildPlaceMode GetCurrentPlaceMode() const { return CurrentPlaceMode; }
     bool IsPreviewingBuilding() const { return CurrentPlaceMode == EBuildPlaceMode::Building; }
     bool IsPreviewingBelt() const { return CurrentPlaceMode == EBuildPlaceMode::Belt; }
@@ -210,6 +216,21 @@ public:
     EBeltType GetPreviewBeltType() const { return PreviewBeltType; }
     /** 起点槽口的世界坐标（Phase 2 时用于 HUD 绘制金色锁定圈） */
     FVector GetBeltStartSlotLocation() const { return BeltStartSlotLocation; }
+    /** 当前预览传送带长度是否在允许范围内 */
+    bool IsPreviewBeltValid() const { return bPreviewBeltDistanceValid; }
+
+    /**
+     * 收集附近所有建筑槽口的世界坐标，用于 HUD 高亮显示。
+     * @param WorldPos        搜索中心（世界坐标）
+     * @param HighlightRadius 搜索半径（cm）
+     * @param OutOutputLocs   附近的 Output 槽口位置列表
+     * @param OutInputLocs    附近的 Input  槽口位置列表
+     */
+    void GetNearbySlotsForHighlight(
+        const FVector& WorldPos,
+        float HighlightRadius,
+        TArray<FVector>& OutOutputLocs,
+        TArray<FVector>& OutInputLocs) const;
 
     /**
      * 搜索附近最近的建筑槽口
@@ -259,6 +280,7 @@ private:
     // 传送带预览
     EBeltType PreviewBeltType = EBeltType::None;
     bool bBeltHasStart = false;
+    bool bPreviewBeltDistanceValid = true;
     FMassEntityHandle BeltStartEntity;
     int32 BeltStartSlotIndex = -1;
     FVector BeltStartSlotLocation = FVector::ZeroVector;

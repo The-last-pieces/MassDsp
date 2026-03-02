@@ -371,8 +371,8 @@ void AMassDspHUD::DrawBeltSnapIndicator()
     APlayerController* PC = GetOwningPlayerController();
     if (!PC) return;
 
-    // ── 辅助：将世界坐标投影到屏幕并画实心圆点 ──
-    auto DrawWorldDot = [&](FVector WorldPos, FLinearColor Color, float Radius)
+    // ── 辅助：将世界坐标投影到屏幕并画圆圈 ──────────────────────────────
+    auto DrawWorldRing = [&](FVector WorldPos, FLinearColor Color, float Radius, float Thickness = 2.0f)
     {
         FVector2D ScreenPos;
         if (!PC->ProjectWorldLocationToScreen(WorldPos, ScreenPos, true)) return;
@@ -380,38 +380,79 @@ void AMassDspHUD::DrawBeltSnapIndicator()
         constexpr int32 Segs = 16;
         for (int32 i = 0; i < Segs; ++i)
         {
-            const float A0 = (i      / (float)Segs) * 2.f * UE_PI;
+            const float A0 = (i       / (float)Segs) * 2.f * UE_PI;
             const float A1 = ((i + 1) / (float)Segs) * 2.f * UE_PI;
             DrawLine(
                 ScreenPos.X + FMath::Cos(A0) * Radius,
                 ScreenPos.Y + FMath::Sin(A0) * Radius,
                 ScreenPos.X + FMath::Cos(A1) * Radius,
                 ScreenPos.Y + FMath::Sin(A1) * Radius,
-                Color, 2.5f);
+                Color, Thickness);
         }
     };
 
     const bool bHasStart = Manager->BeltHasStartSlot();
 
-    // Phase 1：在鼠标附近最近的 Output 槽口处画绿圈（或灰圈表示无槽口）
-    // Phase 2：在鼠标附近最近的 Input 槽口处画蓝圈
+    // ── 范围高亮：收集附近所有槽口并绘制半透明小圆 ────────────────────────
+    {
+        TArray<FVector> NearOutputLocs, NearInputLocs;
+        const FVector SearchCenter = bHasStart ? Manager->GetBeltStartSlotLocation() : CachedHitLocation;
+        Manager->GetNearbySlotsForHighlight(SearchCenter, UMassDspManager::SlotHighlightRadius,
+                                            NearOutputLocs, NearInputLocs);
+
+        // Phase 1 → 高亮 Output 槽（黄绿色暗圈）
+        // Phase 2 → 高亮 Input  槽（淡蓝色暗圈），同时保留起点附近的 Output 高亮
+        if (!bHasStart)
+        {
+            for (const FVector& Loc : NearOutputLocs)
+                DrawWorldRing(Loc, FLinearColor(0.5f, 0.9f, 0.3f, 0.5f), 10.f, 1.5f);
+        }
+        else
+        {
+            for (const FVector& Loc : NearInputLocs)
+                DrawWorldRing(Loc, FLinearColor(0.3f, 0.6f, 1.0f, 0.5f), 10.f, 1.5f);
+        }
+    }
+
+    // ── 精确吸附指示圈（覆盖在范围高亮之上）─────────────────────────────
     if (!bHasStart)
     {
+        // Phase 1：最近 Output 槽 → 绿色大圈（或灰色表示附近无槽）
         const FLinearColor RingColor = bBeltHoverSnapped
-            ? FLinearColor(0.1f, 1.0f, 0.3f)    // 有效 Output 槽 → 绿
-            : FLinearColor(0.5f, 0.5f, 0.5f);   // 无槽口 → 灰
-        DrawWorldDot(BeltHoverSnapLocation, RingColor, 14.f);
+            ? FLinearColor(0.1f, 1.0f, 0.3f)
+            : FLinearColor(0.5f, 0.5f, 0.5f);
+        DrawWorldRing(BeltHoverSnapLocation, RingColor, 14.f, 2.5f);
     }
     else
     {
-        // 起点：固定在已锁定的 Output 槽位置，画金色大圈表示「已选」
-        DrawWorldDot(Manager->GetBeltStartSlotLocation(), FLinearColor(1.f, 0.8f, 0.1f), 18.f);
+        // 起点：金色大圈（已锁定）
+        DrawWorldRing(Manager->GetBeltStartSlotLocation(), FLinearColor(1.f, 0.8f, 0.1f), 18.f, 3.0f);
 
-        // 终点跟随鼠标，就近吸附到 Input 槽 → 蓝圈
-        const FLinearColor EndColor = bBeltHoverSnapped
-            ? FLinearColor(0.2f, 0.6f, 1.0f)    // 有效 Input 槽 → 蓝
-            : FLinearColor(0.5f, 0.5f, 0.5f);   // 无槽口 → 灰
-        DrawWorldDot(BeltHoverSnapLocation, EndColor, 14.f);
+        // 终点：蓝色（有效吸附）或灰色（无槽/超距）
+        const bool bValid = Manager->IsPreviewBeltValid();
+        FLinearColor EndColor;
+        if (!bValid)
+            EndColor = FLinearColor(1.f, 0.15f, 0.15f);       // 超出最大距离 → 红
+        else if (bBeltHoverSnapped)
+            EndColor = FLinearColor(0.2f, 0.6f, 1.0f);        // 有效 Input 槽 → 蓝
+        else
+            EndColor = FLinearColor(0.5f, 0.5f, 0.5f);        // 无吸附 → 灰
+        DrawWorldRing(BeltHoverSnapLocation, EndColor, 14.f, 2.5f);
+
+        // 距离超限时在屏幕中间偏上显示红字警告
+        if (!bValid && Canvas)
+        {
+            const float Dist = FVector::Dist(Manager->GetBeltStartSlotLocation(), BeltHoverSnapLocation);
+            const FString WarnText = FString::Printf(
+                TEXT("距离过远！%.0f m / 最大 %.0f m"),
+                Dist / 100.f, UMassDspManager::MaxBeltLength / 100.f);
+            float TW = 0.f, TH = 0.f;
+            GetTextSize(WarnText, TW, TH, GEngine->GetSmallFont(), 1.5f);
+            const float TX = (Canvas->SizeX - TW) * 0.5f;
+            const float TY = Canvas->SizeY * 0.35f;
+            DrawText(WarnText, FLinearColor::Black, TX + 1.f, TY + 1.f, GEngine->GetSmallFont(), 1.5f);
+            DrawText(WarnText, FLinearColor(1.f, 0.2f, 0.2f), TX, TY, GEngine->GetSmallFont(), 1.5f);
+        }
     }
 }
 
