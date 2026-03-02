@@ -8,6 +8,7 @@
 #include "MassEntityManager.h"
 #include "MassDspBeltTypes.h"
 #include "ProceduralMeshComponent.h"
+#include "Actors/MassDspBuilding.h"
 
 #include "Containers/SparseArray.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -16,8 +17,16 @@
 
 class UProceduralMeshComponent;
 class AMassDspGameMode;
-class AMassDspBuilding;
 class UMassEntityConfigAsset;
+
+// 建造放置模式
+UENUM(BlueprintType)
+enum class EBuildPlaceMode : uint8
+{
+    None     = 0 UMETA(DisplayName = "空闲"),
+    Building = 1 UMETA(DisplayName = "放置建筑"),
+    Belt     = 2 UMETA(DisplayName = "连接传送带"),
+};
 
 // Building实体生成数据
 USTRUCT(BlueprintType)
@@ -58,6 +67,9 @@ public:
 
     // 已创建的建筑 Mass Entity 数量（在 CreateBuildingEntityInternal 中自增）
     int32 BuildingEntityCount = 0;
+
+    // 已生成建筑实体列表（用于槽口搜索）
+    TArray<FMassEntityHandle> SpawnedBuildingEntities;
 
     TWeakObjectPtr<AMassDspGameMode> GameMode;
 
@@ -146,6 +158,74 @@ public:
     // 新增：批量创建Building Entity（关卡初始化用）
     TArray<FMassEntityHandle> BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList);
 
+    // ──────────────────────────── 建造预览接口 ────────────────────────────
+
+    /** 开始预览放置建筑；之后每帧调用 UpdateBuildingPreviewTransform 更新位置 */
+    void BeginPreviewBuilding(EBuildingType BuildingType, const FTransform& InitialTransform);
+
+    /** 每帧更新预览建筑的世界变换 */
+    void UpdateBuildingPreviewTransform(const FTransform& WorldTransform) const;
+
+    /** 确认放置：生成真实 Mass Entity，清除预览，返回新实体句柄 */
+    FMassEntityHandle ConfirmPreviewBuilding();
+
+    /** 取消建筑预览 */
+    void CancelBuildingPreview();
+
+    // ──────────────────────────── 传送带预览接口 ────────────────────────────
+
+    /** 开始传送带连接预览，设置当前要放置的传送带类型 */
+    void BeginPreviewBelt(EBeltType BeltType);
+
+    /**
+     * 尝试在 WorldPos 附近自动吸附槽口
+     * - 第 1 次调用：选中最近的 Output 槽作为起点
+     * - 第 2 次调用：选中最近的 Input 槽作为终点，返回 true（两端锁定，可确认）
+     */
+    bool SelectBeltSlot(FVector WorldPos);
+
+    /** 已有起点时，每帧将预览终点刷新到 EndWorldPos（鼠标跟随） */
+    void UpdateBeltPreviewEndPoint(FVector EndWorldPos);
+
+    /** 确认创建传送带；返回 FBeltHandle，并清除预览 */
+    FBeltHandle ConfirmPreviewBelt();
+
+    /** 取消传送带预览 */
+    void CancelBeltPreview();
+
+    // ──────────────────────────── 通用工具 ────────────────────────────
+
+    /** 取消任意当前预览（兼容两种模式） */
+    void CancelAnyPreview();
+
+    EBuildPlaceMode GetCurrentPlaceMode() const { return CurrentPlaceMode; }
+    bool IsPreviewingBuilding() const { return CurrentPlaceMode == EBuildPlaceMode::Building; }
+    bool IsPreviewingBelt()     const { return CurrentPlaceMode == EBuildPlaceMode::Belt; }
+    bool BeltHasStartSlot()     const { return bBeltHasStart; }
+    EBuildingType GetPreviewBuildingType() const { return PreviewBuildingType; }
+    EBeltType     GetPreviewBeltType()     const { return PreviewBeltType; }
+
+    /**
+     * 搜索附近最近的建筑槽口
+     * @param WorldPos        搜索中心（世界坐标）
+     * @param SlotType        槽口类型（Input / Output）
+     * @param SearchRadius    搜索半径（cm）
+     * @param OutEntity       结果实体句柄
+     * @param OutSlotIndex    槽口在 Input/Output 数组中的下标（0-based）
+     * @param OutSlotLocation 槽口世界坐标
+     * @return                是否找到有效槽口
+     */
+    bool FindNearestBuildingSlot(
+        const FVector& WorldPos,
+        EBuildingSlotType SlotType,
+        float SearchRadius,
+        FMassEntityHandle& OutEntity,
+        int32& OutSlotIndex,
+        FVector& OutSlotLocation);
+
+    /** 根据 EBuildingType 取对应建筑蓝图类（从 GameConfig 读取） */
+    TSubclassOf<AMassDspBuilding> GetBuildingClassForType(EBuildingType BuildingType);
+
 private:
     // 内部辅助方法：创建Building Entity的核心逻辑
     FMassEntityHandle CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData);
@@ -156,4 +236,42 @@ private:
     TMap<EBeltType, FMergedBeltMeshData> PendingBeltMeshMap;
 
     TSet<EBeltType> BeltMaterializedSet; // 记录已生成网格的 BeltType，避免重复生成
+
+    // ──────────────────────────── 建造预览状态 ────────────────────────────
+
+    EBuildPlaceMode CurrentPlaceMode = EBuildPlaceMode::None;
+
+    // 建筑预览
+    EBuildingType PreviewBuildingType = EBuildingType::None;
+    UPROPERTY()
+    AActor* PreviewBuildingActor = nullptr;
+
+    // 传送带预览
+    EBeltType         PreviewBeltType         = EBeltType::None;
+    bool              bBeltHasStart           = false;
+    FMassEntityHandle BeltStartEntity;
+    int32             BeltStartSlotIndex      = -1;
+    FVector           BeltStartSlotLocation   = FVector::ZeroVector;
+    FQuat             BeltStartSlotRotation   = FQuat::Identity;
+    float             BeltStartSlotExtend     = 100.f;
+    FMassEntityHandle BeltEndEntity;
+    int32             BeltEndSlotIndex        = -1;
+
+    UPROPERTY()
+    UProceduralMeshComponent* PreviewBeltMesh = nullptr;
+    UPROPERTY()
+    USplineComponent* PreviewSpline = nullptr;
+
+    /**
+     * 将样条线抽象为通用接口（供 CreateAndLinkBeltForSlot 和预览共用）
+     * 根据 A-B-C-D 四个控制点配置 Hermite 曲线，自动计算切线。
+     * 传入的坐标为原始世界坐标（Z 偏移在函数内部处理）。
+     */
+    static void BuildBeltSplineFromPoints(USplineComponent* Spline, FVector A, FVector B, FVector C, FVector D);
+
+    /** 使用 PreviewSpline + GenerateConveyorMesh 重建预览传送带网格 */
+    void RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotRotation = FQuat::Identity, float EndSlotExtend = 0.f);
+
+    /** 清除预览传送带网格（不销毁组件）*/
+    void ClearPreviewBeltMesh() const;
 };

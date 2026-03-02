@@ -18,6 +18,8 @@
 #include "ProceduralMeshComponent.h"
 #include "Components/SplineComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
 
 void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -44,6 +46,8 @@ void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
 
 void UMassDspManager::Deinitialize()
 {
+    CancelAnyPreview();
+
     if (BeltsContainerActor)
     {
         BeltsContainerActor->Destroy();
@@ -437,49 +441,11 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     FVector C = EndSlot->WorldLocation;
     FVector D = EndSlot->WorldLocation - EndSlot->WorldRotation * FVector(EndSlot->SlotExtend, 0, 0);
 
-    TArray BeltPoints = {A, B, C, D};
-    for (FVector& Pt : BeltPoints)
-    {
-        Pt.Z += 20.0f;
-    }
-
-    FVector AB_Direction = (B - A).GetSafeNormal();
-    FVector CD_Direction = (D - C).GetSafeNormal();
-
-    float AB_Length = FVector::Dist(A, B);
-    float CD_Length = FVector::Dist(C, D);
-    float BC_Length = FVector::Dist(B, C);
-
-    constexpr float TangentScale = 5.f;
-
-    float BTangentLen = FMath::Max(AB_Length * 1.0f, BC_Length * 0.4f) * TangentScale;
-    FVector StartTangent = AB_Direction * BTangentLen;
-
-    float CTangentLen = FMath::Max(CD_Length * 1.0f, BC_Length * 0.4f) * TangentScale;
-    FVector EndTangent = CD_Direction * CTangentLen;
-
     // TODO 考虑引入中间拐点来减少曲线段的占比
-
-    FBeltHandle BeltHandle = CreateRuntimeBelt([&BeltPoints, StartTangent,EndTangent](USplineComponent* NewSpline)
+    // 使用通用样条构建接口（与传送带预览共用，保证行为一致）
+    FBeltHandle BeltHandle = CreateRuntimeBelt([A, B, C, D](USplineComponent* NewSpline)
     {
-        for (const auto& Pt : BeltPoints)
-        {
-            NewSpline->AddSplinePoint(Pt, ESplineCoordinateSpace::World, false);
-        }
-
-        NewSpline->SetSplinePointType(0, ESplinePointType::Linear, false);
-
-        NewSpline->SetSplinePointType(1, ESplinePointType::CurveCustomTangent, false);
-        // in-tangent 取 A→B 方向，避免首段 Hermite 曲线在 B 点切线为零导致变形
-        FVector EntryTangent = BeltPoints[1] - BeltPoints[0];
-        NewSpline->SetTangentsAtSplinePoint(1, EntryTangent, StartTangent, ESplineCoordinateSpace::World, false);
-
-        NewSpline->SetSplinePointType(2, ESplinePointType::CurveCustomTangent, false);
-        // out-tangent 取 C→D 方向，避免尾段 Hermite 曲线在 C 点切线为零导致直线传送带末端扭曲
-        FVector ExitTangent = BeltPoints[3] - BeltPoints[2];
-        NewSpline->SetTangentsAtSplinePoint(2, EndTangent, ExitTangent, ESplineCoordinateSpace::World, false);
-
-        NewSpline->SetSplinePointType(3, ESplinePointType::Linear, false);
+        BuildBeltSplineFromPoints(NewSpline, A, B, C, D);
     }, BeltType);
 
     if (!BeltHandle.IsValid()) return FBeltHandle();
@@ -827,7 +793,8 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
 
             ++BuildingEntityCount;
             ++SuccessCount;
-            CreatedEntities[Indices[j]] = EntityHandle;  // 按原始输入下标回写，保证顺序
+            CreatedEntities[Indices[j]] = EntityHandle; // 按原始输入下标回写，保证顺序
+            SpawnedBuildingEntities.Add(EntityHandle);
         }
     }
 
@@ -906,6 +873,7 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
     }
 
     ++BuildingEntityCount;
+    SpawnedBuildingEntities.Add(EntityHandle);
 
     return EntityHandle;
 }
@@ -949,4 +917,443 @@ void UMassDspManager::FlushBeltMesh()
             }
         }
     }
+}
+
+// ============================================================
+//  建造系统 —— 通用样条构建接口
+// ============================================================
+
+void UMassDspManager::BuildBeltSplineFromPoints(USplineComponent* Spline, FVector A, FVector B, FVector C, FVector D)
+{
+    if (!Spline) return;
+
+    // Z 抬高 20cm，防止穿入地板
+    A.Z += 20.f;
+    B.Z += 20.f;
+    C.Z += 20.f;
+    D.Z += 20.f;
+
+    Spline->ClearSplinePoints(false);
+    Spline->AddSplinePoint(A, ESplineCoordinateSpace::World, false);
+    Spline->AddSplinePoint(B, ESplineCoordinateSpace::World, false);
+    Spline->AddSplinePoint(C, ESplineCoordinateSpace::World, false);
+    Spline->AddSplinePoint(D, ESplineCoordinateSpace::World, false);
+
+    // 线段方向
+    const FVector AB_Dir = (B - A).GetSafeNormal();
+    const FVector CD_Dir = (D - C).GetSafeNormal();
+
+    const float AB_Len = FVector::Dist(A, B);
+    const float CD_Len = FVector::Dist(C, D);
+    const float BC_Len = FVector::Dist(B, C);
+    constexpr float TangentScale = 5.f;
+
+    const FVector StartTangent = AB_Dir * FMath::Max(AB_Len * 1.f, BC_Len * 0.4f) * TangentScale;
+    const FVector EndTangent = CD_Dir * FMath::Max(CD_Len * 1.f, BC_Len * 0.4f) * TangentScale;
+
+    // 端点 Linear，中间两点 CurveCustomTangent
+    Spline->SetSplinePointType(0, ESplinePointType::Linear, false);
+
+    Spline->SetSplinePointType(1, ESplinePointType::CurveCustomTangent, false);
+    // in-tangent: A→B 方向（避免 B 点 Hermite 切线为零）
+    Spline->SetTangentsAtSplinePoint(1, B - A, StartTangent, ESplineCoordinateSpace::World, false);
+
+    Spline->SetSplinePointType(2, ESplinePointType::CurveCustomTangent, false);
+    // out-tangent: C→D 方向（避免 C 点末端扭曲）
+    Spline->SetTangentsAtSplinePoint(2, EndTangent, D - C, ESplineCoordinateSpace::World, false);
+
+    Spline->SetSplinePointType(3, ESplinePointType::Linear, false);
+
+    Spline->UpdateSpline();
+}
+
+// ============================================================
+//  建造系统 —— 工具接口
+// ============================================================
+
+TSubclassOf<AMassDspBuilding> UMassDspManager::GetBuildingClassForType(EBuildingType BuildingType)
+{
+    TryGetGameMode();
+    if (!GameMode.IsValid() || !GameMode->GameConfig) return nullptr;
+    if (const FBuildingTypeConfig* Cfg = GameMode->GameConfig->GetBuildingConfig(BuildingType))
+        return Cfg->BuildingClass;
+    return nullptr;
+}
+
+bool UMassDspManager::FindNearestBuildingSlot(
+    const FVector& WorldPos,
+    EBuildingSlotType SlotType,
+    float SearchRadius,
+    FMassEntityHandle& OutEntity,
+    int32& OutSlotIndex,
+    FVector& OutSlotLocation)
+{
+    UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+    if (!ESub) return false;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    float BestDistSq = SearchRadius * SearchRadius;
+    bool bFound = false;
+
+    for (const FMassEntityHandle& Entity : SpawnedBuildingEntities)
+    {
+        if (!EM.IsEntityValid(Entity)) continue;
+
+        FMassDspBuildingSlotsFragment* SF = EM.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Entity);
+        if (!SF) continue;
+
+        TArrayView<FBuildingSlotState> Slots = (SlotType == EBuildingSlotType::Output)
+                                                   ? SF->GetOutputSlots()
+                                                   : SF->GetInputSlots();
+
+        for (int32 i = 0; i < Slots.Num(); ++i)
+        {
+            const float DSq = FVector::DistSquared(WorldPos, Slots[i].WorldLocation);
+            if (DSq < BestDistSq)
+            {
+                BestDistSq = DSq;
+                OutEntity = Entity;
+                OutSlotIndex = i;
+                OutSlotLocation = Slots[i].WorldLocation;
+                bFound = true;
+            }
+        }
+    }
+
+    return bFound;
+}
+
+// ============================================================
+//  建造系统 —— 建筑预览
+// ============================================================
+
+void UMassDspManager::BeginPreviewBuilding(EBuildingType BuildingType, const FTransform& InitialTransform)
+{
+    CancelAnyPreview();
+
+    TryGetGameMode();
+    if (!GameMode.IsValid() || !GameMode->GameConfig) return;
+
+    const FBuildingTypeConfig* Cfg = GameMode->GameConfig->GetBuildingConfig(BuildingType);
+    if (!Cfg) return;
+
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    SpawnParams.ObjectFlags |= RF_Transient;
+
+    AActor* Ghost = World->SpawnActor<AActor>(AActor::StaticClass(), InitialTransform, SpawnParams);
+    if (Ghost)
+    {
+        UStaticMeshComponent* SMC = NewObject<UStaticMeshComponent>(Ghost, TEXT("GhostMesh"));
+        Ghost->SetRootComponent(SMC);
+        if (Cfg->Mesh) SMC->SetStaticMesh(Cfg->Mesh);
+        SMC->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        SMC->SetCastShadow(false);
+        // 自定义深度用于轮廓高亮（需要 PostProcess 启用 CustomDepth）
+        SMC->SetRenderCustomDepth(true);
+        SMC->SetCustomDepthStencilValue(2);
+        // 尝试将每个材质通道设为半透明（材质中需有 Opacity 参数）
+        for (int32 i = 0; i < SMC->GetNumMaterials(); ++i)
+        {
+            if (UMaterialInterface* Mat = SMC->GetMaterial(i))
+            {
+                UMaterialInstanceDynamic* DM = UMaterialInstanceDynamic::Create(Mat, SMC);
+                DM->SetScalarParameterValue(TEXT("Opacity"), 0.5f);
+                SMC->SetMaterial(i, DM);
+            }
+        }
+        SMC->RegisterComponent();
+#if WITH_EDITOR
+        Ghost->SetActorLabel(TEXT("PreviewBuilding"));
+#endif
+        PreviewBuildingActor = Ghost;
+    }
+
+    PreviewBuildingType = BuildingType;
+    CurrentPlaceMode = EBuildPlaceMode::Building;
+}
+
+void UMassDspManager::UpdateBuildingPreviewTransform(const FTransform& WorldTransform) const
+{
+    if (IsValid(PreviewBuildingActor))
+        PreviewBuildingActor->SetActorTransform(WorldTransform);
+}
+
+FMassEntityHandle UMassDspManager::ConfirmPreviewBuilding()
+{
+    if (CurrentPlaceMode != EBuildPlaceMode::Building || !IsValid(PreviewBuildingActor))
+        return FMassEntityHandle();
+
+    const FTransform FinalTransform = PreviewBuildingActor->GetActorTransform();
+    const EBuildingType BuildingType = PreviewBuildingType;
+
+    CancelBuildingPreview();
+
+    TSubclassOf<AMassDspBuilding> BuildingClass = GetBuildingClassForType(BuildingType);
+    if (!BuildingClass) return FMassEntityHandle();
+
+    TArray<FBuildingSpawnData> SpawnList;
+    SpawnList.Add(FBuildingSpawnData(BuildingClass, FinalTransform, BuildingType));
+    TArray<FMassEntityHandle> Results = BatchSpawnBuildings(SpawnList);
+
+    return Results.IsEmpty() ? FMassEntityHandle() : Results[0];
+}
+
+void UMassDspManager::CancelBuildingPreview()
+{
+    if (IsValid(PreviewBuildingActor))
+    {
+        PreviewBuildingActor->Destroy();
+        PreviewBuildingActor = nullptr;
+    }
+    if (CurrentPlaceMode == EBuildPlaceMode::Building)
+        CurrentPlaceMode = EBuildPlaceMode::None;
+    PreviewBuildingType = EBuildingType::None;
+}
+
+// ============================================================
+//  建造系统 —— 传送带预览
+// ============================================================
+
+void UMassDspManager::BeginPreviewBelt(EBeltType BeltType)
+{
+    CancelAnyPreview();
+
+    PreviewBeltType = BeltType;
+    bBeltHasStart = false;
+    BeltStartEntity = FMassEntityHandle();
+    BeltStartSlotIndex = -1;
+    BeltEndEntity = FMassEntityHandle();
+    BeltEndSlotIndex = -1;
+    CurrentPlaceMode = EBuildPlaceMode::Belt;
+}
+
+bool UMassDspManager::SelectBeltSlot(FVector WorldPos)
+{
+    constexpr float SnapRadius = 200.f;
+
+    if (!bBeltHasStart)
+    {
+        // ── 第 1 次：选择 Output 起点槽 ──────────────────────────────────
+        FMassEntityHandle FoundEntity;
+        int32 FoundSlotIndex = -1;
+        FVector FoundSlotLoc;
+
+        if (!FindNearestBuildingSlot(WorldPos, EBuildingSlotType::Output, SnapRadius,
+                                     FoundEntity, FoundSlotIndex, FoundSlotLoc))
+        {
+            UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 附近没有可用 Output 槽口（搜索半径 %.0fcm）"), SnapRadius);
+            return false;
+        }
+
+        // 缓存起点槽口的旋转和延伸距离
+        BeltStartSlotRotation = FQuat::Identity;
+        BeltStartSlotExtend = 100.f;
+        if (UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>())
+        {
+            FMassEntityManager& EM = ESub->GetMutableEntityManager();
+            if (FMassDspBuildingSlotsFragment* SF = EM.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(FoundEntity))
+            {
+                TArrayView<FBuildingSlotState> OutSlots = SF->GetOutputSlots();
+                if (OutSlots.IsValidIndex(FoundSlotIndex))
+                {
+                    BeltStartSlotRotation = OutSlots[FoundSlotIndex].WorldRotation;
+                    BeltStartSlotExtend = OutSlots[FoundSlotIndex].SlotExtend;
+                }
+            }
+        }
+
+        BeltStartEntity = FoundEntity;
+        BeltStartSlotIndex = FoundSlotIndex;
+        BeltStartSlotLocation = FoundSlotLoc;
+        bBeltHasStart = true;
+
+        UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 起点已选 @ (%.0f, %.0f, %.0f)，请继续选择终点"),
+               FoundSlotLoc.X, FoundSlotLoc.Y, FoundSlotLoc.Z);
+        return false; // 仍需选择终点
+    }
+    else
+    {
+        // ── 第 2 次：选择 Input 终点槽 ───────────────────────────────────
+        FMassEntityHandle FoundEntity;
+        int32 FoundSlotIndex = -1;
+        FVector FoundSlotLoc;
+
+        if (!FindNearestBuildingSlot(WorldPos, EBuildingSlotType::Input, SnapRadius,
+                                     FoundEntity, FoundSlotIndex, FoundSlotLoc))
+        {
+            UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 附近没有可用 Input 槽口（搜索半径 %.0fcm）"), SnapRadius);
+            return false;
+        }
+
+        if (FoundEntity == BeltStartEntity)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("SelectBeltSlot: 不能连接同一建筑的槽口"));
+            return false;
+        }
+
+        BeltEndEntity = FoundEntity;
+        BeltEndSlotIndex = FoundSlotIndex;
+
+        // 精确终点：从槽片段重新读取位置 / 旋转 / 延伸
+        FQuat EndRot = FQuat::Identity;
+        float EndExtend = 100.f;
+        if (UMassEntitySubsystem* ESub = GetWorld()->GetSubsystem<UMassEntitySubsystem>())
+        {
+            FMassEntityManager& EM = ESub->GetMutableEntityManager();
+            if (FMassDspBuildingSlotsFragment* SF = EM.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BeltEndEntity))
+            {
+                TArrayView<FBuildingSlotState> InSlots = SF->GetInputSlots();
+                if (InSlots.IsValidIndex(BeltEndSlotIndex))
+                {
+                    EndRot = InSlots[BeltEndSlotIndex].WorldRotation;
+                    EndExtend = InSlots[BeltEndSlotIndex].SlotExtend;
+                    FoundSlotLoc = InSlots[BeltEndSlotIndex].WorldLocation;
+                }
+            }
+        }
+
+        RebuildPreviewBeltMesh(FoundSlotLoc, EndRot, EndExtend);
+
+        UE_LOG(LogTemp, Log, TEXT("SelectBeltSlot: 终点已选 @ (%.0f, %.0f, %.0f)，可调用 ConfirmPreviewBelt"),
+               FoundSlotLoc.X, FoundSlotLoc.Y, FoundSlotLoc.Z);
+        return true; // 两端均已锁定
+    }
+}
+
+void UMassDspManager::UpdateBeltPreviewEndPoint(FVector EndWorldPos)
+{
+    if (!bBeltHasStart) return;
+    RebuildPreviewBeltMesh(EndWorldPos);
+}
+
+FBeltHandle UMassDspManager::ConfirmPreviewBelt()
+{
+    if (CurrentPlaceMode != EBuildPlaceMode::Belt
+        || !bBeltHasStart
+        || !BeltEndEntity.IsValid())
+    {
+        return FBeltHandle();
+    }
+
+    const EBeltType BeltType = PreviewBeltType;
+    const FMassEntityHandle StartEnt = BeltStartEntity;
+    const int32 StartSlotIdx = BeltStartSlotIndex;
+    const FMassEntityHandle EndEnt = BeltEndEntity;
+    const int32 EndSlotIdx = BeltEndSlotIndex;
+
+    CancelBeltPreview();
+
+    FBeltHandle Handle = CreateAndLinkBeltForSlot(StartEnt, StartSlotIdx, EndEnt, EndSlotIdx, BeltType);
+    if (Handle.IsValid())
+    {
+        FlushBeltMesh();
+        UE_LOG(LogTemp, Log, TEXT("ConfirmPreviewBelt: 传送带创建成功 [Handle=%d]"), Handle.Index);
+    }
+    return Handle;
+}
+
+void UMassDspManager::CancelBeltPreview()
+{
+    ClearPreviewBeltMesh();
+    bBeltHasStart = false;
+    BeltStartEntity = FMassEntityHandle();
+    BeltStartSlotIndex = -1;
+    BeltEndEntity = FMassEntityHandle();
+    BeltEndSlotIndex = -1;
+    PreviewBeltType = EBeltType::None;
+    if (CurrentPlaceMode == EBuildPlaceMode::Belt)
+        CurrentPlaceMode = EBuildPlaceMode::None;
+}
+
+void UMassDspManager::CancelAnyPreview()
+{
+    CancelBuildingPreview();
+    CancelBeltPreview();
+}
+
+// ──── 预览传送带网格重建（通用接口：复用 GenerateConveyorMesh）────
+
+void UMassDspManager::RebuildPreviewBeltMesh(FVector EndWorldPos, FQuat EndSlotRotation, float EndSlotExtend)
+{
+    if (!BeltsContainerActor) return;
+
+    // 延迟创建 PreviewSpline
+    if (!IsValid(PreviewSpline))
+    {
+        PreviewSpline = NewObject<USplineComponent>(BeltsContainerActor, TEXT("PreviewSpline"));
+        PreviewSpline->SetupAttachment(BeltsContainerActor->GetRootComponent());
+        PreviewSpline->SetClosedLoop(false);
+        PreviewSpline->RegisterComponent();
+    }
+
+    // 延迟创建 PreviewBeltMesh
+    if (!IsValid(PreviewBeltMesh))
+    {
+        PreviewBeltMesh = NewObject<UProceduralMeshComponent>(BeltsContainerActor, TEXT("PreviewBeltMesh"));
+        PreviewBeltMesh->SetupAttachment(BeltsContainerActor->GetRootComponent());
+        PreviewBeltMesh->SetVisibility(true);
+        PreviewBeltMesh->SetCastShadow(false);
+        PreviewBeltMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        PreviewBeltMesh->RegisterComponent();
+    }
+
+    // 根据起点/终点槽口数据计算四个控制点（与 CreateAndLinkBeltForSlot 逻辑相同）
+    // A = 起点槽口向后退一个 Extend 距离
+    // B = 起点槽口位置
+    // C = 终点位置（鼠标坐标或已吸附的终点槽口）
+    // D = 终点槽口向后退一个 Extend 距离（无终点槽口时沿传送带延伸方向合成）
+    const FVector A = BeltStartSlotLocation - BeltStartSlotRotation * FVector(BeltStartSlotExtend, 0.f, 0.f);
+    const FVector B = BeltStartSlotLocation;
+    const FVector C = EndWorldPos;
+    const FVector D = (EndSlotExtend > 0.f)
+                          ? EndWorldPos - EndSlotRotation * FVector(EndSlotExtend, 0.f, 0.f)
+                          : EndWorldPos - (EndWorldPos - BeltStartSlotLocation).GetSafeNormal() * 100.f;
+
+    // 重用通用接口构建样条
+    BuildBeltSplineFromPoints(PreviewSpline, A, B, C, D);
+
+    // 重用 GenerateConveyorMesh 生成预览几何（独立 MeshData，不写入 PendingBeltMeshMap）
+    FMergedBeltMeshData PreviewMeshData;
+    GenerateConveyorMesh(PreviewMeshData, PreviewSpline, C_Width, C_BeltThickness, C_UVScale, 5.f);
+
+    if (PreviewMeshData.Vertices.IsEmpty()) return;
+
+    PreviewBeltMesh->CreateMeshSection_LinearColor(
+        0,
+        PreviewMeshData.Vertices,
+        PreviewMeshData.Triangles,
+        PreviewMeshData.Normals,
+        PreviewMeshData.UVs,
+        PreviewMeshData.Colors,
+        PreviewMeshData.Tangents,
+        false
+    );
+
+    // 应用对应类型的传送带材质（可后续替换为专用半透明预览材质）
+    TryGetGameMode();
+    if (GameMode.IsValid() && GameMode->GameConfig)
+    {
+        if (const FBeltTypeConfig* Cfg = GameMode->GameConfig->GetBeltTypeConfig(PreviewBeltType))
+        {
+            if (Cfg->Material)
+            {
+                UMaterialInstanceDynamic* DM = UMaterialInstanceDynamic::Create(Cfg->Material, PreviewBeltMesh);
+                DM->SetVectorParameterValue(TEXT("ArrowColor"), Cfg->Color);
+                DM->SetScalarParameterValue(TEXT("Speed"), Cfg->Speed / C_UVScale);
+                PreviewBeltMesh->SetMaterial(0, DM);
+            }
+        }
+    }
+}
+
+void UMassDspManager::ClearPreviewBeltMesh() const
+{
+    if (IsValid(PreviewBeltMesh))
+        PreviewBeltMesh->ClearAllMeshSections();
+    if (IsValid(PreviewSpline))
+        PreviewSpline->ClearSplinePoints(true);
 }
