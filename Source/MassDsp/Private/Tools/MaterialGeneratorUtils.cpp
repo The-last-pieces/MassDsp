@@ -392,22 +392,22 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
 namespace WidgetColors
 {
     // 背景
-    static const FLinearColor Overlay{0.02f, 0.02f, 0.05f, 0.82f};
-    static const FLinearColor CardBg{0.06f, 0.06f, 0.10f, 1.00f};
-    static const FLinearColor CardBorder{0.18f, 0.18f, 0.28f, 1.00f};
-    static const FLinearColor Divider{0.15f, 0.15f, 0.22f, 1.00f};
+    static constexpr FLinearColor Overlay{0.02f, 0.02f, 0.05f, 0.82f};
+    static constexpr FLinearColor CardBg{0.06f, 0.06f, 0.10f, 1.00f};
+    // static const FLinearColor CardBorder{0.18f, 0.18f, 0.28f, 1.00f};
+    static constexpr FLinearColor Divider{0.15f, 0.15f, 0.22f, 1.00f};
     // 文字
-    static const FLinearColor TextTitle{0.95f, 0.95f, 1.00f, 1.00f};
-    static const FLinearColor TextLabel{0.55f, 0.55f, 0.70f, 1.00f};
-    static const FLinearColor TextValue{0.92f, 0.92f, 1.00f, 1.00f};
+    static constexpr FLinearColor TextTitle{0.95f, 0.95f, 1.00f, 1.00f};
+    static constexpr FLinearColor TextLabel{0.55f, 0.55f, 0.70f, 1.00f};
+    static constexpr FLinearColor TextValue{0.92f, 0.92f, 1.00f, 1.00f};
     // 进度条填充（每种建筑不同色调）
-    static const FLinearColor FillMiner{0.22f, 0.56f, 0.90f, 1.00f}; // 蓝
-    static const FLinearColor FillStorage{0.20f, 0.78f, 0.42f, 1.00f}; // 绿
-    static const FLinearColor FillAssembler{0.92f, 0.64f, 0.18f, 1.00f}; // 琥珀
-    static const FLinearColor BarBg{0.06f, 0.08f, 0.12f, 1.00f};
+    static constexpr FLinearColor FillMiner{0.22f, 0.56f, 0.90f, 1.00f}; // 蓝
+    static constexpr FLinearColor FillStorage{0.20f, 0.78f, 0.42f, 1.00f}; // 绿
+    static constexpr FLinearColor FillAssembler{0.92f, 0.64f, 0.18f, 1.00f}; // 琥珀
+    static constexpr FLinearColor BarBg{0.06f, 0.08f, 0.12f, 1.00f};
     // 按钮
-    static const FLinearColor BtnClose{0.40f, 0.08f, 0.08f, 1.00f};
-    static const FLinearColor BtnCloseHover{0.75f, 0.15f, 0.15f, 1.00f};
+    static constexpr FLinearColor BtnClose{0.40f, 0.08f, 0.08f, 1.00f};
+    static constexpr FLinearColor BtnCloseHover{0.75f, 0.15f, 0.15f, 1.00f};
 }
 
 // ─── 内部构建辅助（文件作用域）────────────────────────────────────────────────
@@ -451,7 +451,7 @@ struct FWidgetBuilder
         UProgressBar* PB = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), Name);
         PB->SetPercent(0.45f); // 预览值
 
-        FProgressBarStyle Style = PB->WidgetStyle;
+        FProgressBarStyle Style = PB->GetWidgetStyle();
         FSlateBrush FillBrush;
         FillBrush.TintColor = FSlateColor(FillColor);
         FillBrush.DrawAs = ESlateBrushDrawType::Box;
@@ -462,7 +462,7 @@ struct FWidgetBuilder
         BgBrush.DrawAs = ESlateBrushDrawType::Box;
         Style.BackgroundImage = BgBrush;
 
-        PB->WidgetStyle = Style;
+        PB->SetWidgetStyle(Style);
         Place(PB, X, Y, W, H);
         return PB;
     }
@@ -485,7 +485,7 @@ struct FWidgetBuilder
     {
         UButton* Btn = Tree->ConstructWidget<UButton>(UButton::StaticClass(), FName("Button_Close"));
 
-        FButtonStyle Style = Btn->WidgetStyle;
+        FButtonStyle Style = Btn->GetStyle();
         auto MakeBrush = [](FLinearColor C)
         {
             FSlateBrush Br;
@@ -498,7 +498,7 @@ struct FWidgetBuilder
         Style.Pressed = MakeBrush(FLinearColor(0.25f, 0.04f, 0.04f, 1.f));
         Style.SetNormalPadding(FMargin(0.f));
         Style.SetPressedPadding(FMargin(0.f));
-        Btn->WidgetStyle = Style;
+        Btn->SetStyle(Style);
 
         UTextBlock* X = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), FName("TextBlock_CloseX"));
         X->SetText(FText::FromString(TEXT("✕")));
@@ -522,7 +522,7 @@ static UWidgetBlueprint* CreateWidgetBP(
     const FString FullPath = PackagePath + TEXT("/") + AssetName;
 
     // 已存在则跳过
-    if (UObject* Existing = LoadObject<UObject>(nullptr, *FullPath))
+    if (LoadObject<UObject>(nullptr, *FullPath))
     {
         UE_LOG(LogTemp, Log, TEXT("Widget BP already exists, skipping: %s"), *FullPath);
         return nullptr;
@@ -551,7 +551,7 @@ static void FinalizeWidgetBP(UWidgetBlueprint* WBP)
                                              EBlueprintCompileOptions::BatchCompile);
 
     WBP->PostEditChange();
-    WBP->MarkPackageDirty();
+    auto _ = WBP->MarkPackageDirty();
     FAssetRegistryModule::AssetCreated(WBP);
     UE_LOG(LogTemp, Log, TEXT("Widget BP generated: %s"), *WBP->GetPathName());
 }
