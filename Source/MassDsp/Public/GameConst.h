@@ -19,6 +19,18 @@ struct FGameConst
     static constexpr float ZOffset = 30.0f;
     static constexpr int SlotMaxCount = 5;
     static constexpr float ItemSpace = HalfLength * 2 + MinSpacing;
+
+    // ── 物流系统常量 ──────────────────────────────────────────────
+    /** 物流塔默认覆盖半径（cm，2000 = 20m） */
+    static constexpr float DefaultLogisticsCoverageRadius = 2000.f;
+    /** 物流塔兜底扫描间隔（秒） */
+    static constexpr float DefaultLogisticsScanInterval = 3.f;
+    /** 无人机默认飞行速度（cm/s） */
+    static constexpr float DefaultDroneFlightSpeed = 1500.f;
+    /** 无人机空间哈希格子尺寸（cm） */
+    static constexpr float DroneGridCellSize = 3000.f;
+    /** 无人机贝塞尔控制点高度偏移（cm，形成拱形飞行弧） */
+    static constexpr float DroneFlightArcHeight = 800.f;
 };
 
 // TODO 下面的分文件定义
@@ -68,6 +80,7 @@ enum class EBuildingType : uint8
     Miner = 1 UMETA(DisplayName = "矿机"),
     Storage = 2 UMETA(DisplayName = "仓库"),
     Assembler = 3 UMETA(DisplayName = "合成台"),
+    LogisticsTower = 4 UMETA(DisplayName = "物流塔"),
 };
 
 // 传送带类型枚举

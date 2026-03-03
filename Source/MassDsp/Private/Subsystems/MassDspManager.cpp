@@ -1423,6 +1423,12 @@ void UMassDspManager::QueryBuildingGridRadius(const FVector& Center, float Radiu
     }
 }
 
+void UMassDspManager::FindBuildingsInRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const
+{
+    // 直接转发到内部哈希查询，对外提供公开接口
+    QueryBuildingGridRadius(Center, Radius, OutEntities);
+}
+
 bool UMassDspManager::FindNearestBuilding(
     const FVector& PlayerLocation,
     float SearchRadius,

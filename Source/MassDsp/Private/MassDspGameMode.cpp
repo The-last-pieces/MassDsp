@@ -36,7 +36,7 @@ void AMassDspGameMode::BeginPlay()
 
     // 大规模创建
 
-    constexpr int N = 100;
+    constexpr int N = 2;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据

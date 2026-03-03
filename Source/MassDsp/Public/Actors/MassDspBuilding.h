@@ -60,7 +60,7 @@ public:
     AMassDspBuilding();
 
 public:
-    TArray<const UScriptStruct*> GetStaticStructs() const;
+    virtual TArray<const UScriptStruct*> GetStaticStructs() const;
 
     // 从CDO初始化Fragment数据（由MassDspManager调用）
     virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const;

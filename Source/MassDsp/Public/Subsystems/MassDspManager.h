@@ -288,6 +288,12 @@ public:
         FVector& OutLocation,
         const TFunction<bool(const FVector&)>& LocationFilter = nullptr);
 
+    /**
+     * 收集以 Center 为中心、半径 Radius 内所有建筑实体（公开接口，供物流 Processor 等外部系统使用）。
+     * 内部走 BuildingHashGrid 空间哈希，复杂度 O(k) 其中 k=覆盖格子数。
+     */
+    void FindBuildingsInRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const;
+
 private:
     // ──── 建筑空间哈希网格 (XY 二维) ─────────────────────────────────────────
     /** 网格单元尺寸 (cm)，每格 40m；查询时按 floor((Q±R)/CellSize) 范围遍历格子 */
