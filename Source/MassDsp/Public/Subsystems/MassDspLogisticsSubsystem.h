@@ -1,8 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Subsystems/WorldSubsystem.h"
-#include "Tickable.h"                // FTickableGameObject
+#include "Subsystems/WorldSubsystem.h"   // UTickableWorldSubsystem 在此头文件内
 #include "MassEntityManager.h"
 #include "MassEntityTypes.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -37,7 +36,7 @@ class UMassDspManager;
  *   - TODO[PERF]: 可改为 BatchUpdateInstancesTransforms，每帧一次 API 调用
  */
 UCLASS()
-class MASSDSP_API UMassDspLogisticsSubsystem : public UWorldSubsystem, public FTickableGameObject
+class MASSDSP_API UMassDspLogisticsSubsystem : public UTickableWorldSubsystem
 {
     GENERATED_BODY()
 
@@ -51,13 +50,11 @@ protected:
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
 
     // 
-    //  Tick（每帧：推进设备状态机 + ISM 同步 + 请求匹配 + 超时清理）
+    //  Tick（UTickableWorldSubsystem 已内置处理 FTickableGameObject vtable 问题）
     // 
 
 public:
     virtual void Tick(float DeltaTime) override;
-    virtual bool IsTickable() const override { return !IsTemplate() && this->bHasCalledPostInitialize; }
-    virtual bool IsTickableInEditor() const override { return false; }
 
     virtual TStatId GetStatId() const override
     {

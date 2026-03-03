@@ -9,7 +9,9 @@
 #include "Actors/MassDspLogisticsTower.h"
 
 #include "Logistics/MassDspDroneStrategy.h"
+#include "Fragments/MassDspLogisticsTowerFragment.h"
 
+#include "MassEntitySubsystem.h"
 #include "Engine/LocalPlayer.h"
 
 AMassDspGameMode::AMassDspGameMode()
@@ -177,8 +179,32 @@ void AMassDspGameMode::BeginPlay()
     const FMassEntityHandle TowerB  = DemoEntities[1];
     const FMassEntityHandle TowerC  = DemoEntities[2];
 
+    // ── 直接修改 Tower C 的 Fragment：设为消费方（持续请求 IronOre）──
+    // Tower B 默认 DesiredItemType=None，当库存 > 80% 时才发 Supply（由 Processor 扫描触发）
+    if (UMassEntitySubsystem* ESub = World->GetSubsystem<UMassEntitySubsystem>())
+    {
+        FMassEntityManager& EM = ESub->GetMutableEntityManager();
+
+        // Tower B：纯供应方，ScanInterval 缩短以便快速响应
+        if (FMassDspLogisticsTowerFragment* BFrag =
+                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerB))
+        {
+            BFrag->SupplyTriggerRatio = 0.1f;  // 库存超 10% 即发 Supply（演示用低阈值）
+            BFrag->ScanInterval       = 1.f;   // 每秒扫描一次（默认 3s，演示加快）
+        }
+
+        // Tower C：消费方，持续请求 IronOre
+        if (FMassDspLogisticsTowerFragment* CFrag =
+                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerC))
+        {
+            CFrag->DesiredItemType  = EItemType::IronOre;
+            CFrag->DemandTriggerRatio = 0.9f; // 库存低于 90% 就请求补货（演示用高阈值保持频繁）
+            CFrag->ScanInterval     = 1.f;
+        }
+    }
+
     // ── 传送带：矿机 A 输出（slot 0）→ 物流塔 B 输入（slot 0）──
-    DspManager->CreateAndLinkBeltForSlot(MinerA, 0, TowerB, 0, EBeltType::Normal);
+    DspManager->CreateAndLinkBeltForSlot(MinerA, 0, TowerB, 0, EBeltType::Express);
     DspManager->FlushBeltMesh();
 
     // ── ISM：如果配置了 DroneMesh，在 GameMode Actor 上动态创建 ISM 组件──
@@ -219,27 +245,42 @@ void AMassDspGameMode::BeginPlay()
         }
     }
 
+    // ── 在 GameMode Actor 上加一个 Timer，每 2秒重新提交一对请求（去重保证始终有 Supply+Demand 匹配）──
+    struct FDemoReqHelper
+    {
+        static void SubmitPair(
+            UMassDspLogisticsSubsystem* Sub,
+            FMassEntityHandle SrcSupply,
+            FMassEntityHandle SrcDemand,
+            FMassEntityHandle CoordTower)
+        {
+            Sub->SubmitSupplyRequest(SrcSupply, EItemType::IronOre, 5,
+                ELogisticsRequestPriority::Normal, CoordTower);
+            Sub->SubmitDemandRequest(SrcDemand, EItemType::IronOre, 5,
+                ELogisticsRequestPriority::Normal, CoordTower);
+        }
+    };
+
+    // 立即提交一次
+    FDemoReqHelper::SubmitPair(LogisticsSub, TowerB, TowerC, TowerB);
+
+    // 每 2 秒持续提交（容容子，去重逻辑在子系统内处理）
+    // 使用 lambda 封装回调拷贝副本
+    FMassEntityHandle CapB = TowerB, CapC = TowerC;
+    TWeakObjectPtr<UMassDspLogisticsSubsystem> WeakSub = LogisticsSub;
+    GetWorld()->GetTimerManager().SetTimer(
+        DemoRequestTimer,
+        [WeakSub, CapB, CapC]()
+        {
+            if (UMassDspLogisticsSubsystem* S = WeakSub.Get())
+                FDemoReqHelper::SubmitPair(S, CapB, CapC, CapB);
+        },
+        2.f, /*bLoop=*/true);
+
     UE_LOG(LogTemp, Log,
-        TEXT("物流演示初始化完成：矿机 A [%s]  B [%s]  C [%s] | 各 %d 架无人机"),
-        *TowerBPos.ToString(), *TowerBPos.ToString(), *TowerCPos.ToString(), DronesPerTower);
-
-    // ── 预提交一对请求：展示无人机立即飞行（B → C）──
-    // 供应：塔 B 做取货源（带内有矿石后细节不为空）
-    // 需求：塔 C 做目标仓库
-    // 两个请求均指向 TowerB 作为协调塔，MatchPendingRequests 在同一塔内匹配
-    LogisticsSub->SubmitSupplyRequest(
-        TowerB,
-        EItemType::IronOre,
-        /*Quantity=*/5,
-        ELogisticsRequestPriority::Normal,
-        /*PreferredTower=*/TowerB);
-
-    LogisticsSub->SubmitDemandRequest(
-        TowerC,
-        EItemType::IronOre,
-        /*Quantity=*/5,
-        ELogisticsRequestPriority::Normal,
-        /*PreferredTower=*/TowerB);
+        TEXT("物流演示初始化完成：矿机 A  塔 B[%d,%d]  塔 C[%d,%d] | 各 %d 架无人机 | Timer 2s/帧"),
+        TowerB.Index, TowerB.SerialNumber,
+        TowerC.Index, TowerC.SerialNumber, DronesPerTower);
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)

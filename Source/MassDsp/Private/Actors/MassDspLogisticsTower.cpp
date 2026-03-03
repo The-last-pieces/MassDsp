@@ -47,4 +47,7 @@ void AMassDspLogisticsTower::InitFragmentForEntity(
     TowerFrag.LastScanTime     = 0.f;
     TowerFrag.bDirty           = false;
     TowerFrag.bAcceptsRequests = true;
+    TowerFrag.DesiredItemType  = DesiredItemType;
+    TowerFrag.SupplyTriggerRatio = SupplyTriggerRatio;
+    TowerFrag.DemandTriggerRatio = DemandTriggerRatio;
 }

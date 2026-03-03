@@ -53,4 +53,19 @@ struct MASSDSP_API FMassDspLogisticsTowerFragment : public FMassFragment
      */
     UPROPERTY()
     bool bAcceptsRequests = true;
+
+    /**
+     * 该塔作为消费方时想要的物品类型（None = 纯供应方）。
+     * Processor 看到 DesiredItemType != None 时，该塔就会持续发出该物品的 Demand。
+     */
+    UPROPERTY()
+    EItemType DesiredItemType = EItemType::None;
+
+    /** Supply 触发阈值：自身库存 > 此比例时提交 Supply。不控制附近建筑。 */
+    UPROPERTY()
+    float SupplyTriggerRatio = 0.8f;
+
+    /** Demand 触发阈值：自身库存 < 此比例时提交 Demand（仅当 DesiredItemType != None）。 */
+    UPROPERTY()
+    float DemandTriggerRatio = 0.8f;
 };

@@ -94,4 +94,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
         meta = (ClampMin = "0.0", ClampMax = "1.0"))
     float DemandTriggerRatio = 0.2f;
+
+    /**
+     * 该塔作为消费方时希望不断补充的物品类型。
+     * 设置后 Processor 每次扫描都会给该塔提交 Demand，
+     * 无论塔自身库存是否有内容（解决空库不能自动转入问题）。
+     * None = 纯供应方，不主动请求补货。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower")
+    EItemType DesiredItemType = EItemType::None;
 };

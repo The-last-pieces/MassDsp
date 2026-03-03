@@ -66,17 +66,35 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             const FVector TowerLocation = Transforms[i].GetTransform().GetLocation();
             const FMassEntityHandle TowerEntity = InContext.GetEntity(i);
 
-            // ── 自身库存检查（塔本体 = 传送带汇集点，Belt → Tower Storage）──
+            // ── 一、如果塔自身库存超过 Supply 阈值 → 提交 Supply ──
             if (SelfStorage.MaxInventory > 0 && SelfStorage.StoredItemType != EItemType::None)
             {
                 const float SelfFill = static_cast<float>(SelfStorage.InventoryCount)
                                      / static_cast<float>(SelfStorage.MaxInventory);
-                if (SelfFill >= 0.8f)
+                if (SelfFill >= TowerFrag.SupplyTriggerRatio)
                 {
                     Logistics->SubmitSupplyRequest(
                         TowerEntity,
                         SelfStorage.StoredItemType,
-                        SelfStorage.InventoryCount / 2,  // 搬走一半
+                        SelfStorage.InventoryCount / 2,
+                        ELogisticsRequestPriority::Normal,
+                        TowerEntity);
+                }
+            }
+
+            // ── 二、如果塔配置了 DesiredItemType → 持续提交 Demand ──
+            if (TowerFrag.DesiredItemType != EItemType::None)
+            {
+                const int32 MaxInv    = FMath::Max(1, SelfStorage.MaxInventory);
+                const float FillRatio = static_cast<float>(SelfStorage.InventoryCount)
+                                       / static_cast<float>(MaxInv);
+                if (FillRatio < TowerFrag.DemandTriggerRatio)
+                {
+                    const int32 WantQty = FMath::Max(1, MaxInv - SelfStorage.InventoryCount);
+                    Logistics->SubmitDemandRequest(
+                        TowerEntity,
+                        TowerFrag.DesiredItemType,
+                        WantQty,
                         ELogisticsRequestPriority::Normal,
                         TowerEntity);
                 }
@@ -93,35 +111,28 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
                 if (const FMassDspStorageFragment* NearbyStorage =
                         EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(NearbyEntity))
                 {
-                    if (NearbyStorage->MaxInventory > 0)
+                    // 合理性过滤：MaxInventory 超过 100 万视为未初始化，跳过
+                    if (NearbyStorage->MaxInventory <= 0 || NearbyStorage->MaxInventory > 1000000) continue;
+                    // InventoryCount 也须在合法范围内
+                    if (NearbyStorage->InventoryCount < 0 || NearbyStorage->InventoryCount > NearbyStorage->MaxInventory) continue;
+
+                    const float FillRatio = static_cast<float>(NearbyStorage->InventoryCount)
+                                          / static_cast<float>(NearbyStorage->MaxInventory);
+
+                    // ── Supply：附近仓库/塔库存过满 ──
+                    if (FillRatio >= TowerFrag.SupplyTriggerRatio
+                     && NearbyStorage->StoredItemType != EItemType::None
+                     && NearbyStorage->InventoryCount > 0)
                     {
-                        const float FillRatio = static_cast<float>(NearbyStorage->InventoryCount)
-                                              / static_cast<float>(NearbyStorage->MaxInventory);
-
-                        // ── Supply：附近仓库/塔库存过满 ──
-                        if (FillRatio >= 0.8f && NearbyStorage->StoredItemType != EItemType::None)
-                        {
-                            Logistics->SubmitSupplyRequest(
-                                NearbyEntity,
-                                NearbyStorage->StoredItemType,
-                                NearbyStorage->InventoryCount / 2,
-                                ELogisticsRequestPriority::Normal,
-                                TowerEntity);
-                        }
-
-                        // ── Demand：附近仓库/塔库存过低（已知物品类型才可发需求） ──
-                        if (FillRatio < 0.2f && NearbyStorage->StoredItemType != EItemType::None)
-                        {
-                            const int32 WantQty = FMath::Max(1,
-                                NearbyStorage->MaxInventory / 2 - NearbyStorage->InventoryCount);
-                            Logistics->SubmitDemandRequest(
-                                NearbyEntity,
-                                NearbyStorage->StoredItemType,
-                                WantQty,
-                                ELogisticsRequestPriority::Normal,
-                                TowerEntity);
-                        }
+                        Logistics->SubmitSupplyRequest(
+                            NearbyEntity,
+                            NearbyStorage->StoredItemType,
+                            NearbyStorage->InventoryCount / 2,
+                            ELogisticsRequestPriority::Normal,
+                            TowerEntity);
                     }
+
+                    // 附近建筑不再主动发 Demand（由各建筑自己的塔扫描时在 self-check 处理）
                 }
 
                 //  Assembler：输入缓冲不足  Demand 请求 

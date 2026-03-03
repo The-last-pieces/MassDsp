@@ -61,4 +61,8 @@ public:
     // 无人机 ISM 网格（用于物流演示场景）
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP|Logistics")
     TObjectPtr<UStaticMesh> DroneMesh;
+
+private:
+    /** 演示场景：周期性提交 Supply+Demand 请求的 Timer */
+    FTimerHandle DemoRequestTimer;
 };
