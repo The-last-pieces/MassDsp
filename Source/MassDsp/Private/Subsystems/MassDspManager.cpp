@@ -824,6 +824,7 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
             CreatedEntities[Indices[j]] = EntityHandle; // 按原始输入下标回写，保证顺序
             SpawnedBuildingEntities.Add(EntityHandle);
             BuildingEntityTypeRegistry.Add(EntityHandle, BuildingType);
+            RegisterBuildingInGrid(EntityHandle, SpawnData.WorldTransform.GetLocation());
         }
     }
 
@@ -904,6 +905,7 @@ FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManag
     ++BuildingEntityCount;
     SpawnedBuildingEntities.Add(EntityHandle);
     BuildingEntityTypeRegistry.Add(EntityHandle, SpawnData.BuildingType);
+    RegisterBuildingInGrid(EntityHandle, SpawnData.WorldTransform.GetLocation());
 
     return EntityHandle;
 }
@@ -1015,13 +1017,32 @@ namespace
     {
         switch (W)
         {
-        case EDubinsWordType::LSL: Out[0]=EDubinsSegType::Left;    Out[1]=EDubinsSegType::Straight; Out[2]=EDubinsSegType::Left;    break;
-        case EDubinsWordType::RSR: Out[0]=EDubinsSegType::Right;   Out[1]=EDubinsSegType::Straight; Out[2]=EDubinsSegType::Right;   break;
-        case EDubinsWordType::LSR: Out[0]=EDubinsSegType::Left;    Out[1]=EDubinsSegType::Straight; Out[2]=EDubinsSegType::Right;   break;
-        case EDubinsWordType::RSL: Out[0]=EDubinsSegType::Right;   Out[1]=EDubinsSegType::Straight; Out[2]=EDubinsSegType::Left;    break;
-        case EDubinsWordType::LRL: Out[0]=EDubinsSegType::Left;    Out[1]=EDubinsSegType::Right;    Out[2]=EDubinsSegType::Left;    break;
-        case EDubinsWordType::RLR: Out[0]=EDubinsSegType::Right;   Out[1]=EDubinsSegType::Left;     Out[2]=EDubinsSegType::Right;   break;
-        default:                   Out[0]=Out[1]=Out[2]=EDubinsSegType::Straight;                                                    break;
+        case EDubinsWordType::LSL: Out[0] = EDubinsSegType::Left;
+            Out[1] = EDubinsSegType::Straight;
+            Out[2] = EDubinsSegType::Left;
+            break;
+        case EDubinsWordType::RSR: Out[0] = EDubinsSegType::Right;
+            Out[1] = EDubinsSegType::Straight;
+            Out[2] = EDubinsSegType::Right;
+            break;
+        case EDubinsWordType::LSR: Out[0] = EDubinsSegType::Left;
+            Out[1] = EDubinsSegType::Straight;
+            Out[2] = EDubinsSegType::Right;
+            break;
+        case EDubinsWordType::RSL: Out[0] = EDubinsSegType::Right;
+            Out[1] = EDubinsSegType::Straight;
+            Out[2] = EDubinsSegType::Left;
+            break;
+        case EDubinsWordType::LRL: Out[0] = EDubinsSegType::Left;
+            Out[1] = EDubinsSegType::Right;
+            Out[2] = EDubinsSegType::Left;
+            break;
+        case EDubinsWordType::RLR: Out[0] = EDubinsSegType::Right;
+            Out[1] = EDubinsSegType::Left;
+            Out[2] = EDubinsSegType::Right;
+            break;
+        default: Out[0] = Out[1] = Out[2] = EDubinsSegType::Straight;
+            break;
         }
     }
 
@@ -1188,7 +1209,11 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
     const float dZdCm = (TotalLen > 0.f) ? (Path.EndZ - Path.StartZ) / TotalLen : 0.f;
 
     // ── 第一步：收集所有采样点（位置 + 朝向角）─────────────────────────────
-    struct FSample { FVector Pos; float H; };
+    struct FSample
+    {
+        FVector Pos;
+        float H;
+    };
     TArray<FSample> Samples;
     Samples.Reserve(FMath::CeilToInt(TotalLen / SampleStep) + 4);
 
@@ -1286,6 +1311,49 @@ TSubclassOf<AMassDspBuilding> UMassDspManager::GetBuildingClassForType(EBuilding
     return nullptr;
 }
 
+// ============================================================
+//  空间哈希网格 —— 辅助实现
+// ============================================================
+
+void UMassDspManager::RegisterBuildingInGrid(FMassEntityHandle Entity, const FVector& Location)
+{
+    const int32 CX = FMath::FloorToInt(Location.X / BuildingGridCellSize);
+    const int32 CY = FMath::FloorToInt(Location.Y / BuildingGridCellSize);
+    BuildingHashGrid.FindOrAdd(MakeBuildingCellKey(CX, CY)).Add(Entity);
+}
+
+void UMassDspManager::QueryBuildingGridRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const
+{
+    if (BuildingHashGrid.IsEmpty()) return;
+
+    // 计算与查询 AABB 重叠的格子范围
+    const int32 X0 = FMath::FloorToInt((Center.X - Radius) / BuildingGridCellSize);
+    const int32 X1 = FMath::FloorToInt((Center.X + Radius) / BuildingGridCellSize);
+    const int32 Y0 = FMath::FloorToInt((Center.Y - Radius) / BuildingGridCellSize);
+    const int32 Y1 = FMath::FloorToInt((Center.Y + Radius) / BuildingGridCellSize);
+
+    // 安全上限：单次查询最多覆盖 32×32 = 1024 个格；超出说明半径异常
+    if ((X1 - X0) > 32 || (Y1 - Y0) > 32)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("QueryBuildingGridRadius: radius %.0f is too large, clamped to 32 cells per axis"), Radius);
+        return;
+    }
+
+    const int32 TotalCells = (X1 - X0 + 1) * (Y1 - Y0 + 1);
+    OutEntities.Reserve(OutEntities.Num() + TotalCells * 4); // 粗估每格 4 个建筑
+
+    for (int32 CX = X0; CX <= X1; ++CX)
+    {
+        for (int32 CY = Y0; CY <= Y1; ++CY)
+        {
+            if (const TArray<FMassEntityHandle>* Cell = BuildingHashGrid.Find(MakeBuildingCellKey(CX, CY)))
+            {
+                OutEntities.Append(*Cell);
+            }
+        }
+    }
+}
+
 bool UMassDspManager::FindNearestBuilding(
     const FVector& PlayerLocation,
     float SearchRadius,
@@ -1301,7 +1369,10 @@ bool UMassDspManager::FindNearestBuilding(
     float BestDistSq = SearchRadius * SearchRadius;
     bool bFound = false;
 
-    for (const FMassEntityHandle& Entity : SpawnedBuildingEntities)
+    TArray<FMassEntityHandle> Candidates;
+    QueryBuildingGridRadius(PlayerLocation, SearchRadius, Candidates);
+
+    for (const FMassEntityHandle& Entity : Candidates)
     {
         if (!EM.IsEntityValid(Entity)) continue;
 
@@ -1343,7 +1414,11 @@ bool UMassDspManager::FindNearestBuildingSlot(
     float BestDistSq = SearchRadius * SearchRadius;
     bool bFound = false;
 
-    for (const FMassEntityHandle& Entity : SpawnedBuildingEntities)
+    // 槽口可能偏离建筑中心最多 MaxBuildingSlotOffset，搜索半径外扩以免漏查
+    TArray<FMassEntityHandle> Candidates;
+    QueryBuildingGridRadius(WorldPos, SearchRadius + MaxBuildingSlotOffset, Candidates);
+
+    for (const FMassEntityHandle& Entity : Candidates)
     {
         if (!EM.IsEntityValid(Entity)) continue;
 
@@ -1737,7 +1812,11 @@ void UMassDspManager::GetNearbySlotsForHighlight(
     FMassEntityManager& EM = ESub->GetMutableEntityManager();
     const float RadiusSq = HighlightRadius * HighlightRadius;
 
-    for (const FMassEntityHandle& Entity : SpawnedBuildingEntities)
+    // 通过哈希网格缩小候选集：仅遍历 (HighlightRadius + MaxBuildingSlotOffset) 范围内的建筑
+    TArray<FMassEntityHandle> Candidates;
+    QueryBuildingGridRadius(WorldPos, HighlightRadius + MaxBuildingSlotOffset, Candidates);
+
+    for (const FMassEntityHandle& Entity : Candidates)
     {
         if (!EM.IsEntityValid(Entity)) continue;
 

@@ -289,6 +289,31 @@ public:
         const TFunction<bool(const FVector&)>& LocationFilter = nullptr);
 
 private:
+    // ──── 建筑空间哈希网格 (XY 二维) ─────────────────────────────────────────
+    /** 网格单元尺寸 (cm)，每格 40m；查询时按 floor((Q±R)/CellSize) 范围遍历格子 */
+    static constexpr float BuildingGridCellSize  = 4000.f;
+
+    /** 槽口相对建筑中心的最大偏移 (cm)，槽口查询时在建筑搜索半径外再扩展此量 */
+    static constexpr float MaxBuildingSlotOffset = 1000.f;
+
+    /** 建筑哈希网格：CellKey(int32 CX, int32 CY) -> 建筑实体列表 */
+    TMap<uint64, TArray<FMassEntityHandle>> BuildingHashGrid;
+
+    /** 将 2D 格坐标打包成唯一 uint64 Key */
+    static FORCEINLINE uint64 MakeBuildingCellKey(int32 CX, int32 CY)
+    {
+        return (static_cast<uint64>(static_cast<uint32>(CX)) << 32) | static_cast<uint32>(CY);
+    }
+
+    /** 将建筑 (Entity, Location) 插入对应哈希格 */
+    void RegisterBuildingInGrid(FMassEntityHandle Entity, const FVector& Location);
+
+    /**
+     * 收集与以 Center 为中心、半径为 Radius 的 AABB 相交的所有格子内的建筑实体。
+     * 因每个建筑只注册到一个格（其原点所在格），结果集内无重复项。
+     */
+    void QueryBuildingGridRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const;
+
     // 内部辅助方法：创建Building Entity的核心逻辑
     FMassEntityHandle CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData);
 
