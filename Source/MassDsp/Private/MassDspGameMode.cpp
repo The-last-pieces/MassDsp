@@ -261,7 +261,7 @@ void AMassDspGameMode::BeginPlay()
         MakeUnique<FDroneDispatchStrategy>(LogisticsSub));
 
     // ── 创建无人机：B、C 各 10 架，初始位置设为堵位塔 P3──
-    constexpr int32 DronesPerTower = 10;
+    constexpr int32 DronesPerTower = 1;
 
     for (int32 i = 0; i < DronesPerTower; ++i)
     {
@@ -274,11 +274,11 @@ void AMassDspGameMode::BeginPlay()
         }
 
         // 加入 C 的无人机池
-        FDroneHandle HC = LogisticsSub->CreateDrone(TowerC);
-        if (HC.IsValid() && LogisticsSub->DronePool.IsValidIndex(HC.Index))
-        {
-            LogisticsSub->DronePool[HC.Index].P3 = TowerCPos;
-        }
+        // FDroneHandle HC = LogisticsSub->CreateDrone(TowerC);
+        // if (HC.IsValid() && LogisticsSub->DronePool.IsValidIndex(HC.Index))
+        // {
+        //     LogisticsSub->DronePool[HC.Index].P3 = TowerCPos;
+        // }
     }
 
     // ── 在 GameMode Actor 上加一个 Timer，每 2秒重新提交一对请求（去重保证始终有 Supply+Demand 匹配）──
@@ -290,9 +290,9 @@ void AMassDspGameMode::BeginPlay()
             FMassEntityHandle SrcDemand,
             FMassEntityHandle CoordTower)
         {
-            Sub->SubmitSupplyRequest(SrcSupply, EItemType::IronOre, 10,
+            Sub->SubmitSupplyRequest(SrcSupply, EItemType::IronOre, 20,
                                      ELogisticsRequestPriority::Normal, CoordTower);
-            Sub->SubmitDemandRequest(SrcDemand, EItemType::IronOre, 10,
+            Sub->SubmitDemandRequest(SrcDemand, EItemType::IronOre, 20,
                                      ELogisticsRequestPriority::Normal, CoordTower);
         }
     };

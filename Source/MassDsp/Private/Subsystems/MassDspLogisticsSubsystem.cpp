@@ -698,14 +698,21 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
     if (FLogisticsTask* Task = AllTasks.Find(Drone.CurrentTaskId))
         Task->State = ELogisticsTaskState::InTransit_Deliver;
 
-    // 重新生成贝塞尔曲线（取货点  交货点）
-    const FVector P0 = Drone.P3; // 当前位置（上一段终点）
-    const FVector P3 = Drone.DeliveryLocation;
-    const float Arc  = FGameConst::DroneFlightArcHeight;
+    // 重新生成贝塞尔曲线（取货点 → 交货点），向自身行进方向右偏形成回程航道
+    const FVector P0   = Drone.P3; // 当前位置（上一段终点）
+    const FVector P3   = Drone.DeliveryLocation;
+    const float   Arc  = FGameConst::DroneFlightArcHeight;
+    const float   Lane = FGameConst::DroneFlightLaneOffset;
+
+    const FVector Dir2D   = (P3 - P0).GetSafeNormal2D();
+    // Cross(Up, Dir2D) 结果 Z=0、长度=|Dir2D|=1，直接用作单位右向量
+    const FVector RightXY = Dir2D.IsNearlyZero()
+        ? FVector::RightVector
+        : FVector::CrossProduct(FVector::UpVector, Dir2D);
 
     Drone.P0 = P0;
-    Drone.P1 = P0 + FVector(0.f, 0.f, Arc);
-    Drone.P2 = P3 + FVector(0.f, 0.f, Arc);
+    Drone.P1 = P0 + FVector(0.f, 0.f, Arc) + RightXY * Lane;
+    Drone.P2 = P3 + FVector(0.f, 0.f, Arc) + RightXY * Lane;
     Drone.P3 = P3;
     Drone.TotalFlightTime = FVector::Dist(P0, P3) / FMath::Max(1.f, Drone.FlightSpeed);
 }

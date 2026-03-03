@@ -191,7 +191,7 @@ public:
     FDroneHandle CreateDrone(
         FMassEntityHandle AffiliatedTowerEntity = FMassEntityHandle(),
         float FlightSpeed = FGameConst::DefaultDroneFlightSpeed,
-        int32 CarryCapacity = 10);
+        int32 CarryCapacity = 20);
 
     /**
      * 创建并注册一辆地面小车。

@@ -30,7 +30,10 @@ struct FGameConst
     /** 无人机空间哈希格子尺寸（cm） */
     static constexpr float DroneGridCellSize = 3000.f;
     /** 无人机贝塞尔控制点高度偏移（cm，形成拱形飞行弧） */
-    static constexpr float DroneFlightArcHeight = 800.f;
+    static constexpr float DroneFlightArcHeight = 1000.f;
+    /** 无人机双向航道横向偏移（cm）：始终向自身行进方向右偏，
+     *  去程/回程方向相反，世界空间中自然分离到路线两侧，避免重叠 */
+    static constexpr float DroneFlightLaneOffset = 200.f;
 };
 
 // TODO 下面的分文件定义
