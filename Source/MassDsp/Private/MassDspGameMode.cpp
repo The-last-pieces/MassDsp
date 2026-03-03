@@ -143,7 +143,7 @@ void AMassDspGameMode::BeginPlay()
     if (!LogisticsSub || !LogisticsTowerClass)
     {
         UE_LOG(LogTemp, Warning,
-            TEXT("物流演示跨过：LogisticsSubsystem 或 LogisticsTowerClass 为空"));
+               TEXT("物流演示跨过：LogisticsSubsystem 或 LogisticsTowerClass 为空"));
         return;
     }
 
@@ -152,6 +152,7 @@ void AMassDspGameMode::BeginPlay()
     const FVector MinerAPos = FVector(-5000.f, 5000.f, 0.f);
     const FVector TowerBPos = FVector(-3000.f, 5000.f, 0.f);
     const FVector TowerCPos = FVector(-3000.f, 6500.f, 0.f); // 离 B 1500 cm
+    const FVector StorageDPos = FVector(-3000.f, 8000.f, 0.f);
 
     TArray<FBuildingSpawnData> DemoSpawnData;
     DemoSpawnData.Add(FBuildingSpawnData(
@@ -166,18 +167,23 @@ void AMassDspGameMode::BeginPlay()
         LogisticsTowerClass,
         FTransform(FRotator::ZeroRotator, TowerCPos),
         EBuildingType::LogisticsTower));
+    DemoSpawnData.Add(FBuildingSpawnData(
+        StorageClass,
+        FTransform(FRotator::ZeroRotator, StorageDPos),
+        EBuildingType::Storage));
 
     TArray<FMassEntityHandle> DemoEntities = DspManager->BatchSpawnBuildings(DemoSpawnData);
-    if (DemoEntities.Num() < 3 || !DemoEntities[0].IsValid() ||
-        !DemoEntities[1].IsValid() || !DemoEntities[2].IsValid())
+    if (DemoEntities.Num() < 4 || !DemoEntities[0].IsValid() ||
+        !DemoEntities[1].IsValid() || !DemoEntities[2].IsValid() || !DemoEntities[3].IsValid())
     {
         UE_LOG(LogTemp, Error, TEXT("物流演示建筑创建失败"));
         return;
     }
 
-    const FMassEntityHandle MinerA  = DemoEntities[0];
-    const FMassEntityHandle TowerB  = DemoEntities[1];
-    const FMassEntityHandle TowerC  = DemoEntities[2];
+    const FMassEntityHandle MinerA = DemoEntities[0];
+    const FMassEntityHandle TowerB = DemoEntities[1];
+    const FMassEntityHandle TowerC = DemoEntities[2];
+    const FMassEntityHandle StorageD = DemoEntities[3];
 
     // ── 直接修改 Tower C 的 Fragment：设为消费方（持续请求 IronOre）──
     // Tower B 默认 DesiredItemType=None，当库存 > 80% 时才发 Supply（由 Processor 扫描触发）
@@ -187,36 +193,66 @@ void AMassDspGameMode::BeginPlay()
 
         // Tower B：纯供应方，ScanInterval 缩短以便快速响应
         if (FMassDspLogisticsTowerFragment* BFrag =
-                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerB))
+            EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerB))
         {
-            BFrag->SupplyTriggerRatio = 0.1f;  // 库存超 10% 即发 Supply（演示用低阈值）
-            BFrag->ScanInterval       = 1.f;   // 每秒扫描一次（默认 3s，演示加快）
+            BFrag->SupplyTriggerRatio = 0.1f; // 库存超 10% 即发 Supply（演示用低阈值）
+            BFrag->ScanInterval = 1.f; // 每秒扫描一次（默认 3s，演示加快）
         }
 
         // Tower C：消费方，持续请求 IronOre
         if (FMassDspLogisticsTowerFragment* CFrag =
-                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerC))
+            EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerC))
         {
-            CFrag->DesiredItemType  = EItemType::IronOre;
+            CFrag->DesiredItemType = EItemType::IronOre;
             CFrag->DemandTriggerRatio = 0.9f; // 库存低于 90% 就请求补货（演示用高阈值保持频繁）
-            CFrag->ScanInterval     = 1.f;
+            CFrag->ScanInterval = 1.f;
         }
     }
 
     // ── 传送带：矿机 A 输出（slot 0）→ 物流塔 B 输入（slot 0）──
     DspManager->CreateAndLinkBeltForSlot(MinerA, 0, TowerB, 0, EBeltType::Express);
+    DspManager->CreateAndLinkBeltForSlot(TowerC, 0, StorageD, 0, EBeltType::Express);
     DspManager->FlushBeltMesh();
 
-    // ── ISM：如果配置了 DroneMesh，在 GameMode Actor 上动态创建 ISM 组件──
+    // ── ISM：AGameModeBase 继承自 AInfo，GetRootComponent() 为 nullptr
+    //         必须生成专用 Actor 作为 ISM 宿主，否则组件游离于场景树不渲染
     if (DroneMesh)
     {
+        // 生成一个轻量 Actor 作为 ISM 宿主（位于世界原点）
+        FActorSpawnParameters ISMHostParams;
+        ISMHostParams.Name = TEXT("DroneISMHostActor");
+        ISMHostParams.SpawnCollisionHandlingOverride =
+            ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        AActor* ISMHost = World->SpawnActor<AActor>(AActor::StaticClass(),
+                                                    FVector::ZeroVector, FRotator::ZeroRotator, ISMHostParams);
+        check(ISMHost);
+
+        // 给宿主建立根 SceneComponent
+        USceneComponent* ISMHostRoot =
+            NewObject<USceneComponent>(ISMHost, TEXT("ISMHostRoot"));
+        ISMHost->SetRootComponent(ISMHostRoot);
+        ISMHostRoot->RegisterComponent();
+
         UInstancedStaticMeshComponent* DroneISM =
-            NewObject<UInstancedStaticMeshComponent>(this, TEXT("DroneISMComponent"));
+            NewObject<UInstancedStaticMeshComponent>(ISMHost, TEXT("DroneISMComponent"));
         DroneISM->SetStaticMesh(DroneMesh);
+        // 运行时创建的组件必须设 Movable，否则 UpdateInstanceTransform 不生效
+        DroneISM->SetMobility(EComponentMobility::Movable);
         DroneISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         DroneISM->SetCastShadow(false);
+        // Attach 到宿主根组件，进入场景渲染树
+        DroneISM->AttachToComponent(ISMHostRoot,
+                                    FAttachmentTransformRules::KeepRelativeTransform);
+        ISMHost->AddInstanceComponent(DroneISM);
         DroneISM->RegisterComponent();
         LogisticsSub->SetupISMComponents(DroneISM, nullptr, nullptr);
+
+        UE_LOG(LogTemp, Log, TEXT("[Logistics] DroneISM created on ISMHost, Mesh=%s"),
+               *DroneMesh->GetName());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Logistics] DroneMesh 未配置，无人机不会显示"));
     }
 
     // ── 注册无人机分派策略（全局注册一次）──
@@ -255,9 +291,9 @@ void AMassDspGameMode::BeginPlay()
             FMassEntityHandle CoordTower)
         {
             Sub->SubmitSupplyRequest(SrcSupply, EItemType::IronOre, 5,
-                ELogisticsRequestPriority::Normal, CoordTower);
+                                     ELogisticsRequestPriority::Normal, CoordTower);
             Sub->SubmitDemandRequest(SrcDemand, EItemType::IronOre, 5,
-                ELogisticsRequestPriority::Normal, CoordTower);
+                                     ELogisticsRequestPriority::Normal, CoordTower);
         }
     };
 
@@ -278,9 +314,9 @@ void AMassDspGameMode::BeginPlay()
         2.f, /*bLoop=*/true);
 
     UE_LOG(LogTemp, Log,
-        TEXT("物流演示初始化完成：矿机 A  塔 B[%d,%d]  塔 C[%d,%d] | 各 %d 架无人机 | Timer 2s/帧"),
-        TowerB.Index, TowerB.SerialNumber,
-        TowerC.Index, TowerC.SerialNumber, DronesPerTower);
+           TEXT("物流演示初始化完成：矿机 A  塔 B[%d,%d]  塔 C[%d,%d] | 各 %d 架无人机 | Timer 2s/帧"),
+           TowerB.Index, TowerB.SerialNumber,
+           TowerC.Index, TowerC.SerialNumber, DronesPerTower);
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)

@@ -143,18 +143,45 @@ FGuid UMassDspLogisticsSubsystem::SubmitRequestInternal(
         EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity);
     if (!TowerFrag || !TowerFrag->bAcceptsRequests) return FGuid();
 
-    // ── 去重：同一 (SourceEntity, ItemType, Type) 已有 Pending 请求则更新数量而非新增 ──
+    // ── 去重：同一 (SourceEntity, ItemType, Type, Tower) 已有请求则更新数量而非新增 ──
+    FLogisticsTowerRuntimeData& RuntimeDataRef = TowerRuntimeData.FindOrAdd(TowerEntity);
     for (auto& [ExistId, ExistReq] : AllRequests)
     {
-        if (ExistReq.Type        == Type
-         && ExistReq.SourceEntity == SourceEntity
-         && ExistReq.ItemType    == ItemType
+        if (ExistReq.Type                == Type
+         && ExistReq.SourceEntity        == SourceEntity
+         && ExistReq.ItemType            == ItemType
          && ExistReq.PreferredTowerEntity == TowerEntity)
         {
-            // 直接更新数量和过期时间，不新增记录
+            // 更新数量和时间戳
             ExistReq.Quantity    = FMath::Max(1, Quantity);
-            ExistReq.RequestTime = GetWorld() ? GetWorld()->GetTimeSeconds() : ExistReq.RequestTime;
-            TowerFrag->bDirty    = true;
+            ExistReq.RequestTime = World->GetTimeSeconds();
+            // 关键：若请求已被配对从 PendingRequestIds 移除，且当前无活跃任务引用它，
+            // 才重新加回；否则无人机首次送货后再无新任务可以匹配
+            const bool bAlreadyPending = RuntimeDataRef.PendingRequestIds.Contains(ExistId);
+            if (!bAlreadyPending)
+            {
+                // 检查是否有活跃任务正在使用该请求（运输中不重新入队，避免重复派遣）
+                bool bHasActiveTask = false;
+                for (const FGuid& ActiveId : RuntimeDataRef.ActiveTaskIds)
+                {
+                    if (const FLogisticsTask* T = AllTasks.Find(ActiveId))
+                    {
+                        if (T->SupplyRequestId == ExistId || T->DemandRequestId == ExistId)
+                        {
+                            bHasActiveTask = true;
+                            break;
+                        }
+                    }
+                }
+                if (!bHasActiveTask)
+                {
+                    RuntimeDataRef.PendingRequestIds.Add(ExistId);
+                    UE_LOG(LogTemp, Verbose,
+                        TEXT("[Logistics] Re-queue request %s (prev task completed)"),
+                        *ExistId.ToString());
+                }
+            }
+            TowerFrag->bDirty = true;
             return ExistId;
         }
     }
@@ -732,6 +759,8 @@ void UMassDspLogisticsSubsystem::OnDroneTaskFailed(int32 DronePoolIndex)
 void UMassDspLogisticsSubsystem::UpdateDroneISMInstance(FDroneData& Drone) const
 {
     if (!DroneISM || Drone.ISMInstanceIndex < 0) return;
+    // ISM 实例数量越界保护
+    if (Drone.ISMInstanceIndex >= DroneISM->GetInstanceCount()) return;
 
     const float t   = (Drone.TotalFlightTime > 0.f)
         ? FMath::Clamp(Drone.ElapsedTime / Drone.TotalFlightTime, 0.f, 1.f)
@@ -745,13 +774,23 @@ void UMassDspLogisticsSubsystem::UpdateDroneISMInstance(FDroneData& Drone) const
     const FQuat   Rot = Fwd.IsNearlyZero() ? FQuat::Identity : FRotationMatrix::MakeFromX(Fwd).ToQuat();
 
     const FTransform InstanceTransform(Rot, Pos, FVector::OneVector);
-    DroneISM->UpdateInstanceTransform(Drone.ISMInstanceIndex, InstanceTransform, true, true);
+    // bMarkRenderStateDirty=true 确保每帧位置更新就刷新到 GPU
+    DroneISM->UpdateInstanceTransform(Drone.ISMInstanceIndex, InstanceTransform,
+        /*bWorldSpace=*/true, /*bMarkRenderStateDirty=*/true);
 }
 
 int32 UMassDspLogisticsSubsystem::AllocateDroneISMInstance(const FVector& InitialLocation)
 {
-    if (!DroneISM) return -1;
-    return DroneISM->AddInstance(FTransform(FQuat::Identity, InitialLocation, FVector::OneVector));
+    if (!DroneISM)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Logistics] AllocateDroneISMInstance: DroneISM is null!"));
+        return -1;
+    }
+    const int32 Idx = DroneISM->AddInstance(
+        FTransform(FQuat::Identity, InitialLocation, FVector::OneVector));
+    UE_LOG(LogTemp, Verbose, TEXT("[Logistics] ISM instance allocated: idx=%d total=%d"),
+        Idx, DroneISM->GetInstanceCount());
+    return Idx;
 }
 
 int32 UMassDspLogisticsSubsystem::AllocateVehicleISMInstance(const FVector& InitialLocation)
