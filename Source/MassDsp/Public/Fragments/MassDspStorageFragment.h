@@ -29,5 +29,11 @@ struct MASSDSP_API FMassDspStorageFragment : public FMassFragment
 
     bool TryConsumeItemFromSlot(EItemType ItemType);
 
+    /** 批量取出最多 MaxQty 个同类物品，返回实际取出数量 */
+    int32 TryProvideItems(int32 MaxQty);
+
+    /** 批量存入最多 Qty 个 ItemType，返回实际存入数量 */
+    int32 TryConsumeItems(EItemType ItemType, int32 Qty);
+
     static void TickExecute(float DeltaTime);
 };

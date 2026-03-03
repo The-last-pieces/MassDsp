@@ -290,9 +290,9 @@ void AMassDspGameMode::BeginPlay()
             FMassEntityHandle SrcDemand,
             FMassEntityHandle CoordTower)
         {
-            Sub->SubmitSupplyRequest(SrcSupply, EItemType::IronOre, 5,
+            Sub->SubmitSupplyRequest(SrcSupply, EItemType::IronOre, 10,
                                      ELogisticsRequestPriority::Normal, CoordTower);
-            Sub->SubmitDemandRequest(SrcDemand, EItemType::IronOre, 5,
+            Sub->SubmitDemandRequest(SrcDemand, EItemType::IronOre, 10,
                                      ELogisticsRequestPriority::Normal, CoordTower);
         }
     };

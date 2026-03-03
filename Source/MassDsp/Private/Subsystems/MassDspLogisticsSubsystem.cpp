@@ -673,11 +673,21 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
         if (FMassDspStorageFragment* StorageFrag =
                 EMPtr->GetFragmentDataPtr<FMassDspStorageFragment>(Drone.PickupEntity))
         {
-            const EItemType Provided = StorageFrag->TryProvideItemToSlot(0);
-            if (Provided != EItemType::None)
+            // 先记录物品类型（扣完后 StoredItemType 可能被清 None）
+            const EItemType ItemType = StorageFrag->StoredItemType;
+            if (ItemType != EItemType::None)
             {
-                Drone.CarriedItemType = Provided;
-                Drone.CarriedQuantity = 1; // TODO: 批量携带（CarryCapacity）
+                // 取货数量 = min(无人机容量, 任务请求量)
+                int32 WantQty = Drone.CarryCapacity;
+                if (const FLogisticsTask* T = AllTasks.Find(Drone.CurrentTaskId))
+                    WantQty = FMath::Min(WantQty, T->TransferQuantity);
+
+                const int32 Taken = StorageFrag->TryProvideItems(WantQty);
+                if (Taken > 0)
+                {
+                    Drone.CarriedItemType = ItemType;
+                    Drone.CarriedQuantity = Taken;
+                }
             }
         }
     }
@@ -704,7 +714,7 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
 {
     FDroneData& Drone = DronePool[DronePoolIndex];
 
-    // 将携带物品交给目标建筑
+    // 将携带物品批量交给目标建筑
     if (UWorld* World = GetWorld())
     {
         FMassEntityManager* EMPtr = GetEntityManagerSafe(World);
@@ -712,7 +722,7 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
         if (FMassDspStorageFragment* StorageFrag =
                 EMPtr->GetFragmentDataPtr<FMassDspStorageFragment>(Drone.DeliveryEntity))
         {
-            StorageFrag->TryConsumeItemFromSlot(Drone.CarriedItemType);
+            StorageFrag->TryConsumeItems(Drone.CarriedItemType, Drone.CarriedQuantity);
         }
     }
 
