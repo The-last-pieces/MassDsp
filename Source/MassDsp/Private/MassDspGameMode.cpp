@@ -1,10 +1,14 @@
 ﻿#include "MassDspGameMode.h"
 
 #include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspLogisticsSubsystem.h"
 
 #include "Actors/MassDspMiner.h"
 #include "Actors/MassDspStorage.h"
 #include "Actors/MassDspAssembler.h"
+#include "Actors/MassDspLogisticsTower.h"
+
+#include "Logistics/MassDspDroneStrategy.h"
 
 #include "Engine/LocalPlayer.h"
 
@@ -124,6 +128,118 @@ void AMassDspGameMode::BeginPlay()
     const double AvgBeltTimeMs = (TotalBelts > 0) ? (BeltLinkElapsed * 1000.0 / TotalBelts) : 0.0;
     UE_LOG(LogTemp, Log, TEXT("[Belt Profile] Total: %d belts | Total time: %.3f ms | Avg per belt: %.4f ms"),
            TotalBelts, BeltLinkElapsed * 1000.0, AvgBeltTimeMs);
+
+    // =====================================================================
+    // 物流演示场景
+    //   矿机 A  传送带  物流塔 B（供应方）
+    //   物流塔 B ↔ 无人机 ↔ 物流塔 C（需求方）
+    //   B、C 各挂匍 10 架无人机
+    // =====================================================================
+    UMassDspLogisticsSubsystem* LogisticsSub =
+        World->GetSubsystem<UMassDspLogisticsSubsystem>();
+
+    if (!LogisticsSub || !LogisticsTowerClass)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("物流演示跨过：LogisticsSubsystem 或 LogisticsTowerClass 为空"));
+        return;
+    }
+
+    // ── 布局：A  B（供应）  C（需求）──
+    // B、C 相距 1500 cm，均在 B 的默认覆盖半径（ 2000 cm）内
+    const FVector MinerAPos = FVector(-5000.f, 5000.f, 0.f);
+    const FVector TowerBPos = FVector(-3000.f, 5000.f, 0.f);
+    const FVector TowerCPos = FVector(-3000.f, 6500.f, 0.f); // 离 B 1500 cm
+
+    TArray<FBuildingSpawnData> DemoSpawnData;
+    DemoSpawnData.Add(FBuildingSpawnData(
+        MinerClass,
+        FTransform(FRotator(0.f, 90.f, 0.f), MinerAPos),
+        EBuildingType::Miner));
+    DemoSpawnData.Add(FBuildingSpawnData(
+        LogisticsTowerClass,
+        FTransform(FRotator::ZeroRotator, TowerBPos),
+        EBuildingType::LogisticsTower));
+    DemoSpawnData.Add(FBuildingSpawnData(
+        LogisticsTowerClass,
+        FTransform(FRotator::ZeroRotator, TowerCPos),
+        EBuildingType::LogisticsTower));
+
+    TArray<FMassEntityHandle> DemoEntities = DspManager->BatchSpawnBuildings(DemoSpawnData);
+    if (DemoEntities.Num() < 3 || !DemoEntities[0].IsValid() ||
+        !DemoEntities[1].IsValid() || !DemoEntities[2].IsValid())
+    {
+        UE_LOG(LogTemp, Error, TEXT("物流演示建筑创建失败"));
+        return;
+    }
+
+    const FMassEntityHandle MinerA  = DemoEntities[0];
+    const FMassEntityHandle TowerB  = DemoEntities[1];
+    const FMassEntityHandle TowerC  = DemoEntities[2];
+
+    // ── 传送带：矿机 A 输出（slot 0）→ 物流塔 B 输入（slot 0）──
+    DspManager->CreateAndLinkBeltForSlot(MinerA, 0, TowerB, 0, EBeltType::Normal);
+    DspManager->FlushBeltMesh();
+
+    // ── ISM：如果配置了 DroneMesh，在 GameMode Actor 上动态创建 ISM 组件──
+    if (DroneMesh)
+    {
+        UInstancedStaticMeshComponent* DroneISM =
+            NewObject<UInstancedStaticMeshComponent>(this, TEXT("DroneISMComponent"));
+        DroneISM->SetStaticMesh(DroneMesh);
+        DroneISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        DroneISM->SetCastShadow(false);
+        DroneISM->RegisterComponent();
+        LogisticsSub->SetupISMComponents(DroneISM, nullptr, nullptr);
+    }
+
+    // ── 注册无人机分派策略（全局注册一次）──
+    LogisticsSub->RegisterDispatchStrategy(
+        ELogisticsDeviceType::Drone,
+        MakeUnique<FDroneDispatchStrategy>(LogisticsSub));
+
+    // ── 创建无人机：B、C 各 10 架，初始位置设为堵位塔 P3──
+    constexpr int32 DronesPerTower = 10;
+
+    for (int32 i = 0; i < DronesPerTower; ++i)
+    {
+        // 加入 B 的无人机池
+        FDroneHandle HB = LogisticsSub->CreateDrone(TowerB);
+        if (HB.IsValid() && LogisticsSub->DronePool.IsValidIndex(HB.Index))
+        {
+            // 初始悉停位置 = 塔 B（第一个任务分配前 P3 就是起飞点）
+            LogisticsSub->DronePool[HB.Index].P3 = TowerBPos;
+        }
+
+        // 加入 C 的无人机池
+        FDroneHandle HC = LogisticsSub->CreateDrone(TowerC);
+        if (HC.IsValid() && LogisticsSub->DronePool.IsValidIndex(HC.Index))
+        {
+            LogisticsSub->DronePool[HC.Index].P3 = TowerCPos;
+        }
+    }
+
+    UE_LOG(LogTemp, Log,
+        TEXT("物流演示初始化完成：矿机 A [%s]  B [%s]  C [%s] | 各 %d 架无人机"),
+        *TowerBPos.ToString(), *TowerBPos.ToString(), *TowerCPos.ToString(), DronesPerTower);
+
+    // ── 预提交一对请求：展示无人机立即飞行（B → C）──
+    // 供应：塔 B 做取货源（带内有矿石后细节不为空）
+    // 需求：塔 C 做目标仓库
+    // 两个请求均指向 TowerB 作为协调塔，MatchPendingRequests 在同一塔内匹配
+    LogisticsSub->SubmitSupplyRequest(
+        TowerB,
+        EItemType::IronOre,
+        /*Quantity=*/5,
+        ELogisticsRequestPriority::Normal,
+        /*PreferredTower=*/TowerB);
+
+    LogisticsSub->SubmitDemandRequest(
+        TowerC,
+        EItemType::IronOre,
+        /*Quantity=*/5,
+        ELogisticsRequestPriority::Normal,
+        /*PreferredTower=*/TowerB);
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)

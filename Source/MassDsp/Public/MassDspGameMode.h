@@ -10,6 +10,7 @@
 class AMassDspMiner;
 class AMassDspStorage;
 class AMassDspAssembler;
+class AMassDspLogisticsTower;
 
 UCLASS()
 class MASSDSP_API AMassDspGameMode : public AGameModeBase
@@ -52,4 +53,12 @@ public:
     // 合成器类
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP|Building")
     TSubclassOf<AMassDspAssembler> AssemblerClass;
+
+    // 物流塔类
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP|Building")
+    TSubclassOf<AMassDspLogisticsTower> LogisticsTowerClass;
+
+    // 无人机 ISM 网格（用于物流演示场景）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DSP|Logistics")
+    TObjectPtr<UStaticMesh> DroneMesh;
 };

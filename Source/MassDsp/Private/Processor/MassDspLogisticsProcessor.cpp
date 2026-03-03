@@ -53,6 +53,7 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
         for (int32 i = 0; i < NumEntities; ++i)
         {
             FMassDspLogisticsTowerFragment& TowerFrag = TowerFrags[i];
+            const FMassDspStorageFragment&  SelfStorage = StorageFrags[i];
 
             //  事件推送已覆盖（bDirty）则跳过兜底扫描 
             if (TowerFrag.bDirty) continue;
@@ -63,18 +64,32 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             TowerFrag.LastScanTime = Now;
 
             const FVector TowerLocation = Transforms[i].GetTransform().GetLocation();
+            const FMassEntityHandle TowerEntity = InContext.GetEntity(i);
+
+            // ── 自身库存检查（塔本体 = 传送带汇集点，Belt → Tower Storage）──
+            if (SelfStorage.MaxInventory > 0 && SelfStorage.StoredItemType != EItemType::None)
+            {
+                const float SelfFill = static_cast<float>(SelfStorage.InventoryCount)
+                                     / static_cast<float>(SelfStorage.MaxInventory);
+                if (SelfFill >= 0.8f)
+                {
+                    Logistics->SubmitSupplyRequest(
+                        TowerEntity,
+                        SelfStorage.StoredItemType,
+                        SelfStorage.InventoryCount / 2,  // 搬走一半
+                        ELogisticsRequestPriority::Normal,
+                        TowerEntity);
+                }
+            }
 
             //  扫描覆盖范围内的建筑 
             TArray<FMassEntityHandle> NearbyEntities;
             DspMgr->FindBuildingsInRadius(TowerLocation, TowerFrag.CoverageRadius, NearbyEntities);
 
-            const FMassEntityHandle TowerEntity = InContext.GetEntity(i);
-
             for (const FMassEntityHandle& NearbyEntity : NearbyEntities)
             {
                 if (NearbyEntity == TowerEntity) continue; // 跳过自身
 
-                //  Storage：库存过满  Supply 请求 
                 if (const FMassDspStorageFragment* NearbyStorage =
                         EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(NearbyEntity))
                 {
@@ -82,14 +97,27 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
                     {
                         const float FillRatio = static_cast<float>(NearbyStorage->InventoryCount)
                                               / static_cast<float>(NearbyStorage->MaxInventory);
-                        // 默认阈值 80%（TODO: 从塔的 CDO 配置读取 SupplyTriggerRatio）
+
+                        // ── Supply：附近仓库/塔库存过满 ──
                         if (FillRatio >= 0.8f && NearbyStorage->StoredItemType != EItemType::None)
                         {
-                            // 去重：子系统内部按 SourceEntity + ItemType 检查已有 Pending 请求
                             Logistics->SubmitSupplyRequest(
                                 NearbyEntity,
                                 NearbyStorage->StoredItemType,
-                                NearbyStorage->InventoryCount / 2, // 搬走一半
+                                NearbyStorage->InventoryCount / 2,
+                                ELogisticsRequestPriority::Normal,
+                                TowerEntity);
+                        }
+
+                        // ── Demand：附近仓库/塔库存过低（已知物品类型才可发需求） ──
+                        if (FillRatio < 0.2f && NearbyStorage->StoredItemType != EItemType::None)
+                        {
+                            const int32 WantQty = FMath::Max(1,
+                                NearbyStorage->MaxInventory / 2 - NearbyStorage->InventoryCount);
+                            Logistics->SubmitDemandRequest(
+                                NearbyEntity,
+                                NearbyStorage->StoredItemType,
+                                WantQty,
                                 ELogisticsRequestPriority::Normal,
                                 TowerEntity);
                         }
@@ -101,14 +129,6 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
                         EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(NearbyEntity))
                 {
                     // TODO[ASSEMBLER]: 检查每个 InputBuffer 缺口，按配方要求提交 Demand 请求
-                    // 示例（待完整实现）：
-                    // for (int32 SlotIdx = 0; SlotIdx < NearbyAssembler->GetInputBufferCount(); ++SlotIdx)
-                    // {
-                    //     auto [ItemType, Current, Max] = NearbyAssembler->GetInputBufferInfo(SlotIdx);
-                    //     if (static_cast<float>(Current) / Max < 0.2f)
-                    //         Logistics->SubmitDemandRequest(NearbyEntity, ItemType, Max - Current,
-                    //             ELogisticsRequestPriority::Normal, TowerEntity);
-                    // }
                     (void)NearbyAssembler;
                 }
             }
