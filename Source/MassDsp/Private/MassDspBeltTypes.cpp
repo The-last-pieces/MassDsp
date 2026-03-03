@@ -5,7 +5,7 @@
 
 bool FBeltTrajectory::IsValid() const
 {
-    return SplineComponent != nullptr;
+    return !LUT.IsEmpty();
 }
 
 FVector FBeltTrajectory::GetLocationAtDistance(float Distance) const
@@ -58,7 +58,7 @@ void FBeltTrajectory::BakeLUT(float Step)
         const FVector Tangent = SplineComponent->GetTangentAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World).GetSafeNormal();
 
         LUT[i].Position = Pos;
-        LUT[i].Rotation  = FQuat(Tangent.Rotation());
+        LUT[i].Rotation = FQuat(Tangent.Rotation());
     }
 
     // 取 LUT 中点作为代表位置，并计算包围球半径（所有采样点到中点的最大距离）
@@ -76,10 +76,10 @@ void FBeltTrajectory::GetTransformAtDistance(float Distance, FTransform& OutTran
     if (!LUT.IsEmpty())
     {
         const float ClampedDist = FMath::Clamp(Distance, 0.f, TotalLength);
-        const float FloatIdx    = ClampedDist / LUTStep;
-        const int32 Idx0        = FMath::FloorToInt(FloatIdx);
-        const int32 Idx1        = FMath::Min(Idx0 + 1, LUT.Num() - 1);
-        const float Alpha       = FloatIdx - static_cast<float>(Idx0);
+        const float FloatIdx = ClampedDist / LUTStep;
+        const int32 Idx0 = FMath::FloorToInt(FloatIdx);
+        const int32 Idx1 = FMath::Min(Idx0 + 1, LUT.Num() - 1);
+        const float Alpha = FloatIdx - static_cast<float>(Idx0);
 
         const FBeltLUTSample& S0 = LUT[Idx0];
         const FBeltLUTSample& S1 = LUT[Idx1];

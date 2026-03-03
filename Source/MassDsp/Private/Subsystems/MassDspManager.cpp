@@ -132,6 +132,9 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const TFunction<void(USplineCompo
         GenerateConveyorMesh(MeshData, NewSpline, C_Width, C_BeltThickness, C_UVScale, 5.0f);
     }
 
+    NewSpline->DestroyComponent();
+    BeltTrajectories[Index].SplineComponent = nullptr;
+
     return NewHandle;
 }
 
