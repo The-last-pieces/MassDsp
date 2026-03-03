@@ -463,6 +463,11 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
             DubinsMinTurningRadius);
         DP.StartZ = B.Z;
         DP.EndZ = C.Z;
+        // 起点/终点延伸直线段（与 Hermite 样条的 A→B 和 C→D 段对应）
+        DP.bHasStartExtend = true;
+        DP.StartExtendPos = A;
+        DP.bHasEndExtend = true;
+        DP.EndExtendPos = D;
         if (DP.IsValid())
         {
             BeltHandle = CreateRuntimeBelt([DP](USplineComponent* NewSpline)
@@ -1218,7 +1223,20 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
         float H;
     };
     TArray<FSample> Samples;
-    Samples.Reserve(FMath::CeilToInt(TotalLen / SampleStep) + 4);
+    Samples.Reserve(FMath::CeilToInt(TotalLen / SampleStep) + 6);
+
+    // 如果有起点延伸，先添加 A 点（SlotExtend 直线段起点）
+    const bool bHasStart = Path.bHasStartExtend;
+    const bool bHasEnd = Path.bHasEndExtend;
+    if (bHasStart)
+    {
+        FVector APos = Path.StartExtendPos;
+        APos.Z += ZLift;
+        // A 点的朝向 = A→B（即 Dubins 起点）方向
+        const FVector BPos3D(Path.StartPos.X, Path.StartPos.Y, Path.StartZ + ZLift);
+        const FVector AB = (BPos3D - APos).GetSafeNormal();
+        Samples.Add({APos, static_cast<float>(FMath::Atan2(AB.Y, AB.X))});
+    }
 
     FVector2D Pos2D = Path.StartPos;
     float H = Path.StartHeading;
@@ -1230,7 +1248,7 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
         Samples.Add({FVector(Pos2D.X, Pos2D.Y, z), H});
     };
 
-    AddSample(); // 起点
+    AddSample(); // B 点（Dubins 起点）
 
     const float r = Path.TurningRadius;
     for (int32 Seg = 0; Seg < 3; ++Seg)
@@ -1253,7 +1271,18 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
     Pos2D = Path.EndPos;
     H = Path.EndHeading;
     Dist = TotalLen;
-    AddSample();
+    AddSample(); // C 点（Dubins 终点）
+
+    // 如果有终点延伸，追加 D 点（SlotExtend 直线段终点）
+    if (bHasEnd)
+    {
+        FVector DPos = Path.EndExtendPos;
+        DPos.Z += ZLift;
+        // D 点的朝向 = C→D 方向
+        const FVector CPos3D(Path.EndPos.X, Path.EndPos.Y, Path.EndZ + ZLift);
+        const FVector CD = (DPos - CPos3D).GetSafeNormal();
+        Samples.Add({DPos, static_cast<float>(FMath::Atan2(CD.Y, CD.X))});
+    }
 
     // ── 第二步：去除过近重复点（防止退化段）─────────────────────────────────
     constexpr float MinSepSq = (SampleStep * 0.5f) * (SampleStep * 0.5f);
@@ -1272,28 +1301,65 @@ void UMassDspManager::BuildBeltSplineFromDubins(USplineComponent* Spline, const 
     if (Samples.Num() < 2) return;
 
     // ── 第三步：写入样条 ───────────────────────────────────────────────────
-    // 策略：
-    //   首尾点 → CurveCustomTangent，强制精确进入/离开方向
-    //   中间点 → Curve（Catmull-Rom 自动切线），完全由位置决定，不会因模长失配扭曲
+    // 对应关系（有完整延伸时）：
+    //   index 0          = A（Linear，A→B 段为直线）
+    //   index 1          = B（CurveCustomTangent，in: A→B，out: Dubins 起始朝向）
+    //   index 1..N-2     = Dubins 中间曲线（Catmull-Rom 自动切线）
+    //   index N-2        = C（CurveCustomTangent，in: Dubins 终点朝向，out: C→D）
+    //   index N-1        = D（Linear，C→D 段为直线）
+    // 无延伸时回退到原逻辑（首尾 CurveCustomTangent）
     Spline->ClearSplinePoints(false);
+
+    const int32 N = Samples.Num();
+    const int32 StartExtIdx = bHasStart ? 0 : -1; // A
+    const int32 DubStartIdx = bHasStart ? 1 : 0; // B
+    const int32 DubEndIdx = bHasEnd ? N - 2 : N - 1; // C
+    const int32 EndExtIdx = bHasEnd ? N - 1 : -1; // D
 
     const float TM = SampleStep * 3.f; // 首尾切线模长
 
-    for (int32 i = 0; i < Samples.Num(); ++i)
+    for (int32 i = 0; i < N; ++i)
     {
         const FSample& S = Samples[i];
         Spline->AddSplinePoint(S.Pos, ESplineCoordinateSpace::World, false);
 
-        const bool bEndpoint = (i == 0 || i == Samples.Num() - 1);
-        if (bEndpoint)
+        if (bHasStart && i == StartExtIdx)
         {
+            // A 点：Linear → A→B 段自动成直线
+            Spline->SetSplinePointType(i, ESplinePointType::Linear, false);
+        }
+        else if (i == DubStartIdx)
+        {
+            // B 点：CurveCustomTangent
+            //   in-tangent: 若有 A 则对齐 A→B（保证直线段衔接）；否则沿 Dubins 起始方向
+            //   out-tangent: Dubins 起始朝向
             Spline->SetSplinePointType(i, ESplinePointType::CurveCustomTangent, false);
-            const FVector T(FMath::Cos(S.H) * TM, FMath::Sin(S.H) * TM, dZdCm * TM);
-            Spline->SetTangentsAtSplinePoint(i, T, T, ESplineCoordinateSpace::World, false);
+            const FVector OutT(FMath::Cos(S.H) * TM, FMath::Sin(S.H) * TM, dZdCm * TM);
+            const FVector InT = bHasStart
+                                    ? (S.Pos - Samples[i - 1].Pos).GetSafeNormal() * TM
+                                    : OutT;
+            Spline->SetTangentsAtSplinePoint(i, InT, OutT, ESplineCoordinateSpace::World, false);
+        }
+        else if (i == DubEndIdx)
+        {
+            // C 点：CurveCustomTangent
+            //   in-tangent: Dubins 终点朝向
+            //   out-tangent: 若有 D 则对齐 C→D；否则沿 Dubins 终点朝向
+            Spline->SetSplinePointType(i, ESplinePointType::CurveCustomTangent, false);
+            const FVector InT(FMath::Cos(S.H) * TM, FMath::Sin(S.H) * TM, dZdCm * TM);
+            const FVector OutT = bHasEnd
+                                     ? (Samples[i + 1].Pos - S.Pos).GetSafeNormal() * TM
+                                     : InT;
+            Spline->SetTangentsAtSplinePoint(i, InT, OutT, ESplineCoordinateSpace::World, false);
+        }
+        else if (bHasEnd && i == EndExtIdx)
+        {
+            // D 点：Linear → C→D 段自动成直线
+            Spline->SetSplinePointType(i, ESplinePointType::Linear, false);
         }
         else
         {
-            // 中间点全部使用自动 Catmull-Rom 切线，绝对不会发生扭曲
+            // 中间 Dubins 曲线点：Catmull-Rom 自动切线，完全由位置决定
             Spline->SetSplinePointType(i, ESplinePointType::Curve, false);
         }
     }
@@ -1746,6 +1812,15 @@ void UMassDspManager::RebuildPreviewBeltMesh(const FVector& EndWorldPos, const F
             DubinsMinTurningRadius);
         DP.StartZ = BeltStartSlotLocation.Z;
         DP.EndZ = EndWorldPos.Z;
+        // 起点延伸（始终存在）
+        DP.bHasStartExtend = true;
+        DP.StartExtendPos = A;
+        // 终点延伸（仅在已吸附到终点槽口时存在）
+        if (EndSlotExtend > 0.f)
+        {
+            DP.bHasEndExtend = true;
+            DP.EndExtendPos = D;
+        }
         if (DP.IsValid())
         {
             BuildBeltSplineFromDubins(PreviewSpline, DP);

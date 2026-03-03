@@ -66,7 +66,7 @@ protected:
 
     /** 刷新频率（秒），默认 0.1 = 10Hz */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|UI", meta = (ClampMin = "0.016"))
-    float RefreshInterval = 0.1f;
+    float RefreshInterval = 1 / 60.0f;
 
     //  公共 BindWidget（可选，蓝图中可不放） 
 

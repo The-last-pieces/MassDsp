@@ -54,8 +54,8 @@ struct MASSDSP_API FBeltHandle
 // 预烘焙的 Spline 采样点，用于 O(1) 查表插值（取代每帧调用 USplineComponent）
 struct MASSDSP_API FBeltLUTSample
 {
-    FVector Position  = FVector::ZeroVector;
-    FQuat   Rotation  = FQuat::Identity;
+    FVector Position = FVector::ZeroVector;
+    FQuat Rotation = FQuat::Identity;
 };
 
 // 传送带轨迹数据封装
@@ -109,10 +109,10 @@ UENUM(BlueprintType)
 enum class EBeltSplineType : uint8
 {
     /** Hermite 4点样条（默认）*/
-    Spline     = 0 UMETA(DisplayName = "Hermite样条"),
+    Spline = 0 UMETA(DisplayName = "Hermite样条"),
     /** Dubins 最短路径 + Z 轴线性插值 */
     DubinsPath = 1 UMETA(DisplayName = "Dubins最短路径"),
-    
+
     Default = DubinsPath UMETA(Hidden)
 };
 
@@ -128,9 +128,9 @@ enum class EDubinsWordType : uint8
 /** Dubins 段类型 */
 enum class EDubinsSegType : uint8
 {
-    Left,      ///< CCW 圆弧
-    Straight,  ///< 直线
-    Right,     ///< CW  圆弧
+    Left, ///< CCW 圆弧
+    Straight, ///< 直线
+    Right, ///< CW  圆弧
 };
 
 /**
@@ -143,7 +143,7 @@ struct MASSDSP_API FDubinsPathData
     EDubinsWordType WordType = EDubinsWordType::Invalid;
 
     /** 三段实际长度（cm）：圆弧段 = 弧长，直线段 = 直线长 */
-    float SegLen[3] = { 0.f, 0.f, 0.f };
+    float SegLen[3] = {0.f, 0.f, 0.f};
 
     /** 路径总长度（cm）*/
     float TotalLength = 0.f;
@@ -165,6 +165,20 @@ struct MASSDSP_API FDubinsPathData
     float StartZ = 0.f;
     /** 3D 终点 Z 坐标 */
     float EndZ = 0.f;
+
+    /**
+     * 起点槽口延伸（SlotExtend）3D 位置（即 A 点 = B - SlotExtend * forward）。
+     * 若有效，BuildBeltSplineFromDubins 会在 Dubins 曲线前插入 A→B 直线段。
+     */
+    bool bHasStartExtend = false;
+    FVector StartExtendPos = FVector::ZeroVector;
+
+    /**
+     * 终点槽口延伸（SlotExtend）3D 位置（即 D 点 = C - SlotExtend * forward）。
+     * 若有效，BuildBeltSplineFromDubins 会在 Dubins 曲线后追加 C→D 直线段。
+     */
+    bool bHasEndExtend = false;
+    FVector EndExtendPos = FVector::ZeroVector;
 
     bool IsValid() const { return WordType != EDubinsWordType::Invalid && TotalLength > 0.f; }
 };
