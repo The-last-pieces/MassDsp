@@ -13,18 +13,68 @@ struct FTransformFragment;
 // 传送带物品的逻辑数据，连续内存存储，不依赖 Mass Entity
 struct MASSDSP_API FBeltItemCache
 {
-    float DistanceAlongBelt = 0.0f;
-    bool bIsBlocked = false;
+    // 自由物品的位置修正量（插入时记录，仅自由物品有效）：
+    //   有效位置 = Offset + BeltData.TotalMove
+    //   插入时令 Offset = HalfLength - TotalMove，使初始有效位置 = HalfLength
+    // 阻塞组物品（idx < BlockedCount）不使用此字段。
+    float Offset = 0.0f;
     EItemType ItemType = EItemType::None;
 };
 
 // 传送带逻辑数据（替代 FBeltEntityArray）
 struct MASSDSP_API FBeltData
 {
-    // 按传送带顺序排列的物品缓存，连续内存，Cache 友好
+    // 物品缓存：[0] = 出口端(Tail)，[Last] = 入口端(Front)
     TDeque<FBeltItemCache> ItemCache;
     float BeltLength = 0.0f;
-    float BeltSpeed = 0.0f;
+    float BeltSpeed  = 0.0f;
+
+    // 全局累积偏移，每帧无条件 += BeltSpeed * DeltaTime
+    float TotalMove = 0.f;
+
+    // ── 刚体阻塞组（出口侧） ────────────────────────────────────────────────
+    // ItemCache[0..BlockedCount-1] 属于阻塞组，作为刚体整体运动。
+    //
+    // 组头有效位置（随 TotalMove 前进，最大到出口）：
+    //   GroupFront = min(GroupFrontOffset + TotalMove, BeltLen - HalfLen)
+    //
+    // 组内 index i 的有效位置：
+    //   GroupFront - i * ItemSpace
+    //
+    // ConsumeFromTail（O(1)）：
+    //   PopFirst，BlockedCount--，GroupFrontOffset 后退一格。
+    //   GroupFront 从新起点（原组头 - ItemSpace）随 TotalMove 重新前进，
+    //     整组所有物品同步前进，无需遍历。
+    //
+    // Tick（O(1) 摊还）：
+    //   检查前沿自由物品（index = BlockedCount）是否追上组尾，追上则合并。
+    int32 BlockedCount    = 0;
+    float GroupFrontOffset = 0.f; // GroupFront = min(GroupFrontOffset + TotalMove, BeltLen-HalfLen)
+
+    /** 组头当前位置（cm）。BlockedCount==0 时返回值无意义。 */
+    FORCEINLINE float GetGroupFront() const
+    {
+        return FMath::Min(GroupFrontOffset + TotalMove,
+                          BeltLength - FGameConst::HalfLength);
+    }
+
+    /**
+     * 严格 O(1) 获取指定物品的有效传送带位置（cm）。
+     *
+     * 双区模型：
+     *   阻塞组（idx < BlockedCount）→ GroupFront - idx * ItemSpace
+     *     整组共享 GroupFrontOffset，随 TotalMove 作为刚体整体流动。
+     *   自由区（idx >= BlockedCount） → Offset + TotalMove
+     *     各物品独立，共享 TotalMove，相对距离恒定（刚体）。
+     *
+     * @param ItemIdx  物品在 ItemCache 中的索引（0 = Tail/出口端）
+     */
+    FORCEINLINE float GetEffectivePosition(int32 ItemIdx) const
+    {
+        if (ItemIdx < BlockedCount)
+            return GetGroupFront() - static_cast<float>(ItemIdx) * FGameConst::ItemSpace;
+        return ItemCache[ItemIdx].Offset + TotalMove;
+    }
 };
 
 USTRUCT()

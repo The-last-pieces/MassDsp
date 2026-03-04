@@ -498,12 +498,14 @@ bool UMassDspManager::ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<
 {
     if (!BeltHandle.IsValid()) return false;
 
-    // 检查入口是否有空间（最新的物品是数组末尾）
+    // 检查入口是否有空间：最靠近 Front（入口端）的物品需已离开 HalfLength + ItemSpace 区域
     if (const FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle))
     {
         if (!BeltData->ItemCache.IsEmpty())
         {
-            if (BeltData->ItemCache.Last().DistanceAlongBelt <= FGameConst::HalfLength * 3 + FGameConst::MinSpacing)
+            // GetEffectivePosition(Last) 兼容自由物品与阻塞物品，与旧 DistanceAlongBelt 语义等价
+            if (BeltData->GetEffectivePosition(BeltData->ItemCache.Num() - 1)
+                <= FGameConst::HalfLength * 3 + FGameConst::MinSpacing)
                 return false;
         }
     }
@@ -522,10 +524,10 @@ bool UMassDspManager::ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<
     }
 
     FBeltItemCache NewItem;
-    NewItem.DistanceAlongBelt = FGameConst::HalfLength;
+    // Offset 使物品有效位置 = HalfLength（入口处），即 Offset + TotalMove = HalfLength
+    NewItem.Offset = FGameConst::HalfLength - BeltData.TotalMove;
     NewItem.ItemType = ItemType;
-    NewItem.bIsBlocked = false;
-    BeltData.ItemCache.PushLast(NewItem);
+    BeltData.ItemCache.PushLast(NewItem); // PushLast = Front（入口端）
 
     return true;
 }
@@ -535,12 +537,28 @@ EItemType UMassDspManager::ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFu
     FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle);
     if (!BeltData || BeltData->ItemCache.IsEmpty()) return EItemType::None;
 
-    // 第一个物品是最老的（最靠近末端）
-    FBeltItemCache& FirstItem = BeltData->ItemCache[0];
-    if (FirstItem.bIsBlocked && ValidateItemFunc(FirstItem.ItemType))
+    // 只有阻塞组有物品（已到达出口）才允许消耗
+    if (BeltData->BlockedCount <= 0) return EItemType::None;
+
+    if (ValidateItemFunc(BeltData->ItemCache[0].ItemType))
     {
-        const EItemType ConsumedType = FirstItem.ItemType;
+        const EItemType ConsumedType = BeltData->ItemCache[0].ItemType;
         BeltData->ItemCache.PopFirst();
+        --BeltData->BlockedCount;
+
+        // ── 严格 O(1)：整组同步前进一格 ────────────────────────────────────
+        // 旧组头在出口（BeltLen - HalfLen），被消耗后组头应从
+        //   (BeltLen - HalfLen - ItemSpace) 重新出发，随 TotalMove 前进直到再次到达出口。
+        // 只修改 GroupFrontOffset 一个 float，整组（无论多少物品）立即同步获得新起点，
+        // 无任何遍历——这正是刚体阻塞组的优势。
+        if (BeltData->BlockedCount > 0)
+        {
+            BeltData->GroupFrontOffset =
+                (BeltData->BeltLength - FGameConst::HalfLength - FGameConst::ItemSpace)
+                - BeltData->TotalMove;
+        }
+        // BlockedCount == 0：组解散，GroupFrontOffset 留待下次由 Tick 重新初始化
+
         return ConsumedType;
     }
 
@@ -658,12 +676,18 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
         if (!Trajectory.IsValid()) return;
 
         int32 WriteIdx = BeltItemOffsets[BeltIdx];
-        for (const FBeltItemCache& Cache : BeltData->ItemCache)
+        const int32 ItemCount = BeltData->ItemCache.Num();
+        for (int32 ItemIdx = 0; ItemIdx < ItemCount; ++ItemIdx)
         {
+            const FBeltItemCache& Cache = BeltData->ItemCache[ItemIdx];
             FItemEntry& Entry = FlatEntries[WriteIdx++];
             Entry.Type = Cache.ItemType;
             if (Cache.ItemType != EItemType::None)
-                Trajectory.GetTransformAtDistance(Cache.DistanceAlongBelt, Entry.T);
+            {
+                // Lazy 求值：仅在渲染路径计算真实坐标，Tick 不再遍历物品
+                const float EffectiveDist = BeltData->GetEffectivePosition(ItemIdx);
+                Trajectory.GetTransformAtDistance(EffectiveDist, Entry.T);
+            }
         }
     });
 

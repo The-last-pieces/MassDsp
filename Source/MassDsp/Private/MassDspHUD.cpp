@@ -177,7 +177,7 @@ void AMassDspHUD::OnKey3Pressed()
     UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
     if (!Manager) return;
     GetMouseWorldHitLocation(CachedHitLocation);
-    Manager->BeginPreviewBuilding(EBuildingType::LogisticsTower, FTransform(CurrentBuildingRotation, CachedHitLocation));
+    Manager->BeginPreviewBuilding(EBuildingType::Storage, FTransform(CurrentBuildingRotation, CachedHitLocation));
 }
 
 void AMassDspHUD::OnKey4Pressed()

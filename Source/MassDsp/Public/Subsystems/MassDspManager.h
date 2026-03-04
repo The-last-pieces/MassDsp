@@ -150,8 +150,12 @@ public:
 
     void FlushBeltMesh();
 
+    /** 上游建筑将物品放入传送带入口端（Front，distance ≈ 0）。
+     *  若入口无空间返回 false，不消耗 GetItemFunc。*/
     bool ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
 
+    /** 下游建筑从传送带出口端（Tail，distance ≈ BeltLength）取走物品。
+     *  物品尚未到达出口或 ValidateItemFunc 拒绝时返回 EItemType::None。*/
     EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
 
     // ISM 渲染：只把位于视锥体内且距离小于 MaxRenderDistance 的传送带物品放入 ISM
