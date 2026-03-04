@@ -68,4 +68,13 @@ struct MASSDSP_API FMassDspLogisticsTowerFragment : public FMassFragment
     /** Demand 触发阈值：自身库存 < 此比例时提交 Demand（仅当 DesiredItemType != None）。 */
     UPROPERTY()
     float DemandTriggerRatio = 0.8f;
+
+    /**
+     * 需求方塔显式指定的协调塔（供应侧的物流塔）。
+     * 有效时，本塔发出的所有 Demand 请求会路由到该塔的队列，
+     * 与该塔发出的 Supply 在同一队列内匹配并调度无人机。
+     * 无效（默认）时需求提交到自身队列（纯自管理模式）。
+     */
+    UPROPERTY()
+    FMassEntityHandle CoordinatorTowerEntity;
 };

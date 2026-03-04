@@ -481,48 +481,77 @@ void UMassDspLogisticsSubsystem::TryMatchAndDispatchForTower(
         TArray<FGuid>* DemandIds = DemandByType.Find(ItemType);
         if (!DemandIds || DemandIds->IsEmpty()) continue;
 
-        // 逐个配对
+        // 逐个配对，且对同一对 Supply/Demand 尽量批量派遣多架无人机
         while (!SupplyIds.IsEmpty() && !DemandIds->IsEmpty())
         {
             const FGuid SupplyId = SupplyIds[0];
             const FGuid DemandId = (*DemandIds)[0];
 
-            const FLogisticsRequest* Supply = AllRequests.Find(SupplyId);
-            const FLogisticsRequest* Demand = AllRequests.Find(DemandId);
+            FLogisticsRequest* Supply = AllRequests.Find(SupplyId);
+            FLogisticsRequest* Demand = AllRequests.Find(DemandId);
             if (!Supply || !Demand) { SupplyIds.RemoveAt(0); DemandIds->RemoveAt(0); continue; }
 
-            const int32 TransferQty = FMath::Min(Supply->Quantity, Demand->Quantity);
-
-            // 构造任务
-            FLogisticsTask Task;
-            Task.TaskId             = FGuid::NewGuid();
-            Task.SupplyRequestId    = SupplyId;
-            Task.DemandRequestId    = DemandId;
-            Task.State              = ELogisticsTaskState::Pending;
-            Task.PickupEntity       = Supply->SourceEntity;
-            Task.DeliveryEntity     = Demand->SourceEntity;
-            Task.TransferQuantity   = TransferQty;
-            Task.DeviceType         = ELogisticsDeviceType::Drone; // 默认无人机，策略可覆盖
-
-            // 获取取货/送货世界位置
+            // 获取取货/送货世界位置（只查询一次，复用到所有批次任务）
+            FVector PickupLoc  = FVector::ZeroVector;
+            FVector DeliveryLoc= FVector::ZeroVector;
             if (UWorld* W = GetWorld())
             {
                 FMassEntityManager* EMPtr = GetEntityManagerSafe(W);
                 if (EMPtr)
                 {
-                    if (const FTransformFragment* PTF = EMPtr->GetFragmentDataPtr<FTransformFragment>(Task.PickupEntity))
-                        Task.PickupLocation = PTF->GetTransform().GetLocation();
-                    if (const FTransformFragment* DTF = EMPtr->GetFragmentDataPtr<FTransformFragment>(Task.DeliveryEntity))
-                        Task.DeliveryLocation = DTF->GetTransform().GetLocation();
+                    if (const FTransformFragment* PTF = EMPtr->GetFragmentDataPtr<FTransformFragment>(Supply->SourceEntity))
+                        PickupLoc = PTF->GetTransform().GetLocation();
+                    if (const FTransformFragment* DTF = EMPtr->GetFragmentDataPtr<FTransformFragment>(Demand->SourceEntity))
+                        DeliveryLoc = DTF->GetTransform().GetLocation();
                 }
             }
 
-            if (TryDispatchTask(Task))
+            // 批量派遣：一对 Supply/Demand 允许同时派出多架无人机
+            // 每批次运量 = min(CarryCapacity, Supply剩余, Demand剩余)
+            int32 SupplyRemaining = Supply->Quantity;
+            int32 DemandRemaining = Demand->Quantity;
+            bool  bAnyDispatched  = false;
+            int32 StaggerIndex    = 0; // 第 N 架无人机延迟 N*Stagger 秒起飞
+
+            while (SupplyRemaining > 0 && DemandRemaining > 0 && !IdleDroneIndices.IsEmpty())
             {
+                const int32 BatchQty = FMath::Min3(SupplyRemaining, DemandRemaining,
+                                                   FGameConst::DroneCarryCapacity);
+
+                FLogisticsTask Task;
+                Task.TaskId           = FGuid::NewGuid();
+                Task.SupplyRequestId  = SupplyId;
+                Task.DemandRequestId  = DemandId;
+                Task.State            = ELogisticsTaskState::Pending;
+                Task.PickupEntity     = Supply->SourceEntity;
+                Task.DeliveryEntity   = Demand->SourceEntity;
+                Task.PickupLocation   = PickupLoc;
+                Task.DeliveryLocation = DeliveryLoc;
+                Task.TransferQuantity = BatchQty;
+                Task.DeviceType       = ELogisticsDeviceType::Drone;
+
+                if (!TryDispatchTask(Task)) break; // 无更多空闲无人机
+
+                // 错峰起飞：第 0 架立即起飞，第 N 架延迟 N*Stagger 秒
+                if (StaggerIndex > 0)
+                {
+                    FDroneData& DispatchedDrone = DronePool[Task.DevicePoolIndex];
+                    DispatchedDrone.ElapsedTime =
+                        -(StaggerIndex * FGameConst::DroneDispatchStaggerInterval);
+                }
+
                 AllTasks.Add(Task.TaskId, Task);
                 RuntimeData.ActiveTaskIds.Add(Task.TaskId);
 
-                // 从 PendingRequestIds 中移除已配对请求
+                SupplyRemaining -= BatchQty;
+                DemandRemaining -= BatchQty;
+                bAnyDispatched   = true;
+                ++StaggerIndex;
+            }
+
+            // 无论派出多少架，本轮请求对均视为已处理（从待匹配队列摘出）
+            if (bAnyDispatched)
+            {
                 RuntimeData.PendingRequestIds.Remove(SupplyId);
                 RuntimeData.PendingRequestIds.Remove(DemandId);
             }
@@ -705,10 +734,11 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
     const float   Lane = FGameConst::DroneFlightLaneOffset;
 
     const FVector Dir2D   = (P3 - P0).GetSafeNormal2D();
-    // Cross(Up, Dir2D) 结果 Z=0、长度=|Dir2D|=1，直接用作单位右向量
+    // 对 Dir2D 做 90° 顺时针旋转（俯视）得到右方向：(dx,dy) → (dy,-dx)
+    // 保证去程/回程都偏向各自行进方向的右侧，两条航道在世界空间中分离
     const FVector RightXY = Dir2D.IsNearlyZero()
         ? FVector::RightVector
-        : FVector::CrossProduct(FVector::UpVector, Dir2D);
+        : FVector(Dir2D.Y, -Dir2D.X, 0.f);
 
     Drone.P0 = P0;
     Drone.P1 = P0 + FVector(0.f, 0.f, Arc) + RightXY * Lane;

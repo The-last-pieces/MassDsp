@@ -83,6 +83,7 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             }
 
             // ── 二、如果塔配置了 DesiredItemType → 持续提交 Demand ──
+            // 使用 CoordinatorTowerEntity（供应塔）作为协调节点，让 Demand 与 Supply 落入同一队列匹配
             if (TowerFrag.DesiredItemType != EItemType::None)
             {
                 const int32 MaxInv    = FMath::Max(1, SelfStorage.MaxInventory);
@@ -91,12 +92,16 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
                 if (FillRatio < TowerFrag.DemandTriggerRatio)
                 {
                     const int32 WantQty = FMath::Max(1, MaxInv - SelfStorage.InventoryCount);
+                    // 有协调塔则路由过去，否则用自身（独立塔模式）
+                    const FMassEntityHandle Coordinator = TowerFrag.CoordinatorTowerEntity.IsValid()
+                        ? TowerFrag.CoordinatorTowerEntity
+                        : TowerEntity;
                     Logistics->SubmitDemandRequest(
                         TowerEntity,
                         TowerFrag.DesiredItemType,
                         WantQty,
                         ELogisticsRequestPriority::Normal,
-                        TowerEntity);
+                        Coordinator);
                 }
             }
 
