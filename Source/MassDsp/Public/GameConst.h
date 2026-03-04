@@ -24,7 +24,7 @@ struct FGameConst
     /** 物流塔默认覆盖半径（cm，2000 = 20m） */
     static constexpr float DefaultLogisticsCoverageRadius = 2000.f;
     /** 物流塔兜底扫描间隔（秒） */
-    static constexpr float DefaultLogisticsScanInterval = 3.f;
+    static constexpr float DefaultLogisticsScanInterval = 2.f;
     /** 无人机默认飞行速度（cm/s） */
     static constexpr float DefaultDroneFlightSpeed = 1500.f;
     /** 无人机空间哈希格子尺寸（cm） */
@@ -35,7 +35,7 @@ struct FGameConst
      *  去程/回程方向相反，世界空间中自然分离到路线两侧，避免重叠 */
     static constexpr float DroneFlightLaneOffset = 200.f;    
     /** 无人机单次最大携带物品数量（与 FDroneData::CarryCapacity 默认值保持一致） */
-    static constexpr int32 DroneCarryCapacity = 1;
+    static constexpr int32 DroneCarryCapacity = 5;
     /**
      * 批量派遣时逢相邻无人机的起飞时间间隔（秒）。
      * 第 N 架无人机的 ElapsedTime 初始化为 -(N * stagger)，

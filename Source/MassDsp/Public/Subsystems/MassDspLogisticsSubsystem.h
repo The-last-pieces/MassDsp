@@ -184,12 +184,14 @@ public:
      * 创建并注册一架无人机。
      *
      * @param AffiliatedTowerEntity  归属物流塔 Entity；Invalid = 全局无归属设备
+     * @param InitialLocation        初始悬停世界坐标（同步设置 P0~P3 与 ISM 实例位置，避免首次起飞跳变）
      * @param FlightSpeed            飞行速度 cm/s
      * @param CarryCapacity          最大载重数量
      * @return                       无人机句柄
      */
     FDroneHandle CreateDrone(
         FMassEntityHandle AffiliatedTowerEntity = FMassEntityHandle(),
+        const FVector& InitialLocation = FVector::ZeroVector,
         float FlightSpeed = FGameConst::DefaultDroneFlightSpeed,
         int32 CarryCapacity = 20);
 

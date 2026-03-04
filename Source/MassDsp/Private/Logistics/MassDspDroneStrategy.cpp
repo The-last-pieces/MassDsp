@@ -52,8 +52,12 @@ void FDroneDispatchStrategy::InitDeviceForTask(
     const float   Arc  = FGameConst::DroneFlightArcHeight;
     const float   Lane = FGameConst::DroneFlightLaneOffset;
 
-    // 水平飞行方向的右向量（XY 平面内，始终右偏形成单向航道）
-    // 去程（取货）与回程（送货）方向相反，右侧天然在世界空间的两侧，避免航道重叠
+    // 弦长自适应：初始停靠圆→塔只有 ~200cm，固定 Arc/Lane 会远超弦长造成环形扭曲
+    // 长程（如 4000cm）比例充裕，EffArc/EffLane 退化为原始值
+    const float Dist    = FVector::Dist(P0, P3);
+    const float EffArc  = FMath::Min(Arc,  Dist * 0.4f);
+    const float EffLane = FMath::Min(Lane, Dist * 0.3f);
+
     const FVector Dir2D   = (P3 - P0).GetSafeNormal2D();
     // 对 Dir2D 做 90° 顺时针旋转（俯视）得到右方向：(dx,dy) → (dy,-dx)
     // 保证去程/回程都偏向各自行进方向的右侧，两条航道在世界空间中分离
@@ -62,11 +66,10 @@ void FDroneDispatchStrategy::InitDeviceForTask(
         : FVector(Dir2D.Y, -Dir2D.X, 0.f);
 
     Drone->P0 = P0;
-    Drone->P1 = P0 + FVector(0.f, 0.f, Arc) + RightXY * Lane;
-    Drone->P2 = P3 + FVector(0.f, 0.f, Arc) + RightXY * Lane;
+    Drone->P1 = P0 + FVector(0.f, 0.f, EffArc) + RightXY * EffLane;
+    Drone->P2 = P3 + FVector(0.f, 0.f, EffArc) + RightXY * EffLane;
     Drone->P3 = P3;
 
-    const float Dist        = FVector::Dist(P0, P3);
     Drone->TotalFlightTime  = Dist / FMath::Max(1.f, Drone->FlightSpeed);
     Drone->ElapsedTime      = 0.f;
 

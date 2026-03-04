@@ -271,16 +271,13 @@ void AMassDspGameMode::BeginPlay()
     for (int32 i = 0; i < TotalDrones; ++i)
     {
         // 在 TowerB 周围半径 200 cm 内环形分布初始悬停点
-        const float Angle = (static_cast<float>(i) / TotalDrones) * 2.f * PI;
-        const float Spread = 200.f;
+        const float Angle    = (static_cast<float>(i) / TotalDrones) * 2.f * PI;
+        const float Spread   = 200.f;
         const FVector InitPos = TowerBPos + FVector(FMath::Cos(Angle) * Spread,
-                                                    FMath::Sin(Angle) * Spread,
-                                                    100.f + i * 5.f); // 略错高度防 Z-fight
-        FDroneHandle H = LogisticsSub->CreateDrone(TowerB);
-        if (H.IsValid() && LogisticsSub->DronePool.IsValidIndex(H.Index))
-        {
-            LogisticsSub->DronePool[H.Index].P3 = InitPos;
-        }
+                                                     FMath::Sin(Angle) * Spread,
+                                                     100.f + i * 5.f);
+        // 直接将 InitPos 传入 CreateDrone，P0~P3 与 ISM 一步到位，避免首次起飞位置跳变
+        LogisticsSub->CreateDrone(TowerB, InitPos);
     }
 
     UE_LOG(LogTemp, Log,

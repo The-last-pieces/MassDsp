@@ -34,7 +34,7 @@ struct MASSDSP_API FDroneData
 
     //  配置 
     float FlightSpeed       = FGameConst::DefaultDroneFlightSpeed; ///< cm/s
-    float CooldownDuration  = 1.f;  ///< 任务完成后冷却时间（秒）
+    float CooldownDuration  = 0.2f;  ///< 任务完成后冷却时间（秒）
     float CooldownRemaining = 0.f;
 
     //  任务关联 
