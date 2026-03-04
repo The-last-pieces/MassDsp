@@ -497,9 +497,12 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 void UMassDspManager::RebuildBeltSoA()
 {
     const int32 N = BeltEntityRegistry.Num();
-    Belt_TotalMove.SetNumUninitialized(N);
-    Belt_Speed    .SetNumUninitialized(N);
-    Belt_Ptrs     .SetNumUninitialized(N);
+    Belt_TotalMove  .SetNumUninitialized(N);
+    Belt_Speed      .SetNumUninitialized(N);
+    Belt_Ptrs       .SetNumUninitialized(N);
+    Belt_RepPos     .SetNumUninitialized(N);
+    Belt_BoundRadius.SetNumUninitialized(N);
+    Belt_TrajIndex  .SetNumUninitialized(N);
 
     int32 i = 0;
     for (auto& [Handle, BeltData] : BeltEntityRegistry)
@@ -508,8 +511,34 @@ void UMassDspManager::RebuildBeltSoA()
         Belt_TotalMove[i] = BeltData.TotalMove;
         Belt_Speed    [i] = BeltData.BeltSpeed;
         Belt_Ptrs     [i] = &BeltData;
+        Belt_TrajIndex[i] = Handle.Index;
+
+        if (BeltTrajectories.IsValidIndex(Handle.Index))
+        {
+            const FBeltTrajectory& Traj = BeltTrajectories[Handle.Index];
+            Belt_RepPos     [i] = Traj.RepresentativePosition;
+            Belt_BoundRadius[i] = Traj.BoundRadius;
+        }
+        else
+        {
+            Belt_RepPos     [i] = FVector::ZeroVector;
+            Belt_BoundRadius[i] = 0.f;
+        }
         ++i;
     }
+
+    // 重建空间哈希网格（格子边长 SpatialGridCellSize）
+    SpatialGrid.Reset();
+    const float InvCell = 1.f / SpatialGridCellSize;
+    for (int32 j = 0; j < N; ++j)
+    {
+        const FVector& Pos = Belt_RepPos[j];
+        const FIntPoint Cell(
+            FMath::FloorToInt(Pos.X * InvCell),
+            FMath::FloorToInt(Pos.Y * InvCell));
+        SpatialGrid.FindOrAdd(Cell).Add(j);
+    }
+
     Belt_CachedCount = N;
 }
 
@@ -618,110 +647,121 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
 
 void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, const FVector& CameraPos)
 {
-    if (BeltEntityRegistry.IsEmpty()) return;
+    // 确保 SoA 与 BeltEntityRegistry 同步（ProcessConveyor 通常已提前同步）
+    if (BeltEntityRegistry.Num() != Belt_CachedCount)
+        RebuildBeltSoA();
+
+    if (Belt_CachedCount <= 0) return;
 
     const float MaxDistSq = MaxRenderDistance * MaxRenderDistance;
+    const float InvCell   = 1.f / SpatialGridCellSize;
 
-    // ── Step 0: 双重门控：视锥剔除（平视侧面/背面）+ 距离上限（飞高时防覆盖写） ───
-    TArray<FBeltHandle> ActiveBelts;
-    BeltEntityRegistry.GetKeys(ActiveBelts);
-    const int32 NumBelts = ActiveBelts.Num();
+    // ── Step 0A: 空间粗筛——枚举相机 AABB 内的格子，收集候选 SoA 下标 ─────────
+    // 从 ~N_all 次 TMap::Find 降至 ~(2R/cell)² 次格子查询（典型约 20×20=400 次）
+    TArray<int32> Candidates;
+    Candidates.Reserve(512);
 
-    TArray<const FBeltData*> BeltDataArr;
-    TArray<bool> BeltIsVisible;
-    BeltDataArr.Reserve(NumBelts);
-    BeltIsVisible.SetNumUninitialized(NumBelts);
+    const int32 CellMinX = FMath::FloorToInt((CameraPos.X - MaxRenderDistance) * InvCell);
+    const int32 CellMaxX = FMath::FloorToInt((CameraPos.X + MaxRenderDistance) * InvCell);
+    const int32 CellMinY = FMath::FloorToInt((CameraPos.Y - MaxRenderDistance) * InvCell);
+    const int32 CellMaxY = FMath::FloorToInt((CameraPos.Y + MaxRenderDistance) * InvCell);
 
-    int32 TotalVisibleItems = 0;
-    for (int32 i = 0; i < NumBelts; ++i)
+    for (int32 CX = CellMinX; CX <= CellMaxX; ++CX)
+        for (int32 CY = CellMinY; CY <= CellMaxY; ++CY)
+            if (const TArray<int32>* List = SpatialGrid.Find(FIntPoint(CX, CY)))
+                Candidates.Append(*List);
+
+    if (Candidates.IsEmpty())
     {
-        const FBeltHandle& Handle = ActiveBelts[i];
-        const FBeltData* Data = BeltEntityRegistry.Find(Handle);
-        BeltDataArr.Add(Data);
-
-        bool bVisible = false;
-        if (BeltTrajectories.IsValidIndex(Handle.Index))
-        {
-            const FBeltTrajectory& BeltDef = BeltTrajectories[Handle.Index];
-            // 门控 1：距离上限（MaxRenderDistance）——飞高时截断覆盖面积
-            if (const float DistSq = FVector::DistSquared(CameraPos, BeltDef.RepresentativePosition); DistSq <= MaxDistSq)
-            {
-                // 门控 2：视锥剔除（IntersectSphere）——平视时切掉侧面/背面
-                bVisible = ViewFrustum.IntersectSphere(BeltDef.RepresentativePosition, BeltDef.BoundRadius);
-            }
-        }
-        BeltIsVisible[i] = bVisible;
-        if (bVisible && Data) TotalVisibleItems += Data->ItemCache.Num();
-    }
-
-    if (TotalVisibleItems == 0)
-    {
-        // 视野内无物品：清空 ISM 实例
         for (auto& [Type, ISM] : ItemISMPool)
             if (ISM && ISM->GetInstanceCount() > 0)
                 ISM->ClearInstances();
         return;
     }
 
-    // ── Step 1: 前缀和（仅视锥内 Belt）─────────────────────────────────────
-    TArray<int32> BeltItemOffsets;
-    BeltItemOffsets.SetNumUninitialized(NumBelts);
-    int32 RunningOffset = 0;
-    for (int32 i = 0; i < NumBelts; ++i)
+    // ── Step 0B: 精确双重门控（距离 + 视锥），纯平坦数组，无 TMap 访问 ─────────
+    TArray<int32> VisibleIndices;
+    VisibleIndices.Reserve(Candidates.Num());
+
+    const FVector* RESTRICT RepPosData   = Belt_RepPos.GetData();
+    const float*   RESTRICT BoundRadData = Belt_BoundRadius.GetData();
+
+    for (const int32 Idx : Candidates)
     {
-        BeltItemOffsets[i] = RunningOffset;
-        if (BeltIsVisible[i] && BeltDataArr[i])
-            RunningOffset += BeltDataArr[i]->ItemCache.Num();
+        if (FVector::DistSquared(CameraPos, RepPosData[Idx]) > MaxDistSq) continue;
+        if (!ViewFrustum.IntersectSphere(RepPosData[Idx], BoundRadData[Idx])) continue;
+        VisibleIndices.Add(Idx);
     }
 
-    // ── Step 2: 预分配平坦输出数组（仅视锥内物品）──────────────────────────
-    struct FItemEntry
+    const int32 NumVisible = VisibleIndices.Num();
+    if (NumVisible == 0)
     {
-        EItemType Type;
-        FTransform T;
-    };
+        for (auto& [Type, ISM] : ItemISMPool)
+            if (ISM && ISM->GetInstanceCount() > 0)
+                ISM->ClearInstances();
+        return;
+    }
+
+    // ── Step 1: 前缀和（仅可见 Belt）─────────────────────────────────────────
+    TArray<int32> ItemOffsets;
+    ItemOffsets.SetNumUninitialized(NumVisible);
+    int32 TotalVisibleItems = 0;
+    for (int32 vi = 0; vi < NumVisible; ++vi)
+    {
+        const FBeltData* BD = Belt_Ptrs[VisibleIndices[vi]];
+        ItemOffsets[vi] = TotalVisibleItems;
+        if (BD) TotalVisibleItems += BD->ItemCache.Num();
+    }
+
+    if (TotalVisibleItems == 0)
+    {
+        for (auto& [Type, ISM] : ItemISMPool)
+            if (ISM && ISM->GetInstanceCount() > 0)
+                ISM->ClearInstances();
+        return;
+    }
+
+    // ── Step 2: 预分配平坦输出数组（仅可见物品）──────────────────────────────
+    struct FItemEntry { EItemType Type; FTransform T; };
     TArray<FItemEntry> FlatEntries;
     FlatEntries.SetNumUninitialized(TotalVisibleItems);
 
-    // ── Step 3: ParallelFor 并行查 LUT（仅视锥内 Belt，视野外零开销）─────────
-    ParallelFor(NumBelts, [&](int32 BeltIdx)
+    // ── Step 3: ParallelFor 并行查 LUT（仅可见 Belt，无 TMap 访问）────────────
+    const int32* RESTRICT TrajIdxData = Belt_TrajIndex.GetData();
+    ParallelFor(NumVisible, [&](int32 vi)
     {
-        if (!BeltIsVisible[BeltIdx]) return; // 视野外：完全跳过，零开销
+        const int32 SoaIdx  = VisibleIndices[vi];
+        const FBeltData* BD = Belt_Ptrs[SoaIdx];
+        if (!BD || BD->ItemCache.IsEmpty()) return;
 
-        const FBeltData* BeltData = BeltDataArr[BeltIdx];
-        if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
+        const int32 TrajIdx = TrajIdxData[SoaIdx];
+        if (!BeltTrajectories.IsValidIndex(TrajIdx)) return;
 
-        const FBeltHandle& Handle = ActiveBelts[BeltIdx];
-        if (!BeltTrajectories.IsValidIndex(Handle.Index)) return;
+        const FBeltTrajectory& Traj = BeltTrajectories[TrajIdx];
+        if (!Traj.IsValid()) return;
 
-        const FBeltTrajectory& Trajectory = BeltTrajectories[Handle.Index];
-        if (!Trajectory.IsValid()) return;
-
-        int32 WriteIdx = BeltItemOffsets[BeltIdx];
-        const int32 ItemCount = BeltData->ItemCache.Num();
+        int32 WriteIdx        = ItemOffsets[vi];
+        const int32 ItemCount = BD->ItemCache.Num();
         for (int32 ItemIdx = 0; ItemIdx < ItemCount; ++ItemIdx)
         {
-            const FBeltItemCache& Cache = BeltData->ItemCache[ItemIdx];
+            const FBeltItemCache& Cache = BD->ItemCache[ItemIdx];
             FItemEntry& Entry = FlatEntries[WriteIdx++];
             Entry.Type = Cache.ItemType;
             if (Cache.ItemType != EItemType::None)
             {
-                // Lazy 求值：仅在渲染路径计算真实坐标，Tick 不再遍历物品
-                const float EffectiveDist = BeltData->GetEffectivePosition(ItemIdx);
-                Trajectory.GetTransformAtDistance(EffectiveDist, Entry.T);
+                const float EffDist = BD->GetEffectivePosition(ItemIdx);
+                Traj.GetTransformAtDistance(EffDist, Entry.T);
             }
         }
     });
 
-    // ── Step 4: Bucket Sort ──────────────────────────────────────────────────
-    for (auto& [Type, Arr] : CachedTransformsByType)
-        Arr.Reset();
-
+    // ── Step 4: Bucket Sort ───────────────────────────────────────────────────
+    for (auto& [Type, Arr] : CachedTransformsByType) Arr.Reset();
     for (const FItemEntry& Entry : FlatEntries)
         if (Entry.Type != EItemType::None)
             CachedTransformsByType.FindOrAdd(Entry.Type).Add(Entry.T);
 
-    // ── Step 5: 每种物品类型 1 次 BatchUpdate，数据量 = 近处物品数 ────────────
+    // ── Step 5: 每种物品类型 1 次 BatchUpdate ─────────────────────────────────
     for (auto& [Type, Transforms] : CachedTransformsByType)
     {
         UInstancedStaticMeshComponent* ISM = GetOrCreateIsmForItemType(Type);
@@ -729,10 +769,8 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
 
         const int32 NewCount = Transforms.Num();
         const int32 OldCount = ISM->GetInstanceCount();
-
         if (NewCount > OldCount)
         {
-            // 扩容：追加新 Instance（先隐藏）
             const FTransform HiddenTransform(FVector(0.f, 0.f, -99999.f));
             for (int32 i = OldCount; i < NewCount; ++i)
                 ISM->AddInstance(HiddenTransform, false);
@@ -741,16 +779,13 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
         {
             TArray<int32> ToRemove;
             ToRemove.Reserve(OldCount - NewCount);
-            for (int32 i = NewCount; i < OldCount; ++i)
-                ToRemove.Add(i);
+            for (int32 i = NewCount; i < OldCount; ++i) ToRemove.Add(i);
             ISM->RemoveInstances(ToRemove);
         }
-
         if (NewCount > 0)
             ISM->BatchUpdateInstancesTransforms(0, Transforms, false, true, true);
     }
 
-    // 清理本帧不再需要实例的 ISM 类型（物品耗尽时）
     for (auto& [Type, ISM] : ItemISMPool)
         if (ISM && !CachedTransformsByType.Contains(Type) && ISM->GetInstanceCount() > 0)
             ISM->ClearInstances();

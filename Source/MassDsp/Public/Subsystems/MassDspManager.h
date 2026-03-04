@@ -72,7 +72,16 @@ public:
     TArray<FBeltData*> Belt_Ptrs;             // 指向 BeltEntityRegistry 内元素
     int32              Belt_CachedCount = -1; // 触发重建的标记
 
-    /** 当传送带数量变化时，O(N) 重建 SoA 平坦数组。*/
+    // ── SoA 剔除热数据（供 UpdateAllBeltItemTransforms 空间网格使用）────────
+    TArray<FVector> Belt_RepPos;       // BeltTrajectories[i].RepresentativePosition
+    TArray<float>   Belt_BoundRadius;  // BeltTrajectories[i].BoundRadius
+    TArray<int32>   Belt_TrajIndex;    // BeltTrajectories 直接寻址下标（= Handle.Index）
+
+    // 空间哈希网格：格子坐标 → SoA 下标列表，格子边长 SpatialGridCellSize
+    static constexpr float SpatialGridCellSize = 5000.f; // 50m
+    TMap<FIntPoint, TArray<int32>> SpatialGrid;
+
+    /** 当传送带数量变化时，O(N) 重建 SoA 平坦数组 + 空间哈希网格。*/
     void RebuildBeltSoA();
 
     // 已创建的建筑 Mass Entity 数量（在 CreateBuildingEntityInternal 中自增）
