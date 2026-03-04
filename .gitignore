@@ -78,3 +78,5 @@ DerivedDataCache/*
 *.DotSettings.user
 
 Release
+Doc
+.vscode
