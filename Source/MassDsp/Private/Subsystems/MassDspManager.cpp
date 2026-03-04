@@ -494,6 +494,25 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     return BeltHandle;
 }
 
+void UMassDspManager::RebuildBeltSoA()
+{
+    const int32 N = BeltEntityRegistry.Num();
+    Belt_TotalMove.SetNumUninitialized(N);
+    Belt_Speed    .SetNumUninitialized(N);
+    Belt_Ptrs     .SetNumUninitialized(N);
+
+    int32 i = 0;
+    for (auto& [Handle, BeltData] : BeltEntityRegistry)
+    {
+        BeltData.TickIdx  = i;
+        Belt_TotalMove[i] = BeltData.TotalMove;
+        Belt_Speed    [i] = BeltData.BeltSpeed;
+        Belt_Ptrs     [i] = &BeltData;
+        ++i;
+    }
+    Belt_CachedCount = N;
+}
+
 bool UMassDspManager::ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc)
 {
     if (!BeltHandle.IsValid()) return false;
@@ -521,6 +540,9 @@ bool UMassDspManager::ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<
         const FBeltTrajectory& Belt = BeltTrajectories[BeltHandle.Index];
         BeltData.BeltLength = Belt.TotalLength;
         BeltData.BeltSpeed = Belt.Speed;
+        // 同步到 SoA 热数组（若 RebuildBeltSoA 已构建）
+        if (BeltData.TickIdx >= 0 && BeltData.TickIdx < Belt_Speed.Num())
+            Belt_Speed[BeltData.TickIdx] = BeltData.BeltSpeed;
     }
 
     FBeltItemCache NewItem;

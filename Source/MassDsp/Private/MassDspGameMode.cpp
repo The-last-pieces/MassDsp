@@ -304,67 +304,63 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
     UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
     if (!Manager || Manager->BeltEntityRegistry.IsEmpty()) return;
 
-    // --- Step 1: 缓存所有 Belt 指针，避免 ParallelFor 里访问 TMap ---
-    TArray<FBeltHandle> ActiveBelts;
-    Manager->BeltEntityRegistry.GetKeys(ActiveBelts);
+    // --- Step 1: 若传送带数量变化则 O(N) 重建 SoA（正常情况不触发）---
+    if (Manager->BeltEntityRegistry.Num() != Manager->Belt_CachedCount)
+        Manager->RebuildBeltSoA();
 
-    TArray<FBeltData*> BeltDataArray;
-    BeltDataArray.Reserve(ActiveBelts.Num());
-    for (const FBeltHandle& Handle : ActiveBelts)
+    const int32 NumBelts = Manager->Belt_Ptrs.Num();
+    if (NumBelts == 0) return;
+
+    float* RESTRICT TM = Manager->Belt_TotalMove.GetData();
+    const float* RESTRICT BS = Manager->Belt_Speed.GetData();
+    FBeltData** RESTRICT Ptrs = Manager->Belt_Ptrs.GetData();
+
+    // --- Step 2 Pass 1: 纯连续内存 SIMD 加法（AVX2 自动向量化：8 条带/周期）---
+    for (int32 i = 0; i < NumBelts; ++i)
+        TM[i] += BS[i] * DeltaTime;
+
+    // --- Step 2 Pass 2: 同步回 BeltData + 阻塞组合并检查 + Rebase ---
+    static constexpr float RebaseThreshold = 1e6f;
+    for (int32 i = 0; i < NumBelts; ++i)
     {
-        BeltDataArray.Add(Manager->BeltEntityRegistry.Find(Handle));
-    }
+        FBeltData* BeltData = Ptrs[i];
+        BeltData->TotalMove = TM[i];
 
-    // --- Step 2: 严格 O(1) 每条传送带更新：刚体阻塞组 + 自由区双区模型 ---
-    ParallelFor(BeltDataArray.Num(), [&](int BeltIdx)
-    {
-        FBeltData* BeltData = BeltDataArray[BeltIdx];
-        if (!BeltData || BeltData->ItemCache.IsEmpty()) return;
-
-        // 严格 O(1)：全带唯一操作
-        BeltData->TotalMove += BeltData->BeltSpeed * DeltaTime;
-
-        // 摊还 O(1)：检查前沿自由物品是否追上阻塞组组尾（或首次到达出口），追上则合并入组
         const int32 N = BeltData->ItemCache.Num();
+        if (N == 0) continue;
+
         if (BeltData->BlockedCount < N)
         {
-            // 组尾位置：BlockedCount==0 时视为出口线
             const float BackOfGroup = (BeltData->BlockedCount > 0)
-                ? BeltData->GetGroupFront()
-                  - static_cast<float>(BeltData->BlockedCount) * FGameConst::ItemSpace
-                : BeltData->BeltLength - FGameConst::HalfLength;
+                                          ? BeltData->GetGroupFront()
+                                          - static_cast<float>(BeltData->BlockedCount) * FGameConst::ItemSpace
+                                          : BeltData->BeltLength - FGameConst::HalfLength;
 
             const float FrontFreePos =
-                BeltData->ItemCache[BeltData->BlockedCount].Offset + BeltData->TotalMove;
+                BeltData->ItemCache[BeltData->BlockedCount].Offset + TM[i];
 
             if (FrontFreePos >= BackOfGroup)
             {
                 if (BeltData->BlockedCount == 0)
-                {
-                    // 首个物品到达出口：初始化组头锁定在出口线
                     BeltData->GroupFrontOffset =
-                        (BeltData->BeltLength - FGameConst::HalfLength) - BeltData->TotalMove;
-                }
+                        (BeltData->BeltLength - FGameConst::HalfLength) - TM[i];
                 ++BeltData->BlockedCount;
             }
         }
 
-        // 防 float 精度退化（约 41 分钟触发一次）：
-        // 自由物品 Offset 与 GroupFrontOffset 均需更新，以维持和 TotalMove 的相对精度。
-        static constexpr float RebaseThreshold = 1e6f;
-        if (BeltData->TotalMove > RebaseThreshold)
+        if (TM[i] > RebaseThreshold)
         {
-            for (int32 i = BeltData->BlockedCount; i < N; ++i) // 只更新自由物品
-                BeltData->ItemCache[i].Offset += BeltData->TotalMove;
-            BeltData->GroupFrontOffset += BeltData->TotalMove; // 组头同步
-            BeltData->TotalMove = 0.f;
+            for (int32 j = BeltData->BlockedCount; j < N; ++j)
+                BeltData->ItemCache[j].Offset += TM[i];
+            BeltData->GroupFrontOffset += TM[i];
+            TM[i] = BeltData->TotalMove = 0.f;
         }
-    });
+    }
 
     auto EndTime = FPlatformTime::Seconds();
 
     const double ElapsedMs = (EndTime - BeginTime) * 1000.0;
-    UE_LOG(LogTemp, Log, TEXT("[Tick Profile] Conveyor Update Time: %.3f ms"), ElapsedMs);
+    // UE_LOG(LogTemp, Log, TEXT("[Tick Profile] Conveyor Update Time: %.3f ms"), ElapsedMs);
 
     // --- Step 3: ~30fps 同步视锥体内物品 Transform 到 ISM ---
     // 视野外传送带完全跳过（CPU 侧视锥剔除），GPU 上传量 = O(可见物品数)
@@ -372,6 +368,8 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
     if (Manager->SyncAccum >= 1.0f / 60.0f)
     {
         Manager->SyncAccum = 0.f;
+
+        auto BeginTime2 = FPlatformTime::Seconds();
 
         // 构建当前帧视锥体（ViewProjectionMatrix → FConvexVolume）
         FConvexVolume ViewFrustum;
@@ -389,5 +387,10 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
             }
         }
         Manager->UpdateAllBeltItemTransforms(ViewFrustum, CamLoc);
+
+        auto EndTime2 = FPlatformTime::Seconds();
+
+        const double SyncElapsedMs = (EndTime2 - BeginTime2) * 1000.0;
+        UE_LOG(LogTemp, Log, TEXT("[Tick Profile] ISM Sync Time: %.3f ms %.3f ms"), SyncElapsedMs, ElapsedMs);
     }
 }

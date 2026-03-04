@@ -32,6 +32,10 @@ struct MASSDSP_API FBeltData
     // 全局累积偏移，每帧无条件 += BeltSpeed * DeltaTime
     float TotalMove = 0.f;
 
+    // SoA 平坦数组中的下标（Manager::Belt_TotalMove[TickIdx] / Belt_Speed[TickIdx]）
+    // RebuildBeltSoA() 构建时赋值，传送带生命期内稳定。
+    int32 TickIdx = -1;
+
     // ── 刚体阻塞组（出口侧） ────────────────────────────────────────────────
     // ItemCache[0..BlockedCount-1] 属于阻塞组，作为刚体整体运动。
     //

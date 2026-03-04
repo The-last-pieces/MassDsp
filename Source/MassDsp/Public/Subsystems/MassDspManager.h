@@ -65,6 +65,16 @@ public:
 
     TSparseArray<FBeltTrajectory> BeltTrajectories;
 
+    // ── SoA 热数据（供 ProcessConveyor SIMD Pass 使用）──────────────────────
+    // 与 BeltEntityRegistry 元素一一对应，通过 FBeltData::TickIdx 索引。
+    TArray<float>      Belt_TotalMove;        // 对应 FBeltData::TotalMove
+    TArray<float>      Belt_Speed;            // 对应 FBeltData::BeltSpeed（初始化后不变）
+    TArray<FBeltData*> Belt_Ptrs;             // 指向 BeltEntityRegistry 内元素
+    int32              Belt_CachedCount = -1; // 触发重建的标记
+
+    /** 当传送带数量变化时，O(N) 重建 SoA 平坦数组。*/
+    void RebuildBeltSoA();
+
     // 已创建的建筑 Mass Entity 数量（在 CreateBuildingEntityInternal 中自增）
     int32 BuildingEntityCount = 0;
 
