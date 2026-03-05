@@ -231,8 +231,8 @@ void AMassDspGameMode::TestCase2()
         return;
     }
 
-    constexpr int32 GroupRows = 10;
-    constexpr int32 GroupCols = 10;
+    constexpr int32 GroupRows = 2;
+    constexpr int32 GroupCols = 2;
     constexpr int32 NumGroups = GroupRows * GroupCols; // 100
     constexpr int32 DronesPerTower = 100;
     constexpr int32 BuildingsPerGroup = 4; // Miner+Supply+Demand+Storage
@@ -256,8 +256,8 @@ void AMassDspGameMode::TestCase2()
         for (int32 Col = 0; Col < GroupCols; ++Col)
         {
             constexpr float IntraSpacing = 1500.f;
-            constexpr float GroupSpacingX = 4000.f;
-            constexpr float GroupSpacingY = 2000.f;
+            constexpr float GroupSpacingX = 5500.f;
+            constexpr float GroupSpacingY = 1500.f;
             const FVector GroupOrigin = FVector(
                 (Col - GroupCols * 0.5f) * GroupSpacingX,
                 (Row - GroupRows * 0.5f) * GroupSpacingY,
@@ -396,7 +396,6 @@ void AMassDspGameMode::TestCase2()
         for (int32 d = 0; d < DronesPerTower; ++d)
         {
             // TODO idle的时候也按螺旋盘旋
-            // TODO 请求端也要放无人机
             // const float Angle = (static_cast<float>(d) / DronesPerTower) * 2.f * PI;
             // const FVector InitPos = TowerPos + FVector(FMath::Cos(Angle) * 200.f,
             //                                            FMath::Sin(Angle) * 200.f,
@@ -406,17 +405,19 @@ void AMassDspGameMode::TestCase2()
     }
 
     // ── 每个需求塔同样创建 DronesPerTower 架无人机（主动取货能力）─────────────
+    // 需求塔只需少量无人机即可支持主动取货，保持数量可控避免大量空闲无人机白白占用 UpdateDrones 循环
+    constexpr int32 DronesPerDemandTower = 10;
     for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
     {
         const int32 Base = GroupIdx * BuildingsPerGroup;
         const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
         const FVector DemandPos = LogisticsSpawn[Base + 2].WorldTransform.GetLocation();
 
-        for (int32 d = 0; d < DronesPerTower; ++d)
+        for (int32 d = 0; d < DronesPerDemandTower; ++d)
             LogisticsSub->CreateDrone(DemandTowerEnt, DemandPos);
     }
 
     UE_LOG(LogTemp, Log,
            TEXT("[Logistics] 100 组物流初始化完成 | %d 供应塔 | %d 需求塔 | %d 架无人机（种子=42）"),
-           NumGroups, NumGroups, NumGroups * DronesPerTower * 2);
+           NumGroups, NumGroups, NumGroups * (DronesPerTower + DronesPerDemandTower));
 }

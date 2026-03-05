@@ -27,6 +27,7 @@ void UMassDspLogisticsSubsystem::Initialize(FSubsystemCollectionBase& Collection
     AllTasks.Reserve(256);
     TowerRuntimeData.Reserve(64);
     IdleDroneIndices.Reserve(1024);
+    IdleDroneIndexSet.Reserve(1024);
     IdleVehicleIndices.Reserve(128);
     IdleTrainIndices.Reserve(64);
 }
@@ -42,6 +43,7 @@ void UMassDspLogisticsSubsystem::Deinitialize()
     AllTasks.Empty();
     TowerRuntimeData.Empty();
     DroneGridCells.Empty();
+    IdleDroneIndexSet.Empty();
     DispatchStrategies.Empty();
     Super::Deinitialize();
 }
@@ -246,7 +248,8 @@ bool UMassDspLogisticsSubsystem::CancelRequest(const FGuid& RequestId)
             {
                 Drone.State = ELogisticsDeviceState::Idle;
                 Drone.CurrentTaskId = FGuid();
-                IdleDroneIndices.AddUnique(Task.DevicePoolIndex);
+                IdleDroneIndices.Add(Task.DevicePoolIndex);
+                IdleDroneIndexSet.Add(Task.DevicePoolIndex);
             }
         }
         // TODO[VEHICLE]: 重置小车
@@ -346,6 +349,7 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
 
     // 加入空闲池
     IdleDroneIndices.Add(Idx);
+    IdleDroneIndexSet.Add(Idx);
 
     // 同步扩展 VehiclePaths / TrainTrackLUTs 对齐（无人机不需要，但保持数组长度一致性）
     return FDroneHandle{Idx, DronePool[Idx].Generation};
@@ -391,7 +395,8 @@ void UMassDspLogisticsSubsystem::DestroyDrone(FDroneHandle Handle)
     if (Drone.Generation != Handle.Generation) return; // 悬空句柄
 
     FreeDroneISMInstance(Drone.ISMInstanceIndex);
-    IdleDroneIndices.Remove(Handle.Index);
+    IdleDroneIndices.RemoveSwap(Handle.Index);
+    IdleDroneIndexSet.Remove(Handle.Index);
     Drone.Generation++; // 使旧句柄失效
     DronePool.RemoveAt(Handle.Index);
 }
@@ -524,7 +529,7 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
         }
     }
 
-    UE_LOG(LogTemp, Log,
+    UE_LOG(LogTemp, Verbose,
            TEXT("[Logistics] GlobalMatch: Supply=%d Demand=%d IdleDrones=%d"),
            TotalSupply, TotalDemand, IdleDroneIndices.Num());
 
@@ -599,6 +604,20 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
         bool  bAnyDispatched  = false;
         int32 StaggerIndex    = 0;
 
+        // 归属候选列表于内层循环外构建一次，O(1) Contains 避免每次 O(N=20k) 线性扫描
+        TArray<int32> AffiliatedCandidates;
+        {
+            auto AddAffiliatedIdle = [&](FMassEntityHandle TowerEnt)
+            {
+                if (const FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(TowerEnt))
+                    for (const FDroneHandle& H : RTD->AffiliatedDroneHandles)
+                        if (H.IsValid() && IdleDroneIndexSet.Contains(H.Index))
+                            AffiliatedCandidates.AddUnique(H.Index);
+            };
+            AddAffiliatedIdle(Supply->PreferredTowerEntity);
+            AddAffiliatedIdle(Demand->PreferredTowerEntity);
+        }
+
         while (SupplyRemaining > 0 && DemandRemaining > 0 && !IdleDroneIndices.IsEmpty())
         {
             const int32 BatchQty = FMath::Min3(SupplyRemaining, DemandRemaining, CargoPerDrone);
@@ -615,24 +634,11 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             Task.TransferQuantity = BatchQty;
             Task.DeviceType      = ELogisticsDeviceType::Drone;
 
-            // 优先使用归属无人机（Supply塔 + Demand塔），无则回退全局池
-            TArray<int32> AffiliatedCandidates;
-            auto AddAffiliatedIdle = [&](FMassEntityHandle TowerEnt)
-            {
-                if (const FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(TowerEnt))
-                {
-                    for (const FDroneHandle& H : RTD->AffiliatedDroneHandles)
-                    {
-                        if (H.IsValid() && IdleDroneIndices.Contains(H.Index))
-                            AffiliatedCandidates.AddUnique(H.Index);
-                    }
-                }
-            };
-            AddAffiliatedIdle(Supply->PreferredTowerEntity);
-            AddAffiliatedIdle(Demand->PreferredTowerEntity);
             const TArray<int32>& Candidates = AffiliatedCandidates.IsEmpty() ? IdleDroneIndices : AffiliatedCandidates;
-
             if (!TryDispatchTask(Task, Candidates)) break;
+
+            // 已派出的无人机从归属候选中移除（它已不再空闲）
+            AffiliatedCandidates.RemoveSwap(Task.DevicePoolIndex);
 
             // 错峰起飞
             if (StaggerIndex > 0)
@@ -697,12 +703,8 @@ bool UMassDspLogisticsSubsystem::TryDispatchTask(FLogisticsTask& Task, const TAr
     (*StrategyPtr)->InitDeviceForTask(&Drone, Task);
     Task.State = ELogisticsTaskState::InTransit_Pickup;
 
-    IdleDroneIndices.Remove(SelectedIdx);
-
-    UE_LOG(LogTemp, Log,
-           TEXT("[Logistics] Task dispatched! DroneIdx=%d P0=%s P3=%s TotalTime=%.2f"),
-           SelectedIdx,
-           *Drone.P0.ToString(), *Drone.P3.ToString(), Drone.TotalFlightTime);
+    IdleDroneIndices.RemoveSwap(SelectedIdx);
+    IdleDroneIndexSet.Remove(SelectedIdx);
 
     return true;
 }
@@ -733,7 +735,8 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
             {
                 Drone.CooldownRemaining = 0.f;
                 Drone.State = ELogisticsDeviceState::Idle;
-                IdleDroneIndices.AddUnique(DroneIdx);
+                IdleDroneIndices.Add(DroneIdx);
+                IdleDroneIndexSet.Add(DroneIdx);
 
                 // 冷却完成 → 立即对归属塔置脏，下一帧 MatchPendingRequests
                 // 就能把队列中已有的 Supply/Demand 再次配对，无需等 Processor 下次扫描
@@ -790,6 +793,11 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
             break;
         }
     }
+
+    // 所有飞行中无人机位置写入完毕，统一触发一次 GPU 渲染状态刷新
+    // 对比逐实例 bMarkRenderStateDirty=true，此处节省 N 次 MarkRenderStateDirty 调用开销
+    if (DroneISM)
+        DroneISM->MarkRenderStateDirty();
 }
 
 void UMassDspLogisticsSubsystem::UpdateVehicles(float DeltaTime)
@@ -932,8 +940,16 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
         RequeueRequest(Task->SupplyRequestId);
         RequeueRequest(Task->DemandRequestId);
 
-        for (auto& [TowerEnt, RTD] : TowerRuntimeData)
-            RTD.ActiveTaskIds.Remove(CompletedTaskId);
+        // 仅从涉及的两个塔中移除 ActiveTaskIds，避免 O(NumAllTowers) 全量遍历
+        auto RemoveActiveFromTower = [&](const FGuid& ReqId)
+        {
+            const FLogisticsRequest* Req = AllRequests.Find(ReqId);
+            if (!Req || !Req->PreferredTowerEntity.IsValid()) return;
+            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(Req->PreferredTowerEntity))
+                RTD->ActiveTaskIds.Remove(CompletedTaskId);
+        };
+        RemoveActiveFromTower(Task->SupplyRequestId);
+        RemoveActiveFromTower(Task->DemandRequestId);
     }
 }
 
@@ -945,7 +961,8 @@ void UMassDspLogisticsSubsystem::OnDroneTaskFailed(int32 DronePoolIndex)
     const FGuid OldTaskId = Drone.CurrentTaskId;
     Drone.CurrentTaskId = FGuid();
     Drone.State = ELogisticsDeviceState::Idle;
-    IdleDroneIndices.AddUnique(DronePoolIndex);
+    IdleDroneIndices.Add(DronePoolIndex);
+    IdleDroneIndexSet.Add(DronePoolIndex);
 
     // 将请求重新放回待匹配队列
     if (FLogisticsTask* Task = AllTasks.Find(OldTaskId))
@@ -977,9 +994,9 @@ void UMassDspLogisticsSubsystem::UpdateDroneISMInstance(FDroneData& Drone) const
     const FQuat Rot = Fwd.IsNearlyZero() ? FQuat::Identity : FRotationMatrix::MakeFromX(Fwd).ToQuat();
 
     const FTransform InstanceTransform(Rot, Pos, FVector::OneVector);
-    // bMarkRenderStateDirty=true 确保每帧位置更新就刷新到 GPU
+    // bMarkRenderStateDirty=false：由 UpdateDrones() 结尾统一调用 MarkRenderStateDirty() 一次性刷新
     DroneISM->UpdateInstanceTransform(Drone.ISMInstanceIndex, InstanceTransform,
-                                      /*bWorldSpace=*/true, /*bMarkRenderStateDirty=*/true);
+                                      /*bWorldSpace=*/true, /*bMarkRenderStateDirty=*/false);
 }
 
 int32 UMassDspLogisticsSubsystem::AllocateDroneISMInstance(const FVector& InitialLocation)

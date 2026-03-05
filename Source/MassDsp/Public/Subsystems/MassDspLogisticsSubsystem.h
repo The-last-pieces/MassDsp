@@ -88,7 +88,9 @@ public:
     TArray<TArray<FVector>> TrainTrackLUTs;
 
     //  空闲索引池（O(1) 查找空闲设备，无需遍历整个 Pool） 
+    /** TArray 供 SelectBestDeviceIndex 顺序迭代；TSet 供 O(1) Contains 查询，两者始终同步 */
     TArray<int32> IdleDroneIndices;
+    TSet<int32>   IdleDroneIndexSet; ///< 镜像 IdleDroneIndices，专门用于 O(1) Contains 判断
     TArray<int32> IdleVehicleIndices;
     TArray<int32> IdleTrainIndices;
 
