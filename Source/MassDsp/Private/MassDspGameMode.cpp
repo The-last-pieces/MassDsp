@@ -12,7 +12,7 @@
 #include "Fragments/MassDspLogisticsTowerFragment.h"
 
 #include "MassEntitySubsystem.h"
-#include "Engine/LocalPlayer.h"
+#include "Engine/Engine.h"
 
 AMassDspGameMode::AMassDspGameMode()
 {
