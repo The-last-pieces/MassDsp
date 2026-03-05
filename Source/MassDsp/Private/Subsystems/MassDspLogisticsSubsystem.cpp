@@ -157,31 +157,18 @@ FGuid UMassDspLogisticsSubsystem::SubmitRequestInternal(
             // 更新数量和时间戳
             ExistReq.Quantity = FMath::Max(1, Quantity);
             ExistReq.RequestTime = World->GetTimeSeconds();
-            // 关键：若请求已被配对从 PendingRequestIds 移除，且当前无活跃任务引用它，
-            // 才重新加回；否则无人机首次送货后再无新任务可以匹配
+            // 若请求已不在 Pending 中（已被派遣），直接重新加回。
+            // 不再检查 bHasActiveTask——并发在途量由 DispatchMatchedPairs 的
+            // ComputeInTransitFrom/To 防止过度派遣，此处守卫是冗余且有害的：
+            // 它会在"还有其他无人机在途"时阻塞本次 Cooldown→Idle 的重提交，
+            // 导致无人机本该立即获得新任务却等到下一轮 ScanInterval 才触发。
             const bool bAlreadyPending = RuntimeDataRef.PendingRequestIds.Contains(ExistId);
             if (!bAlreadyPending)
             {
-                // 检查是否有活跃任务正在使用该请求（运输中不重新入队，避免重复派遣）
-                bool bHasActiveTask = false;
-                for (const FGuid& ActiveId : RuntimeDataRef.ActiveTaskIds)
-                {
-                    if (const FLogisticsTask* T = AllTasks.Find(ActiveId))
-                    {
-                        if (T->SupplyRequestId == ExistId || T->DemandRequestId == ExistId)
-                        {
-                            bHasActiveTask = true;
-                            break;
-                        }
-                    }
-                }
-                if (!bHasActiveTask)
-                {
-                    RuntimeDataRef.PendingRequestIds.Add(ExistId);
-                    UE_LOG(LogTemp, Verbose,
-                           TEXT("[Logistics] Re-queue request %s (prev task completed)"),
-                           *ExistId.ToString());
-                }
+                RuntimeDataRef.PendingRequestIds.Add(ExistId);
+                UE_LOG(LogTemp, Verbose,
+                       TEXT("[Logistics] Re-queue request %s"),
+                       *ExistId.ToString());
             }
             TowerFrag->bDirty = true;
             return ExistId;
@@ -295,6 +282,7 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
         {
         case ELogisticsDeviceState::Idle:
         case ELogisticsDeviceState::Cooldown:
+        case ELogisticsDeviceState::ReturningHome: // 返航中视为休息（未承接物流任务）
             ++Result.OwnedResting;
             break;
         default:
@@ -372,6 +360,7 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
     Data.State = ELogisticsDeviceState::Idle;
     // P0~P3 全部初始化为 InitialLocation，确保首次起飞时贝塞尔起点即为悬停位置
     Data.P0 = Data.P1 = Data.P2 = Data.P3 = InitialLocation;
+    Data.HomeLocation = InitialLocation; // 归属塔悬停位置，用于 ReturningHome 飞行目标
 
     const int32 Idx = DronePool.Add(Data);
 
@@ -797,13 +786,9 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
             if (Drone.CooldownRemaining <= 0.f)
             {
                 Drone.CooldownRemaining = 0.f;
-                Drone.State = ELogisticsDeviceState::Idle;
-                IdleDroneIndices.Add(DroneIdx);
-                IdleDroneIndexSet.Add(DroneIdx);
 
-                // 冷却完成 → 主动重新提交归属塔的请求，绕过 ScanInterval。
-                // 部分场景下，交附完成后其他无人机被优先派遣，本机导入空闲后无待配任务，
-                // 若不主动重提交需最多等 Processor ScanInterval(=2s) 才能再次被派遣。
+                // 提前提交归属塔的请求（在返航途中就让系统准备好配对），
+                // 落地变 Idle 后 bDirty 会再次触发 MatchPendingRequests 完成派遣。
                 if (Drone.AffiliatedTowerEntity.IsValid())
                 {
                     if (UWorld* W = GetWorld())
@@ -811,11 +796,10 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
                         if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
                         {
                             const FMassEntityHandle TowerEnt = Drone.AffiliatedTowerEntity;
-                            FMassDspLogisticsTowerFragment* TFrag =
+                            const FMassDspLogisticsTowerFragment* TFrag =
                                 EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEnt);
                             const FMassDspStorageFragment* SFrag =
                                 EMPtr->GetFragmentDataPtr<FMassDspStorageFragment>(TowerEnt);
-
                             if (TFrag && SFrag && TFrag->bAcceptsRequests && TFrag->ItemType != EItemType::None)
                             {
                                 if (TFrag->TowerMode == ELogisticsTowerMode::Supply)
@@ -824,7 +808,7 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
                                     const int32 EffQty = FMath::Max(0, SFrag->InventoryCount - TFrag->RequestThreshold - InTransitFrom);
                                     if (EffQty > 0)
                                         SubmitSupplyRequest(TowerEnt, TFrag->ItemType, EffQty,
-                                                            ELogisticsRequestPriority::Normal, TowerEnt);
+                                                             ELogisticsRequestPriority::Normal, TowerEnt);
                                 }
                                 else if (TFrag->TowerMode == ELogisticsTowerMode::Demand)
                                 {
@@ -832,15 +816,71 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
                                     const int32 EffQty = FMath::Max(0, TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
                                     if (EffQty > 0)
                                         SubmitDemandRequest(TowerEnt, TFrag->ItemType, EffQty,
-                                                            ELogisticsRequestPriority::Normal, TowerEnt);
+                                                             ELogisticsRequestPriority::Normal, TowerEnt);
                                 }
-                                // bDirty 由 SubmitRequest 内部设置，无需外部重复
-                            }
-                            else if (TFrag)
-                            {
-                                TFrag->bDirty = true; // 回退：尚未配置的塔仅置脏等 Processor
                             }
                         }
+                    }
+                }
+
+                // ── 开始返回归属塔 ──────────────────────────────────────────────────
+                const FVector HomePos = Drone.HomeLocation;
+                const FVector CurPos  = Drone.P3; // 当前停留位置（上一段贝塞尔终点）
+                const float HomeDist  = FVector::Dist(CurPos, HomePos);
+
+                if (Drone.AffiliatedTowerEntity.IsValid() && HomeDist > 50.f)
+                {
+                    // 生成返航贝塞尔曲线（弧高同正常航行，无横向偏移）
+                    const float Arc    = FGameConst::DroneFlightArcHeight;
+                    const float EffArc = FMath::Min(Arc, HomeDist * 0.4f);
+
+                    Drone.P0 = CurPos;
+                    Drone.P1 = CurPos    + FVector(0.f, 0.f, EffArc);
+                    Drone.P2 = HomePos   + FVector(0.f, 0.f, EffArc);
+                    Drone.P3 = HomePos;
+                    Drone.ElapsedTime     = 0.f;
+                    Drone.TotalFlightTime = HomeDist / FMath::Max(1.f, Drone.FlightSpeed);
+                    Drone.State           = ELogisticsDeviceState::ReturningHome;
+                    // 返航中不加入 IdleDroneIndices，到家后再加
+                }
+                else
+                {
+                    // 已在家或无归属塔，直接 Idle
+                    Drone.State = ELogisticsDeviceState::Idle;
+                    IdleDroneIndices.Add(DroneIdx);
+                    IdleDroneIndexSet.Add(DroneIdx);
+                    // 置脏让 MatchPendingRequests 下一帧处理
+                    if (Drone.AffiliatedTowerEntity.IsValid())
+                    {
+                        if (UWorld* W = GetWorld())
+                            if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
+                                if (FMassDspLogisticsTowerFragment* TFrag2 =
+                                    EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Drone.AffiliatedTowerEntity))
+                                    TFrag2->bDirty = true;
+                    }
+                }
+            }
+            break;
+
+        case ELogisticsDeviceState::ReturningHome:
+            {
+                Drone.ElapsedTime += DeltaTime;
+                UpdateDroneISMInstance(Drone);
+                const float t = (Drone.TotalFlightTime > 0.f)
+                    ? FMath::Clamp(Drone.ElapsedTime / Drone.TotalFlightTime, 0.f, 1.f) : 1.f;
+                if (t >= 1.f)
+                {
+                    // 到家：进入 Idle，加入空闲池，通知塔立即匹配
+                    Drone.State = ELogisticsDeviceState::Idle;
+                    IdleDroneIndices.Add(DroneIdx);
+                    IdleDroneIndexSet.Add(DroneIdx);
+                    if (Drone.AffiliatedTowerEntity.IsValid())
+                    {
+                        if (UWorld* W = GetWorld())
+                            if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
+                                if (FMassDspLogisticsTowerFragment* TFrag =
+                                    EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Drone.AffiliatedTowerEntity))
+                                    TFrag->bDirty = true;
                     }
                 }
             }

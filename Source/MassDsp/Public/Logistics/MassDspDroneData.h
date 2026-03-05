@@ -52,13 +52,16 @@ struct MASSDSP_API FDroneData
 
     //  归属塔（Invalid = 全局无归属，小车/火车模式） 
     FMassEntityHandle AffiliatedTowerEntity;
+    /** 归属塔的世界坐标（创建时记录，用于 ReturningHome 贝塞尔目标点） */
+    FVector           HomeLocation = FVector::ZeroVector;
 
     //  ISM 渲染索引（-1 = 尚未分配实例） 
     int32 ISMInstanceIndex = -1;
 
     //  工具方法 
-    bool IsIdle()   const { return State == ELogisticsDeviceState::Idle; }
-    bool IsBusy()   const { return !IsIdle() && State != ELogisticsDeviceState::Cooldown; }
+    bool IsIdle()        const { return State == ELogisticsDeviceState::Idle; }
+    bool IsReturning()   const { return State == ELogisticsDeviceState::ReturningHome; }
+    bool IsBusy()        const { return !IsIdle() && !IsReturning() && State != ELogisticsDeviceState::Cooldown; }
 
     /** 计算三次贝塞尔插值位置（t  [0,1]） */
     FVector EvalBezier(float t) const

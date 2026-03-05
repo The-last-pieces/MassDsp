@@ -48,12 +48,13 @@ enum class ELogisticsTaskState : uint8
 /** 设备运动状态机 */
 enum class ELogisticsDeviceState : uint8
 {
-    Idle = 0, ///< 空闲，等待任务
-    MovingToPickup = 1, ///< 前往取货点
-    AtPickup = 2, ///< 到达取货点（正在装货）
+    Idle = 0,            ///< 空闲，停在归属塔等待任务
+    MovingToPickup = 1,  ///< 前往取货点
+    AtPickup = 2,        ///< 到达取货点（正在装货）
     MovingToDeliver = 3, ///< 前往交货点
-    AtDeliver = 4, ///< 到达交货点（正在卸货）
-    Cooldown = 5, ///< 冷却中（任务完成后短暂等待）
+    AtDeliver = 4,       ///< 到达交货点（正在卸货）
+    Cooldown = 5,        ///< 冷却中（任务完成后短暂等待）
+    ReturningHome = 6,   ///< 返回归属塔途中（冷却后自动触发，到家后变 Idle）
 };
 
 // ============================================================
