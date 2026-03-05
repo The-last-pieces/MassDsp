@@ -171,3 +171,14 @@ struct FLogisticsTowerRuntimeData
     /** 归属此塔的无人机句柄列表（小车/火车走全局设备池，无需归属绑定） */
     TArray<FDroneHandle> AffiliatedDroneHandles;
 };
+
+/**
+ * Widget 查询结果：物流塔无人机状态快照
+ * O(归属机数 + 活跃任务数)，供 UI RefreshWidgets() 每帧调用
+ */
+struct FTowerDroneStatus
+{
+    int32 OwnedDeployed = 0; ///< 归属本塔且正在执行任务（MovingToPickup/AtPickup/MovingToDeliver/AtDeliver）
+    int32 OwnedResting  = 0; ///< 归属本塔且空闲 / 冷却（Idle / Cooldown）
+    int32 Incoming      = 0; ///< DeliveryEntity == 本塔 且 State == InTransit_Deliver 的正在飞来无人机数
+};

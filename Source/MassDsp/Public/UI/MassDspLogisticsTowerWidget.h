@@ -18,11 +18,12 @@
  *  TextBlock_Mode        运行模式文本（供应 / 需求 / 仓储）             [可选]
  *  TextBlock_Threshold   请求阈值数量                                   [可选]
  *  TextBlock_DroneCount  单次无人机运量                                 [可选]
+ *  TextBlock_OwnedDrones    归属无人机：外派 X / 休息 X                [可选]
+ *  TextBlock_IncomingDrones 来航无人机数                               [可选]
  *
  * 数据来源：
  *  - FMassDspStorageFragment        库存（物品类型、当前数量、最大容量）
- *  - FMassDspLogisticsTowerFragment  物流配置（运行模式、阈值、单次运量）
- */
+ *  - FMassDspLogisticsTowerFragment  物流配置（运行模式、阈值、单次运量） *  - UMassDspLogisticsSubsystem      无人机状态快照（归属机/来航数） */
 UCLASS(Blueprintable)
 class MASSDSP_API UMassDspLogisticsTowerWidget : public UMassDspBuildingWidget
 {
@@ -57,4 +58,10 @@ private:
 
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_DroneCount;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_OwnedDrones;   ///< "外派 X 架 / 休息 X 架"
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_IncomingDrones; ///< "来航 X 架"
 };

@@ -175,6 +175,12 @@ public:
     /** 查询任务当前状态（若 ID 无效返回空指针） */
     const FLogisticsTask* GetTask(const FGuid& TaskId) const;
 
+    /**
+     * 查询物流塔的无人机状态快照，供 Widget UI 每帧刷新时调用。
+     * O(归属机数 + 活跃任务数)，非常轻量。
+     */
+    FTowerDroneStatus QueryTowerDroneStatus(FMassEntityHandle TowerEntity) const;
+
     // 
     //   设备生命周期（设备创建/销毁时调用）
     // 
@@ -293,7 +299,11 @@ private:
         TArray<FGuid>& DemandIds);
 
     /** 派发任务到空闲设备（调用策略表，写设备 POD 状态） */
-    bool TryDispatchTask(FLogisticsTask& Task);
+    /**
+     * 尝试从候选无人机列表中为 Task 分配一架无人机。
+     * @param CandidateIndices  可供选择的 DronePool 下标列表（传入归属机优先列表，或直接传 IdleDroneIndices）
+     */
+    bool TryDispatchTask(FLogisticsTask& Task, const TArray<int32>& CandidateIndices);
 
     /** 推进无人机状态机并同步 ISM（Tick 内部，无虚调用热路径） */
     void UpdateDrones(float DeltaTime);

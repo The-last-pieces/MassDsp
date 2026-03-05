@@ -790,7 +790,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 
 static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 348.f;
+    constexpr float CW = 440.f, CH = 396.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -856,6 +856,17 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
                     FName("Label_DroneCount"), FName("TextBlock_DroneCount"),
                     TEXT("单次运量"), TEXT("—"),
                     IX + IW * 0.5f, 272.f, IW * 0.5f);
+
+    // ── 归属无人机状态 + 来航数 ─────────────────────────────────
+    BuildLabelValue(B,
+                    FName("Label_OwnedDrones"), FName("TextBlock_OwnedDrones"),
+                    TEXT("归属无人机"), TEXT("—"),
+                    IX, 320.f, IW * 0.5f);
+
+    BuildLabelValue(B,
+                    FName("Label_IncomingDrones"), FName("TextBlock_IncomingDrones"),
+                    TEXT("来航"), TEXT("—"),
+                    IX + IW * 0.5f, 320.f, IW * 0.5f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

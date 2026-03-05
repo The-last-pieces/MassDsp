@@ -3,6 +3,7 @@
 #include "MassEntitySubsystem.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
+#include "Subsystems/MassDspLogisticsSubsystem.h"
 
 // 
 
@@ -80,9 +81,38 @@ void UMassDspLogisticsTowerWidget::RefreshWidgets()
         TextBlock_Threshold->SetText(FText::AsNumber(TF->RequestThreshold));
     }
 
-    // ── 可选：单次运量 ───────────────────────────────────────────────────────
+    // ── 可选：单次运量 ───────────────────────────────────────
     if (TextBlock_DroneCount)
     {
         TextBlock_DroneCount->SetText(FText::AsNumber(TF->DroneCargoCount));
+    }
+
+    // ── 可选：归属无人机状态 + 来航无人机数 ─────────────────────────
+    if (TextBlock_OwnedDrones || TextBlock_IncomingDrones)
+    {
+        if (UMassDspLogisticsSubsystem* LogSub = GetWorld()
+                ? GetWorld()->GetSubsystem<UMassDspLogisticsSubsystem>() : nullptr)
+        {
+            const FTowerDroneStatus Status = LogSub->QueryTowerDroneStatus(TargetEntity);
+
+            if (TextBlock_OwnedDrones)
+            {
+                TextBlock_OwnedDrones->SetText(
+                    FText::Format(
+                        NSLOCTEXT("MassDsp", "TowerOwnedDrones", "外派 {0} / 休息 {1}"),
+                        FText::AsNumber(Status.OwnedDeployed),
+                        FText::AsNumber(Status.OwnedResting)));
+            }
+
+            if (TextBlock_IncomingDrones)
+            {
+                TextBlock_IncomingDrones->SetText(
+                    Status.Incoming > 0
+                        ? FText::Format(
+                            NSLOCTEXT("MassDsp", "TowerIncomingDrones", "来航 {0} 架"),
+                            FText::AsNumber(Status.Incoming))
+                        : NSLOCTEXT("MassDsp", "TowerIncomingNone", "—"));
+            }
+        }
     }
 }

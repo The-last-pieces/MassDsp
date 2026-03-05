@@ -395,15 +395,28 @@ void AMassDspGameMode::TestCase2()
 
         for (int32 d = 0; d < DronesPerTower; ++d)
         {
-            const float Angle = (static_cast<float>(d) / DronesPerTower) * 2.f * PI;
-            const FVector InitPos = TowerPos + FVector(FMath::Cos(Angle) * 200.f,
-                                                       FMath::Sin(Angle) * 200.f,
-                                                       100.f + d * 10.f);
-            LogisticsSub->CreateDrone(SupplyTowerEnt, InitPos);
+            // TODO idle的时候也按螺旋盘旋
+            // TODO 请求端也要放无人机
+            // const float Angle = (static_cast<float>(d) / DronesPerTower) * 2.f * PI;
+            // const FVector InitPos = TowerPos + FVector(FMath::Cos(Angle) * 200.f,
+            //                                            FMath::Sin(Angle) * 200.f,
+            //                                            100.f + d * 10.f);
+            LogisticsSub->CreateDrone(SupplyTowerEnt, TowerPos);
         }
+    }
+
+    // ── 每个需求塔同样创建 DronesPerTower 架无人机（主动取货能力）─────────────
+    for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
+    {
+        const int32 Base = GroupIdx * BuildingsPerGroup;
+        const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
+        const FVector DemandPos = LogisticsSpawn[Base + 2].WorldTransform.GetLocation();
+
+        for (int32 d = 0; d < DronesPerTower; ++d)
+            LogisticsSub->CreateDrone(DemandTowerEnt, DemandPos);
     }
 
     UE_LOG(LogTemp, Log,
            TEXT("[Logistics] 100 组物流初始化完成 | %d 供应塔 | %d 需求塔 | %d 架无人机（种子=42）"),
-           NumGroups, NumGroups, NumGroups * DronesPerTower);
+           NumGroups, NumGroups, NumGroups * DronesPerTower * 2);
 }

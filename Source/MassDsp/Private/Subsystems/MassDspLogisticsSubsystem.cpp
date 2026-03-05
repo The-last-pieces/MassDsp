@@ -276,6 +276,45 @@ const FLogisticsTask* UMassDspLogisticsSubsystem::GetTask(const FGuid& TaskId) c
     return AllTasks.Find(TaskId);
 }
 
+FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityHandle TowerEntity) const
+{
+    FTowerDroneStatus Result;
+    const FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(TowerEntity);
+    if (!RTD) return Result;
+
+    // ── 统计归属无人机状态 ────────────────────────────────────────
+    for (const FDroneHandle& Handle : RTD->AffiliatedDroneHandles)
+    {
+        if (!Handle.IsValid()) continue;
+        if (!DronePool.IsValidIndex(Handle.Index)) continue;
+
+        switch (DronePool[Handle.Index].State)
+        {
+        case ELogisticsDeviceState::Idle:
+        case ELogisticsDeviceState::Cooldown:
+            ++Result.OwnedResting;
+            break;
+        default:
+            ++Result.OwnedDeployed;
+            break;
+        }
+    }
+
+    // ── 统计正在飞来本塔的无人机（InTransit_Deliver + DeliveryEntity==本塔） ──────
+    for (const FGuid& TaskId : RTD->ActiveTaskIds)
+    {
+        const FLogisticsTask* Task = AllTasks.Find(TaskId);
+        if (!Task) continue;
+        if (Task->State == ELogisticsTaskState::InTransit_Deliver &&
+            Task->DeliveryEntity == TowerEntity)
+        {
+            ++Result.Incoming;
+        }
+    }
+
+    return Result;
+}
+
 // 
 //  设备创建 / 销毁
 // 
@@ -576,7 +615,24 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             Task.TransferQuantity = BatchQty;
             Task.DeviceType      = ELogisticsDeviceType::Drone;
 
-            if (!TryDispatchTask(Task)) break;
+            // 优先使用归属无人机（Supply塔 + Demand塔），无则回退全局池
+            TArray<int32> AffiliatedCandidates;
+            auto AddAffiliatedIdle = [&](FMassEntityHandle TowerEnt)
+            {
+                if (const FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(TowerEnt))
+                {
+                    for (const FDroneHandle& H : RTD->AffiliatedDroneHandles)
+                    {
+                        if (H.IsValid() && IdleDroneIndices.Contains(H.Index))
+                            AffiliatedCandidates.AddUnique(H.Index);
+                    }
+                }
+            };
+            AddAffiliatedIdle(Supply->PreferredTowerEntity);
+            AddAffiliatedIdle(Demand->PreferredTowerEntity);
+            const TArray<int32>& Candidates = AffiliatedCandidates.IsEmpty() ? IdleDroneIndices : AffiliatedCandidates;
+
+            if (!TryDispatchTask(Task, Candidates)) break;
 
             // 错峰起飞
             if (StaggerIndex > 0)
@@ -613,7 +669,7 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
     }
 }
 
-bool UMassDspLogisticsSubsystem::TryDispatchTask(FLogisticsTask& Task)
+bool UMassDspLogisticsSubsystem::TryDispatchTask(FLogisticsTask& Task, const TArray<int32>& CandidateIndices)
 {
     const TUniquePtr<FLogisticsDeviceDispatchStrategy>* StrategyPtr =
         DispatchStrategies.Find(Task.DeviceType);
@@ -624,13 +680,13 @@ bool UMassDspLogisticsSubsystem::TryDispatchTask(FLogisticsTask& Task)
         return false;
     }
 
-    if (IdleDroneIndices.IsEmpty())
+    if (CandidateIndices.IsEmpty())
     {
         UE_LOG(LogTemp, Warning, TEXT("[Logistics] TryDispatchTask FAIL: no idle drones (pool=%d)"), DronePool.Num());
         return false;
     }
 
-    const int32 SelectedIdx = (*StrategyPtr)->SelectBestDeviceIndex(IdleDroneIndices, Task);
+    const int32 SelectedIdx = (*StrategyPtr)->SelectBestDeviceIndex(CandidateIndices, Task);
     if (SelectedIdx < 0) return false;
 
     FDroneData& Drone = DronePool[SelectedIdx];
