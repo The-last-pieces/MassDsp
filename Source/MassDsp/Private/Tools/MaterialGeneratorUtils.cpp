@@ -34,6 +34,7 @@
 #include "UI/MassDspMinerWidget.h"
 #include "UI/MassDspStorageWidget.h"
 #include "UI/MassDspAssemblerWidget.h"
+#include "UI/MassDspLogisticsTowerWidget.h"
 
 // UMG Editor
 #include "WidgetBlueprint.h"
@@ -404,6 +405,7 @@ namespace WidgetColors
     static constexpr FLinearColor FillMiner{0.22f, 0.56f, 0.90f, 1.00f}; // 蓝
     static constexpr FLinearColor FillStorage{0.20f, 0.78f, 0.42f, 1.00f}; // 绿
     static constexpr FLinearColor FillAssembler{0.92f, 0.64f, 0.18f, 1.00f}; // 琥珀
+    static constexpr FLinearColor FillLogistics{0.15f, 0.75f, 0.82f, 1.00f}; // 青（物流塔）
     static constexpr FLinearColor BarBg{0.06f, 0.08f, 0.12f, 1.00f};
     // 按钮
     static constexpr FLinearColor BtnClose{0.40f, 0.08f, 0.08f, 1.00f};
@@ -769,6 +771,80 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  BP_LogisticsTower（物流塔）
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 440.f, CH = 348.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    // ── 全屏半透明背景 ──────────────────────────────────────────────────────
+    {
+        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+        FSlateBrush Br;
+        Br.TintColor = FSlateColor(WidgetColors::Overlay);
+        Br.DrawAs = ESlateBrushDrawType::Box;
+        Overlay->SetBrush(Br);
+        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
+        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+        S->SetOffsets(FMargin(0.f));
+    }
+
+    // ── 卡片背景 ────────────────────────────────────────────────────────────
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+
+    // ── 标题栏 + 分割线 ─────────────────────────────────────────────────────
+    BuildCommonHeader(B, TEXT("物流塔"), CW);
+
+    constexpr float IX = 20.f, IW = CW - 40.f;
+
+    // ── 物品类型 ─────────────────────────────────────────────────────────────
+    BuildLabelValue(B,
+                    FName("Label_ItemType"), FName("TextBlock_ItemType"),
+                    TEXT("期望物品"), TEXT("—"),
+                    IX, 60.f, IW);
+
+    // ── 库存数量 ─────────────────────────────────────────────────────────────
+    BuildLabelValue(B,
+                    FName("Label_Inventory"), FName("TextBlock_Inventory"),
+                    TEXT("库存数量"), TEXT("0 / 50"),
+                    IX, 108.f, IW);
+
+    // ── 库存进度条 ───────────────────────────────────────────────────────────
+    B.Text(FName("Label_Fill"), TEXT("库存占用"),
+           IX, 160.f, IW, 18.f, WidgetColors::TextLabel, 11);
+    B.Bar(FName("ProgressBar_Storage"),
+          IX, 182.f, IW, 20.f, WidgetColors::FillLogistics);
+
+    // ── 分割线 ───────────────────────────────────────────────────────────────
+    B.Rect(FName("Border_InfoSep"), 0.f, 216.f, CW, 1.f, WidgetColors::Divider);
+
+    // ── 物流参数区 ───────────────────────────────────────────────────────────
+    BuildLabelValue(B,
+                    FName("Label_Coverage"), FName("TextBlock_CoverageRadius"),
+                    TEXT("覆盖半径"), TEXT("—"),
+                    IX, 224.f, IW * 0.5f);
+
+    BuildLabelValue(B,
+                    FName("Label_Drone"), FName("TextBlock_DroneCount"),
+                    TEXT("扫描间隔"), TEXT("—"),
+                    IX + IW * 0.5f, 224.f, IW * 0.5f);
+
+    // ── 运行状态 ─────────────────────────────────────────────────────────────
+    BuildLabelValue(B,
+                    FName("Label_Status"), FName("TextBlock_Status"),
+                    TEXT("调度状态"), TEXT("空闲"),
+                    IX, 294.f, IW);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  公共入口
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -783,9 +859,10 @@ void UMaterialGeneratorUtils::CreateBuildingWidgets()
         void (*Build)(UWidgetBlueprint*);
     };
     const FEntry Entries[] = {
-        {TEXT("BP_Miner"), UMassDspMinerWidget::StaticClass(), &BuildMinerLayout},
-        {TEXT("BP_Maker"), UMassDspAssemblerWidget::StaticClass(), &BuildAssemblerLayout},
-        {TEXT("BP_Storage"), UMassDspStorageWidget::StaticClass(), &BuildStorageLayout},
+        {TEXT("BP_Miner"),          UMassDspMinerWidget::StaticClass(),          &BuildMinerLayout},
+        {TEXT("BP_Maker"),          UMassDspAssemblerWidget::StaticClass(),      &BuildAssemblerLayout},
+        {TEXT("BP_Storage"),        UMassDspStorageWidget::StaticClass(),        &BuildStorageLayout},
+        {TEXT("BP_LogisticsTower"), UMassDspLogisticsTowerWidget::StaticClass(), &BuildLogisticsTowerLayout},
     };
 
     for (const FEntry& E : Entries)
