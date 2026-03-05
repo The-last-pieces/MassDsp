@@ -331,7 +331,7 @@ void AMassDspGameMode::TestCase2()
             {
                 SF->TowerMode = ELogisticsTowerMode::Supply;
                 SF->ItemType = ItemT;
-                SF->RequestThreshold = 50;
+                SF->RequestThreshold = 0;
                 SF->DroneCargoCount = 5;
                 SF->ScanInterval = 0.5f;
             }
@@ -342,7 +342,7 @@ void AMassDspGameMode::TestCase2()
             {
                 DF->TowerMode = ELogisticsTowerMode::Demand;
                 DF->ItemType = ItemT;
-                DF->RequestThreshold = 20;
+                DF->RequestThreshold = 500;
                 DF->DroneCargoCount = 5;
                 DF->ScanInterval = 0.5f;
             }
@@ -406,16 +406,16 @@ void AMassDspGameMode::TestCase2()
 
     // ── 每个需求塔同样创建 DronesPerTower 架无人机（主动取货能力）─────────────
     // 需求塔只需少量无人机即可支持主动取货，保持数量可控避免大量空闲无人机白白占用 UpdateDrones 循环
-    constexpr int32 DronesPerDemandTower = 10;
-    for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
-    {
-        const int32 Base = GroupIdx * BuildingsPerGroup;
-        const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
-        const FVector DemandPos = LogisticsSpawn[Base + 2].WorldTransform.GetLocation();
-
-        for (int32 d = 0; d < DronesPerDemandTower; ++d)
-            LogisticsSub->CreateDrone(DemandTowerEnt, DemandPos);
-    }
+    constexpr int32 DronesPerDemandTower = 0;
+    // for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
+    // {
+    //     const int32 Base = GroupIdx * BuildingsPerGroup;
+    //     const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
+    //     const FVector DemandPos = LogisticsSpawn[Base + 2].WorldTransform.GetLocation();
+    //
+    //     for (int32 d = 0; d < DronesPerDemandTower; ++d)
+    //         LogisticsSub->CreateDrone(DemandTowerEnt, DemandPos);
+    // }
 
     UE_LOG(LogTemp, Log,
            TEXT("[Logistics] 100 组物流初始化完成 | %d 供应塔 | %d 需求塔 | %d 架无人机（种子=42）"),

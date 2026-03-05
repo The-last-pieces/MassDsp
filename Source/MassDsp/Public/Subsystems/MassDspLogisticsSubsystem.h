@@ -307,6 +307,19 @@ private:
      */
     bool TryDispatchTask(FLogisticsTask& Task, const TArray<int32>& CandidateIndices);
 
+    /**
+     * 统计当前正在前往 DemandEntity 的在途货物总量（已派遣但尚未完成的任务中 DeliveryEntity 匹配）。
+     * 用于防止过度派遣：有效需求 = Threshold - Inventory - InTransitTo
+     */
+    int32 ComputeInTransitToEntity(FMassEntityHandle DemandEntity) const;
+
+    /**
+     * 统计当前正在从 SupplyEntity 取货但尚未到达取货点的任务货物量（Dispatched / InTransit_Pickup）。
+     * InTransit_Deliver 阶段货物已从库存扣减，InventoryCount 本身已反映，不重复计算。
+     * 有效供给 = Inventory - Threshold - InTransitFrom
+     */
+    int32 ComputeInTransitFromEntity(FMassEntityHandle SupplyEntity) const;
+
     /** 推进无人机状态机并同步 ISM（Tick 内部，无虚调用热路径） */
     void UpdateDrones(float DeltaTime);
 
