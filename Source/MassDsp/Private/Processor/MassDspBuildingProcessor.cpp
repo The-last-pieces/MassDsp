@@ -53,13 +53,25 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
 
     const float WorldTime = World->GetTimeSeconds();
 
-    ProcessBuilding<FMassDspMinerFragment>(MinerQuery, Context, WorldTime);
-    ProcessBuilding<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
-    ProcessBuilding<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
+    // ── Pass 1: TickExecute + 输出槽（Provide）──────────────────────────────
+    // 每条传送带只有 1 个 Provide 方 → 各线程写不同 FBeltData，ParallelFor 安全
+    ProcessBuildingOutputs<FMassDspMinerFragment>   (MinerQuery,     Context, WorldTime);
+    ProcessBuildingOutputs<FMassDspStorageFragment>  (StorageQuery,   Context, WorldTime);
+    ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
+
+    // ── Pass 2: 输入槽（Consume）────────────────────────────────────────────
+    // 每条传送带只有 1 个 Consume 方 → 各线程写不同 FBeltData，ParallelFor 安全
+    // Pass 1 全部线程归栅后才进入 Pass 2 → Provide/Consume 时间上不重叠，无需锁
+    ProcessBuildingInputs<FMassDspStorageFragment>   (StorageQuery,   Context, WorldTime);
+    ProcessBuildingInputs<FMassDspAssemblerFragment> (AssemblerQuery, Context, WorldTime);
+    // 矿机无 Input Slot，不参与 Pass 2
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Pass 1 驱动：TickExecute + 输出槽（Provide）
+// ─────────────────────────────────────────────────────────────────────────────
 template <class TT> requires IsDspBuildFragment<TT>
-void UMassDspBuildingProcessor::ProcessBuilding(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime) const
+void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime) const
 {
     Query.ParallelForEachEntityChunk(Context, [this, WorldTime](FMassExecutionContext& InContext)
     {
@@ -67,17 +79,14 @@ void UMassDspBuildingProcessor::ProcessBuilding(FMassEntityQuery& Query, FMassEx
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
         const TArrayView<FMassDspBuildingSlotsFragment> SlotsList = InContext.GetMutableFragmentView<FMassDspBuildingSlotsFragment>();
 
-        // 对于合成台，在 Chunk 级别获取 SharedFragment 配方指针；
-        // 同一 Chunk 内所有实体共享同一配方，该指针在 Chunk 遍历期间常驻 L1
         if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
         {
             const FRecipeDataForFragment& Recipe = InContext.GetSharedFragment<FMassDspRecipeSharedFragment>().Recipe;
             if (Recipe.RecipeType == ERecipeType::None) return;
-
             for (int32 i = 0; i < NumEntities; ++i)
             {
                 BuildingFragments[i].TickExecute(WorldTime, Recipe);
-                ProcessSlots(SlotsList[i], InContext, BuildingFragments[i], WorldTime, &Recipe);
+                ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
             }
         }
         else if constexpr (std::is_same_v<TT, FMassDspMinerFragment>)
@@ -85,7 +94,7 @@ void UMassDspBuildingProcessor::ProcessBuilding(FMassEntityQuery& Query, FMassEx
             for (int32 i = 0; i < NumEntities; ++i)
             {
                 BuildingFragments[i].TickExecute(WorldTime);
-                ProcessSlots(SlotsList[i], InContext, BuildingFragments[i], WorldTime);
+                ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime);
             }
         }
         else
@@ -94,85 +103,104 @@ void UMassDspBuildingProcessor::ProcessBuilding(FMassEntityQuery& Query, FMassEx
             for (int32 i = 0; i < NumEntities; ++i)
             {
                 BuildingFragments[i].TickExecute(DeltaTime);
-                ProcessSlots(SlotsList[i], InContext, BuildingFragments[i], WorldTime);
+                ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime);
             }
         }
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Pass 2 驱动：输入槽（Consume）
+// ─────────────────────────────────────────────────────────────────────────────
 template <class TT> requires IsDspBuildFragment<TT>
-void UMassDspBuildingProcessor::ProcessSlots(FMassDspBuildingSlotsFragment& SlotsData, const FMassExecutionContext& Context, TT& Fragment, float WorldTime, const FRecipeDataForFragment* InRecipe) const
+void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime) const
 {
-    // 矿机：InventoryCount == 0 时无法输出，直接跳过输出遍历
-    // 仓库：InventoryCount == 0 时无法输出；>= MaxInventory 时无法接收输入
+    Query.ParallelForEachEntityChunk(Context, [this, WorldTime](FMassExecutionContext& InContext)
+    {
+        const int32 NumEntities = InContext.GetNumEntities();
+        const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
+        const TArrayView<FMassDspBuildingSlotsFragment> SlotsList = InContext.GetMutableFragmentView<FMassDspBuildingSlotsFragment>();
 
-    bool bSkipOutput = false, bSkipInput = false;
+        if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
+        {
+            const FRecipeDataForFragment& Recipe = InContext.GetSharedFragment<FMassDspRecipeSharedFragment>().Recipe;
+            if (Recipe.RecipeType == ERecipeType::None) return;
+            for (int32 i = 0; i < NumEntities; ++i)
+                ProcessInputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
+        }
+        else
+        {
+            for (int32 i = 0; i < NumEntities; ++i)
+                ProcessInputSlots(SlotsList[i], BuildingFragments[i], WorldTime);
+        }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  输出槽核心逻辑（仅 ProvideItemToBelt）
+// ─────────────────────────────────────────────────────────────────────────────
+template <class TT> requires IsDspBuildFragment<TT>
+void UMassDspBuildingProcessor::ProcessOutputSlots(FMassDspBuildingSlotsFragment& SlotsData, TT& Fragment, float WorldTime, const FRecipeDataForFragment* InRecipe) const
+{
+    if (SlotsData.ConnectedOutputCount <= 0) return;
 
     if constexpr (std::is_same_v<TT, FMassDspMinerFragment>)
-    {
-        bSkipOutput = Fragment.InventoryCount == 0;
-    }
-    else if constexpr (std::is_same_v<TT, FMassDspStorageFragment>)
-    {
-        bSkipOutput = Fragment.InventoryCount == 0;
-        bSkipInput = Fragment.InventoryCount >= Fragment.MaxInventory;
-    }
+        if (Fragment.InventoryCount == 0) return;
+    if constexpr (std::is_same_v<TT, FMassDspStorageFragment>)
+        if (Fragment.InventoryCount == 0) return;
 
-    // —— 输出 Slot 处理 ——
-    // ConnectedOutputCount == 0：此建筑所有输出槽均未接入传送带，跳过全部遍历
-    if (SlotsData.ConnectedOutputCount > 0 && !bSkipOutput)
+    const int32 OutputsNum = SlotsData.GetOutputSlots().Num();
+    bool AnySuc = false;
+    for (int Idx = 0; Idx < OutputsNum; ++Idx)
     {
-        const int32 OutputsNum = SlotsData.GetOutputSlots().Num();
-        bool AnySuc = false;
-        for (int Idx = 0; Idx < OutputsNum; ++Idx)
+        auto& Slot = SlotsData.GetOutputSlotRotated(Idx);
+        if (!Slot.ConnectedLaneHandle.IsValid()) continue;
+        if (!Slot.IsReady(WorldTime)) continue;
+
+        if (DspManager->ProvideItemToBelt(Slot.ConnectedLaneHandle, [&Fragment, Idx]()
         {
-            auto& Slot = SlotsData.GetOutputSlotRotated(Idx);
-
-            if (!Slot.ConnectedLaneHandle.IsValid()) continue;
-            if (!Slot.IsReady(WorldTime)) continue; // 纯只读比较，无内存写入
-
-            if (DspManager->ProvideItemToBelt(Slot.ConnectedLaneHandle, [&Fragment, Idx]()
-            {
-                return Fragment.TryProvideItemToSlot(Idx);
-            }))
-            {
-                Slot.SetReadyAt(WorldTime);
-                AnySuc = true;
-            }
-        }
-        if (AnySuc)
+            return Fragment.TryProvideItemToSlot(Idx);
+        }))
         {
-            SlotsData.AddOutputSlotOffset();
+            Slot.SetReadyAt(WorldTime);
+            AnySuc = true;
         }
     }
+    if (AnySuc)
+        SlotsData.AddOutputSlotOffset();
+}
 
-    // —— 输入 Slot 处理 ——
-    if (SlotsData.ConnectedInputCount > 0 && !bSkipInput)
+// ─────────────────────────────────────────────────────────────────────────────
+//  输入槽核心逻辑（仅 ConsumeItemFromBelt）
+// ─────────────────────────────────────────────────────────────────────────────
+template <class TT> requires IsDspBuildFragment<TT>
+void UMassDspBuildingProcessor::ProcessInputSlots(FMassDspBuildingSlotsFragment& SlotsData, TT& Fragment, float WorldTime, const FRecipeDataForFragment* InRecipe) const
+{
+    if (SlotsData.ConnectedInputCount <= 0) return;
+
+    if constexpr (std::is_same_v<TT, FMassDspStorageFragment>)
+        if (Fragment.InventoryCount >= Fragment.MaxInventory) return;
+
+    const int32 InputsNum = SlotsData.GetInputSlots().Num();
+    bool AnySuc = false;
+    for (int Idx = 0; Idx < InputsNum; ++Idx)
     {
-        const int32 InputsNum = SlotsData.GetInputSlots().Num();
-        bool AnySuc = false;
-        for (int Idx = 0; Idx < InputsNum; ++Idx)
-        {
-            auto& Slot = SlotsData.GetInputSlotRotated(Idx);
+        auto& Slot = SlotsData.GetInputSlotRotated(Idx);
+        if (!Slot.ConnectedLaneHandle.IsValid()) continue;
+        if (!Slot.IsReady(WorldTime)) continue;
 
-            if (!Slot.ConnectedLaneHandle.IsValid()) continue;
-            if (!Slot.IsReady(WorldTime)) continue;
-
-            if (DspManager->ConsumeItemFromBelt(Slot.ConnectedLaneHandle, [&Fragment, InRecipe](auto ItemType)
-            {
-                if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
-                    return Fragment.TryConsumeItemFromSlot(ItemType, *InRecipe);
-                else
-                    return Fragment.TryConsumeItemFromSlot(ItemType);
-            }) != EItemType::None)
-            {
-                Slot.SetReadyAt(WorldTime);
-                AnySuc = true;
-            }
-        }
-        if (AnySuc)
+        if (DspManager->ConsumeItemFromBelt(Slot.ConnectedLaneHandle, [&Fragment, InRecipe](auto ItemType)
         {
-            SlotsData.AddInputSlotOffset();
+            if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
+                return Fragment.TryConsumeItemFromSlot(ItemType, *InRecipe);
+            else
+                return Fragment.TryConsumeItemFromSlot(ItemType);
+        }) != EItemType::None)
+        {
+            Slot.SetReadyAt(WorldTime);
+            AnySuc = true;
         }
     }
+    if (AnySuc)
+        SlotsData.AddInputSlotOffset();
 }

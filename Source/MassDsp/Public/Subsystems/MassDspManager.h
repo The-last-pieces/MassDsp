@@ -189,7 +189,11 @@ public:
         const EItemType ItemType = GetItemFunc();
         if (ItemType == EItemType::None) return false;
 
-        FBeltData& BeltData = BeltEntityRegistry.FindOrAdd(BeltHandle);
+        // 并行安全：运行时所有传送带均已预注册，此处只需 Find（纯读 TMap 结构）
+        FBeltData* BeltDataPtr = BeltEntityRegistry.Find(BeltHandle);
+        if (!ensureMsgf(BeltDataPtr, TEXT("ProvideItemToBelt: belt [%d] not registered"), BeltHandle.Index))
+            return false;
+        FBeltData& BeltData = *BeltDataPtr;
 
         // 如果还没有初始化传送带参数，从轨迹同步
         if (BeltData.BeltLength <= 0.f && BeltTrajectories.IsValidIndex(BeltHandle.Index))
