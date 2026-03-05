@@ -211,137 +211,187 @@ void AMassDspGameMode::TestCase1() const
 void AMassDspGameMode::TestCase2()
 {
     // ─────────────────────────────────────────────────────────────────────────
-    // DSP 行星内物流演示（固定种子 = 42，100 组供需配对，全自动调度）
+    // 物流演示（供应塔与需求塔在大范围内随机散布，供需比可调）
     //
-    //   10 × 10 网格，每格间距 8000 cm
-    //   每组结构（沿 X 轴排列）：
-    //     矿机 ──Express──▶ 供应塔 ◀···无人机···▶ 需求塔 ──Express──▶ 仓库
+    //   供应塔和需求塔各自独立随机分布，不再配对紧挨，无人机跨越整个场地调度
+    //   所有塔使用同一物品类型，确保任意供需塔之间均可调度
     //
-    //   随机物品类型：IronOre / CopperOre / Stone / Coal（种子 42 固定）
-    //   供应塔：Supply 模式，RequestThreshold=50，DroneCargoCount=5
-    //   需求塔：Demand 模式，RequestThreshold=20，DroneCargoCount=5
-    //   无人机：每个供应塔 3 架（共 300 架）
+    //  ┌─────────────────────────── 可调常数 ──────────────────────────────┐
+    //  │  NumSupplyTowers  —— 供应塔数量（与 NumDemandTowers 之比即供需比）│
+    //  │  NumDemandTowers  —— 需求塔数量                                   │
+    //  │  DronesPerTower   —— 每个供应塔无人机数量                         │
+    //  │  SpawnRange       —— 塔随机散布半径（cm）                         │
+    //  │  MinTowerDist     —— 两塔之间最小间距（cm，防止重叠）             │
+    //  └───────────────────────────────────────────────────────────────────┘
     // ─────────────────────────────────────────────────────────────────────────
+
+    // ═══════════════════════════ 可调常数 ════════════════════════════════════
+    constexpr int32 NumSupplyTowers = 15; // 供应塔数量
+    constexpr int32 NumDemandTowers = 5; // 需求塔数量（供需比 = 15:5 = 3:1）
+    constexpr int32 DronesPerTower = 30; // 每个供应塔无人机数量
+    constexpr float SpawnRange = 6000.f; // 随机散布半径（cm，±500m）
+    constexpr float MinTowerDist = 1500.f; // 两塔最小间距（cm）
+    constexpr float IntraSpacing = 600.f; // 矿机/仓库 与塔的距离（cm）
+    constexpr int32 RandSeed = 42; // 固定种子，保证每次运行位置相同
+    // ═════════════════════════════════════════════════════════════════════════
+
+    constexpr EItemType ItemType = EItemType::IronOre; // 所有塔使用同一物品类型
+    constexpr int32 NumTotalBuildings = NumSupplyTowers * 2 + NumDemandTowers * 2;
+    //   供应组：矿机 + 供应塔（×NumSupplyTowers）
+    //   需求组：需求塔 + 仓库（×NumDemandTowers）
 
     auto World = GetWorld();
     UMassDspLogisticsSubsystem* LogisticsSub = World->GetSubsystem<UMassDspLogisticsSubsystem>();
     auto DspManager = World->GetSubsystem<UMassDspManager>();
     if (!LogisticsSub || !LogisticsTowerClass)
-    {
         return;
-    }
 
-    constexpr int32 GroupRows = 2;
-    constexpr int32 GroupCols = 2;
-    constexpr int32 NumGroups = GroupRows * GroupCols; // 100
-    constexpr int32 DronesPerTower = 100;
-    constexpr int32 BuildingsPerGroup = 4; // Miner+Supply+Demand+Storage
+    FRandomStream Rand(RandSeed);
 
-    // 固定种子随机流（保证每次运行结果相同）
-    FRandomStream Rand(42);
+    // ─── 随机生成塔的 2D 位置，保证相互间距 ≥ MinTowerDist ───────────────
+    TArray<FVector2D> AllTowerPos; // 已占用位置（用于碰撞检测）
+    AllTowerPos.Reserve(NumSupplyTowers + NumDemandTowers);
 
-    static constexpr EItemType ItemTypes[] = {
-        EItemType::IronOre, // EItemType::CopperOre, EItemType::Stone, EItemType::Coal
-    };
-    static constexpr int32 NumItemTypes = UE_ARRAY_COUNT(ItemTypes);
-
-    TArray<FBuildingSpawnData> LogisticsSpawn;
-    LogisticsSpawn.Reserve(NumGroups * BuildingsPerGroup);
-
-    TArray<EItemType> GroupItemTypes;
-    GroupItemTypes.Reserve(NumGroups);
-
-    for (int32 Row = 0; Row < GroupRows; ++Row)
+    auto TryGetRandomPos = [&](FVector2D& OutPos) -> bool
     {
-        for (int32 Col = 0; Col < GroupCols; ++Col)
+        for (int32 Tries = 0; Tries < 200; ++Tries)
         {
-            constexpr float IntraSpacing = 1500.f;
-            constexpr float GroupSpacingX = 5500.f;
-            constexpr float GroupSpacingY = 1500.f;
-            const FVector GroupOrigin = FVector(
-                (Col - GroupCols * 0.5f) * GroupSpacingX,
-                (Row - GroupRows * 0.5f) * GroupSpacingY,
-                0.f);
-
-            const EItemType ItemT = ItemTypes[Rand.RandRange(0, NumItemTypes - 1)];
-            GroupItemTypes.Add(ItemT);
-
-            // 矿机
-            LogisticsSpawn.Add({
-                MinerClass,
-                FTransform(FRotator(0, 90, 0), GroupOrigin),
-                EBuildingType::Miner
-            });
-            // 供应塔
-            LogisticsSpawn.Add({
-                LogisticsTowerClass,
-                FTransform(FRotator::ZeroRotator, GroupOrigin + FVector(IntraSpacing, 0.f, 0.f)),
-                EBuildingType::LogisticsTower
-            });
-            // 需求塔
-            LogisticsSpawn.Add({
-                LogisticsTowerClass,
-                FTransform(FRotator::ZeroRotator, GroupOrigin + FVector(IntraSpacing * 2.f, 0.f, 0.f)),
-                EBuildingType::LogisticsTower
-            });
-            // 仓库
-            LogisticsSpawn.Add({
-                StorageClass,
-                FTransform(FRotator(0, 180, 0), GroupOrigin + FVector(IntraSpacing * 3.f, 0.f, 0.f)),
-                EBuildingType::Storage
-            });
+            const FVector2D Candidate(
+                Rand.FRandRange(-SpawnRange, SpawnRange),
+                Rand.FRandRange(-SpawnRange, SpawnRange));
+            bool bFarEnough = true;
+            for (const FVector2D& Occupied : AllTowerPos)
+            {
+                if (FVector2D::Distance(Candidate, Occupied) < MinTowerDist)
+                {
+                    bFarEnough = false;
+                    break;
+                }
+            }
+            if (bFarEnough)
+            {
+                OutPos = Candidate;
+                AllTowerPos.Add(Candidate);
+                return true;
+            }
         }
+        // 超出重试次数：强制放置（极低概率，仅当场地极度拥挤时）
+        OutPos = FVector2D(
+            Rand.FRandRange(-SpawnRange, SpawnRange),
+            Rand.FRandRange(-SpawnRange, SpawnRange));
+        AllTowerPos.Add(OutPos);
+        return false;
+    };
+
+    TArray<FVector2D> SupplyPos, DemandPos;
+    SupplyPos.Reserve(NumSupplyTowers);
+    DemandPos.Reserve(NumDemandTowers);
+
+    for (int32 i = 0; i < NumSupplyTowers; ++i)
+    {
+        FVector2D P;
+        TryGetRandomPos(P);
+        SupplyPos.Add(P);
+    }
+    for (int32 i = 0; i < NumDemandTowers; ++i)
+    {
+        FVector2D P;
+        TryGetRandomPos(P);
+        DemandPos.Add(P);
     }
 
-    TArray<FMassEntityHandle> LogisticsEntities = DspManager->BatchSpawnBuildings(LogisticsSpawn);
-    if (LogisticsEntities.Num() < NumGroups * BuildingsPerGroup)
+    // ─── 批量生成建筑数据 ─────────────────────────────────────────────────
+    // 布局：
+    //   供应组（每项 2 个建筑，索引 i*2, i*2+1）：
+    //     [i*2+0]  矿机     位于供应塔 −X 侧 IntraSpacing 处
+    //     [i*2+1]  供应塔   位于 SupplyPos[i]
+    //   需求组（每项 2 个建筑，基础索引 NumSupplyTowers*2）：
+    //     [base+j*2+0]  需求塔   位于 DemandPos[j]
+    //     [base+j*2+1]  仓库     位于需求塔 +X 侧 IntraSpacing 处
+    TArray<FBuildingSpawnData> SpawnData;
+    SpawnData.Reserve(NumTotalBuildings);
+
+    for (int32 i = 0; i < NumSupplyTowers; ++i)
     {
-        UE_LOG(LogTemp, Error, TEXT("[Logistics] 建筑批量创建失败，期望 %d，实际 %d"),
-               NumGroups * BuildingsPerGroup, LogisticsEntities.Num());
+        const FVector TowerPos(SupplyPos[i].X, SupplyPos[i].Y, 0.f);
+        SpawnData.Add({
+            MinerClass,
+            FTransform(FRotator(0, 90, 0), TowerPos + FVector(-IntraSpacing, 0.f, 0.f)),
+            EBuildingType::Miner
+        });
+        SpawnData.Add({
+            LogisticsTowerClass,
+            FTransform(FRotator::ZeroRotator, TowerPos),
+            EBuildingType::LogisticsTower
+        });
+    }
+
+    for (int32 j = 0; j < NumDemandTowers; ++j)
+    {
+        const FVector TowerPos(DemandPos[j].X, DemandPos[j].Y, 0.f);
+        SpawnData.Add({
+            LogisticsTowerClass,
+            FTransform(FRotator::ZeroRotator, TowerPos),
+            EBuildingType::LogisticsTower
+        });
+        SpawnData.Add({
+            StorageClass,
+            FTransform(FRotator(0, 180, 0), TowerPos + FVector(IntraSpacing, 0.f, 0.f)),
+            EBuildingType::Storage
+        });
+    }
+
+    TArray<FMassEntityHandle> Entities = DspManager->BatchSpawnBuildings(SpawnData);
+    if (Entities.Num() < NumTotalBuildings)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[Logistics] 建筑批量创建失败，期望 %d 实际 %d"),
+               NumTotalBuildings, Entities.Num());
         return;
     }
 
-    // 传送带连接 + Fragment 写入
+    // ─── Fragment 写入 + 传送带连接 ──────────────────────────────────────
     if (UMassEntitySubsystem* ESub = World->GetSubsystem<UMassEntitySubsystem>())
     {
         FMassEntityManager& EM = ESub->GetMutableEntityManager();
 
-        for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
+        // 供应组
+        for (int32 i = 0; i < NumSupplyTowers; ++i)
         {
-            const int32 Base = GroupIdx * BuildingsPerGroup;
-            const FMassEntityHandle MinerEnt = LogisticsEntities[Base + 0];
-            const FMassEntityHandle SupplyTowerEnt = LogisticsEntities[Base + 1];
-            const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
-            const FMassEntityHandle StorageEnt = LogisticsEntities[Base + 3];
-            const EItemType ItemT = GroupItemTypes[GroupIdx];
+            const int32 Base = i * 2;
+            const FMassEntityHandle MinerEnt = Entities[Base + 0];
+            const FMassEntityHandle SupplyEnt = Entities[Base + 1];
 
-            // 传送带：矿机 → 供应塔；需求塔 → 仓库
-            DspManager->CreateAndLinkBeltForSlot(MinerEnt, 0, SupplyTowerEnt, 0, EBeltType::Express);
-            DspManager->CreateAndLinkBeltForSlot(DemandTowerEnt, 0, StorageEnt, 0, EBeltType::Express);
+            DspManager->CreateAndLinkBeltForSlot(MinerEnt, 0, SupplyEnt, 0, EBeltType::Express);
 
-            // 矿机：生产指定物品
             if (FMassDspMinerFragment* MF = EM.GetFragmentDataPtr<FMassDspMinerFragment>(MinerEnt))
-            {
-                MF->StoredItemType = ItemT;
-            }
+                MF->StoredItemType = ItemType;
 
-            // 供应塔：Supply 模式
             if (FMassDspLogisticsTowerFragment* SF =
-                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(SupplyTowerEnt))
+                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(SupplyEnt))
             {
                 SF->TowerMode = ELogisticsTowerMode::Supply;
-                SF->ItemType = ItemT;
+                SF->ItemType = ItemType;
                 SF->RequestThreshold = 0;
                 SF->DroneCargoCount = 5;
                 SF->ScanInterval = 0.5f;
             }
+        }
 
-            // 需求塔：Demand 模式
+        // 需求组
+        const int32 DemandBase = NumSupplyTowers * 2;
+        for (int32 j = 0; j < NumDemandTowers; ++j)
+        {
+            const int32 Base = DemandBase + j * 2;
+            const FMassEntityHandle DemandEnt = Entities[Base + 0];
+            const FMassEntityHandle StorageEnt = Entities[Base + 1];
+
+            DspManager->CreateAndLinkBeltForSlot(DemandEnt, 0, StorageEnt, 0, EBeltType::Express);
+
             if (FMassDspLogisticsTowerFragment* DF =
-                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(DemandTowerEnt))
+                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(DemandEnt))
             {
                 DF->TowerMode = ELogisticsTowerMode::Demand;
-                DF->ItemType = ItemT;
+                DF->ItemType = ItemType;
                 DF->RequestThreshold = 500;
                 DF->DroneCargoCount = 5;
                 DF->ScanInterval = 0.5f;
@@ -386,38 +436,30 @@ void AMassDspGameMode::TestCase2()
         ELogisticsDeviceType::Drone,
         MakeUnique<FDroneDispatchStrategy>(LogisticsSub));
 
-    // ── 每个供应塔创建 DronesPerTower 架无人机（环形初始位置）─────────────
-    for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
+    // ── 每个供应塔创建 DronesPerTower 架无人机 ─────────────────────────────
+    int32 TotalDrones = 0;
+    for (int32 i = 0; i < NumSupplyTowers; ++i)
     {
-        const int32 Base = GroupIdx * BuildingsPerGroup;
-        const FMassEntityHandle SupplyTowerEnt = LogisticsEntities[Base + 1];
-        const FVector TowerPos = LogisticsSpawn[Base + 1].WorldTransform.GetLocation();
-
+        const FMassEntityHandle SupplyEnt = Entities[i * 2 + 1];
+        const FVector TowerPos = SpawnData[i * 2 + 1].WorldTransform.GetLocation();
         for (int32 d = 0; d < DronesPerTower; ++d)
-        {
-            // TODO idle的时候也按螺旋盘旋
-            // const float Angle = (static_cast<float>(d) / DronesPerTower) * 2.f * PI;
-            // const FVector InitPos = TowerPos + FVector(FMath::Cos(Angle) * 200.f,
-            //                                            FMath::Sin(Angle) * 200.f,
-            //                                            100.f + d * 10.f);
-            LogisticsSub->CreateDrone(SupplyTowerEnt, TowerPos);
-        }
+            LogisticsSub->CreateDrone(SupplyEnt, TowerPos);
+        TotalDrones += DronesPerTower;
     }
 
-    // ── 每个需求塔同样创建 DronesPerTower 架无人机（主动取货能力）─────────────
-    // 需求塔只需少量无人机即可支持主动取货，保持数量可控避免大量空闲无人机白白占用 UpdateDrones 循环
-    constexpr int32 DronesPerDemandTower = 0;
-    // for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
-    // {
-    //     const int32 Base = GroupIdx * BuildingsPerGroup;
-    //     const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
-    //     const FVector DemandPos = LogisticsSpawn[Base + 2].WorldTransform.GetLocation();
-    //
-    //     for (int32 d = 0; d < DronesPerDemandTower; ++d)
-    //         LogisticsSub->CreateDrone(DemandTowerEnt, DemandPos);
-    // }
+    // ── 每个需求塔创建 DronesPerTower 架无人机 ─────────────────────────────
+    const int32 DemandBase = NumSupplyTowers * 2;
+    for (int32 j = 0; j < NumDemandTowers; ++j)
+    {
+        const FMassEntityHandle DemandEnt = Entities[DemandBase + j * 2 + 0];
+        const FVector TowerPos = SpawnData[DemandBase + j * 2 + 0].WorldTransform.GetLocation();
+        for (int32 d = 0; d < DronesPerTower; ++d)
+            LogisticsSub->CreateDrone(DemandEnt, TowerPos);
+        TotalDrones += DronesPerTower;
+    }
 
     UE_LOG(LogTemp, Log,
-           TEXT("[Logistics] 100 组物流初始化完成 | %d 供应塔 | %d 需求塔 | %d 架无人机（种子=42）"),
-           NumGroups, NumGroups, NumGroups * (DronesPerTower + DronesPerDemandTower));
+           TEXT("[Logistics] 初始化完成 | 供应塔 %d | 需求塔 %d | 供需比 %d:%d | 无人机 %d | 范围 ±%.0fcm (种子=%d)"),
+           NumSupplyTowers, NumDemandTowers, NumSupplyTowers, NumDemandTowers,
+           TotalDrones, SpawnRange, RandSeed);
 }
