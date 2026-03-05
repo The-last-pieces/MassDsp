@@ -42,12 +42,13 @@ void AMassDspLogisticsTower::InitFragmentForEntity(
     FMassDspLogisticsTowerFragment& TowerFrag =
         EntityManager.GetFragmentDataChecked<FMassDspLogisticsTowerFragment>(EntityHandle);
 
+    TowerFrag.TowerMode        = TowerMode;
+    TowerFrag.ItemType         = ItemType;
+    TowerFrag.RequestThreshold = RequestThreshold;
+    TowerFrag.DroneCargoCount  = DroneCargoCount;
     TowerFrag.CoverageRadius   = CoverageRadius;
     TowerFrag.ScanInterval     = ScanInterval;
     TowerFrag.LastScanTime     = 0.f;
     TowerFrag.bDirty           = false;
     TowerFrag.bAcceptsRequests = true;
-    TowerFrag.DesiredItemType  = DesiredItemType;
-    TowerFrag.SupplyTriggerRatio = SupplyTriggerRatio;
-    TowerFrag.DemandTriggerRatio = DemandTriggerRatio;
 }

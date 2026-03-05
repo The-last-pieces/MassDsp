@@ -3,14 +3,10 @@
 #include "MassExecutionContext.h"
 #include "MassCommonTypes.h"
 #include "MassEntityManager.h"
-#include "MassCommonFragments.h"   // FTransformFragment
 
 #include "Fragments/MassDspLogisticsTowerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
-#include "Fragments/MassDspAssemblerFragment.h"
-#include "Fragments/MassDspBuildingSlotsFragment.h"
 
-#include "Subsystems/MassDspManager.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 
 UMassDspLogisticsProcessor::UMassDspLogisticsProcessor()
@@ -22,10 +18,9 @@ UMassDspLogisticsProcessor::UMassDspLogisticsProcessor()
 
 void UMassDspLogisticsProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
-    // 物流塔实体 = 同时拥有这三种 Fragment（由 AMassDspLogisticsTower::GetStaticStructs 保证）
+    // 物流塔实体 = 同时拥有这两种 Fragment（由 AMassDspLogisticsTower::GetStaticStructs 保证）
     TowerQuery.AddRequirement<FMassDspLogisticsTowerFragment>(EMassFragmentAccess::ReadWrite);
     TowerQuery.AddRequirement<FMassDspStorageFragment>(EMassFragmentAccess::ReadOnly);
-    TowerQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
     TowerQuery.RegisterWithProcessor(*this);
 }
 
@@ -35,8 +30,7 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
     if (!World) return;
 
     UMassDspLogisticsSubsystem* Logistics = GetLogisticsSubsystem(World);
-    UMassDspManager*            DspMgr    = GetDspManager(World);
-    if (!Logistics || !DspMgr) return;
+    if (!Logistics) return;
 
     const float Now = World->GetTimeSeconds();
 
@@ -47,105 +41,60 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             InContext.GetMutableFragmentView<FMassDspLogisticsTowerFragment>();
         const TConstArrayView<FMassDspStorageFragment> StorageFrags =
             InContext.GetFragmentView<FMassDspStorageFragment>();
-        const TConstArrayView<FTransformFragment> Transforms =
-            InContext.GetFragmentView<FTransformFragment>();
 
         for (int32 i = 0; i < NumEntities; ++i)
         {
             FMassDspLogisticsTowerFragment& TowerFrag = TowerFrags[i];
             const FMassDspStorageFragment&  SelfStorage = StorageFrags[i];
 
-            //  事件推送已覆盖（bDirty）则跳过兜底扫描 
+            // DSP 风格：模式为 Storage 则不参与调度
+            if (TowerFrag.TowerMode == ELogisticsTowerMode::Storage) continue;
+
+            // 未配置物品类型则跳过
+            if (TowerFrag.ItemType == EItemType::None) continue;
+
+            // 不接受请求则跳过
+            if (!TowerFrag.bAcceptsRequests) continue;
+
+            // 事件推送已覆盖（bDirty）则跳过兜底扫描
             if (TowerFrag.bDirty) continue;
 
-            //  兜底间隔未到 
+            // 兜底间隔未到
             if (Now - TowerFrag.LastScanTime < TowerFrag.ScanInterval) continue;
 
             TowerFrag.LastScanTime = Now;
 
-            const FVector TowerLocation = Transforms[i].GetTransform().GetLocation();
             const FMassEntityHandle TowerEntity = InContext.GetEntity(i);
+            const int32 InventoryCount = SelfStorage.InventoryCount;
+            const int32 Threshold      = TowerFrag.RequestThreshold;
 
-            // ── 一、如果塔自身库存超过 Supply 阈值 → 提交 Supply ──
-            if (SelfStorage.MaxInventory > 0 && SelfStorage.StoredItemType != EItemType::None)
+            if (TowerFrag.TowerMode == ELogisticsTowerMode::Supply)
             {
-                const float SelfFill = static_cast<float>(SelfStorage.InventoryCount)
-                                     / static_cast<float>(SelfStorage.MaxInventory);
-                if (SelfFill >= TowerFrag.SupplyTriggerRatio)
+                // Supply 模式：库存超过阈值 → 提交供货请求
+                // 以塔自身为取货源，PreferredTower 也指向自身，全局匹配逻辑会跟同类型 Demand 匹配
+                if (InventoryCount > Threshold)
                 {
+                    const int32 SendQty = InventoryCount - Threshold;
                     Logistics->SubmitSupplyRequest(
                         TowerEntity,
-                        SelfStorage.StoredItemType,
-                        SelfStorage.InventoryCount / 2,
+                        TowerFrag.ItemType,
+                        SendQty,
                         ELogisticsRequestPriority::Normal,
                         TowerEntity);
                 }
             }
-
-            // ── 二、如果塔配置了 DesiredItemType → 持续提交 Demand ──
-            // 使用 CoordinatorTowerEntity（供应塔）作为协调节点，让 Demand 与 Supply 落入同一队列匹配
-            if (TowerFrag.DesiredItemType != EItemType::None)
+            else if (TowerFrag.TowerMode == ELogisticsTowerMode::Demand)
             {
-                const int32 MaxInv    = FMath::Max(1, SelfStorage.MaxInventory);
-                const float FillRatio = static_cast<float>(SelfStorage.InventoryCount)
-                                       / static_cast<float>(MaxInv);
-                if (FillRatio < TowerFrag.DemandTriggerRatio)
+                // Demand 模式：库存低于阈值 → 提交补货请求
+                if (InventoryCount < Threshold)
                 {
-                    const int32 WantQty = FMath::Max(1, MaxInv - SelfStorage.InventoryCount);
-                    // 有协调塔则路由过去，否则用自身（独立塔模式）
-                    const FMassEntityHandle Coordinator = TowerFrag.CoordinatorTowerEntity.IsValid()
-                        ? TowerFrag.CoordinatorTowerEntity
-                        : TowerEntity;
+                    const int32 WantQty = Threshold - InventoryCount;
                     Logistics->SubmitDemandRequest(
                         TowerEntity,
-                        TowerFrag.DesiredItemType,
+                        TowerFrag.ItemType,
                         WantQty,
                         ELogisticsRequestPriority::Normal,
-                        Coordinator);
-                }
-            }
-
-            //  扫描覆盖范围内的建筑 
-            TArray<FMassEntityHandle> NearbyEntities;
-            DspMgr->FindBuildingsInRadius(TowerLocation, TowerFrag.CoverageRadius, NearbyEntities);
-
-            for (const FMassEntityHandle& NearbyEntity : NearbyEntities)
-            {
-                if (NearbyEntity == TowerEntity) continue; // 跳过自身
-
-                if (const FMassDspStorageFragment* NearbyStorage =
-                        EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(NearbyEntity))
-                {
-                    // 合理性过滤：MaxInventory 超过 100 万视为未初始化，跳过
-                    if (NearbyStorage->MaxInventory <= 0 || NearbyStorage->MaxInventory > 1000000) continue;
-                    // InventoryCount 也须在合法范围内
-                    if (NearbyStorage->InventoryCount < 0 || NearbyStorage->InventoryCount > NearbyStorage->MaxInventory) continue;
-
-                    const float FillRatio = static_cast<float>(NearbyStorage->InventoryCount)
-                                          / static_cast<float>(NearbyStorage->MaxInventory);
-
-                    // ── Supply：附近仓库/塔库存过满 ──
-                    if (FillRatio >= TowerFrag.SupplyTriggerRatio
-                     && NearbyStorage->StoredItemType != EItemType::None
-                     && NearbyStorage->InventoryCount > 0)
-                    {
-                        Logistics->SubmitSupplyRequest(
-                            NearbyEntity,
-                            NearbyStorage->StoredItemType,
-                            NearbyStorage->InventoryCount / 2,
-                            ELogisticsRequestPriority::Normal,
-                            TowerEntity);
-                    }
-
-                    // 附近建筑不再主动发 Demand（由各建筑自己的塔扫描时在 self-check 处理）
-                }
-
-                //  Assembler：输入缓冲不足  Demand 请求 
-                if (const FMassDspAssemblerFragment* NearbyAssembler =
-                        EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(NearbyEntity))
-                {
-                    // TODO[ASSEMBLER]: 检查每个 InputBuffer 缺口，按配方要求提交 Demand 请求
-                    (void)NearbyAssembler;
+                        TowerEntity);
                 }
             }
         }
@@ -157,11 +106,4 @@ UMassDspLogisticsSubsystem* UMassDspLogisticsProcessor::GetLogisticsSubsystem(UW
     if (!LogisticsSubsystem.IsValid())
         LogisticsSubsystem = World->GetSubsystem<UMassDspLogisticsSubsystem>();
     return LogisticsSubsystem.Get();
-}
-
-UMassDspManager* UMassDspLogisticsProcessor::GetDspManager(UWorld* World)
-{
-    if (!DspManager.IsValid())
-        DspManager = World->GetSubsystem<UMassDspManager>();
-    return DspManager.Get();
 }

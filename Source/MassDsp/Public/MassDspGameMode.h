@@ -25,6 +25,12 @@ protected:
     virtual void Tick(float DeltaTime) override;
 
     void ProcessConveyor(float DeltaTime) const;
+    
+private:
+    
+    void TestCase1() const;
+    
+    void TestCase2();
 
 public:
     UPROPERTY(EditDefaultsOnly, Category = "DSP")

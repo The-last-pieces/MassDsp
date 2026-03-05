@@ -9,19 +9,19 @@
 #include "MassDspLogisticsTowerWidget.generated.h"
 
 /**
- * 物流塔交互界面
+ * 物流塔交互界面（戴森球计划行星内物流风格）
  *
  * 蓝图控件命名规范（必须严格一致，否则 BindWidget 报错）：
- *  ProgressBar_Storage      库存占用百分比 [0, 1]（绿/青色进度条）
- *  TextBlock_ItemType       期望/当前存储物品名称
- *  TextBlock_Inventory      "当前数量 / 最大容量"
- *  TextBlock_CoverageRadius 服务覆盖半径（可选，格式 "XXX m"）
- *  TextBlock_DroneCount     最大归属无人机上限（可选，格式 "上限 X 架"）
- *  TextBlock_Status         运行状态（可选，idle / 接受请求 / 暂停）
+ *  ProgressBar_Storage   库存占用百分比 [0, 1]（绿/青色进度条）        [必须]
+ *  TextBlock_ItemType    当前物品类型名称                               [必须]
+ *  TextBlock_Inventory   "当前数量 / 最大容量"                         [必须]
+ *  TextBlock_Mode        运行模式文本（供应 / 需求 / 仓储）             [可选]
+ *  TextBlock_Threshold   请求阈值数量                                   [可选]
+ *  TextBlock_DroneCount  单次无人机运量                                 [可选]
  *
  * 数据来源：
  *  - FMassDspStorageFragment        库存（物品类型、当前数量、最大容量）
- *  - FMassDspLogisticsTowerFragment  物流配置（覆盖半径、脏标、状态开关、期望物品）
+ *  - FMassDspLogisticsTowerFragment  物流配置（运行模式、阈值、单次运量）
  */
 UCLASS(Blueprintable)
 class MASSDSP_API UMassDspLogisticsTowerWidget : public UMassDspBuildingWidget
@@ -50,11 +50,11 @@ private:
     //  BindWidgetOptional（可选，蓝图不放置时静默跳过） 
 
     UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_CoverageRadius;
+    TObjectPtr<UTextBlock> TextBlock_Mode;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_Threshold;
 
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_DroneCount;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_Status;
 };

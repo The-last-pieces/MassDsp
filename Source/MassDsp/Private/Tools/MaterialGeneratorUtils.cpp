@@ -523,15 +523,23 @@ static UWidgetBlueprint* CreateWidgetBP(
 {
     const FString FullPath = PackagePath + TEXT("/") + AssetName;
 
-    // 已存在则跳过
-    if (LoadObject<UObject>(nullptr, *FullPath))
+    // 直接获取或创建包（与材质生成逻辑相同，不删除旧资产）
+    UPackage* Package = CreatePackage(*FullPath);
+    if (!Package)
     {
-        UE_LOG(LogTemp, Log, TEXT("Widget BP already exists, skipping: %s"), *FullPath);
+        UE_LOG(LogTemp, Error, TEXT("Failed to create package: %s"), *FullPath);
         return nullptr;
     }
 
-    UPackage* Package = CreatePackage(*FullPath);
-    if (!Package) return nullptr;
+    // 如果已有同名对象，先将其 Rename 避免工厂创建时 check 失败
+    if (UObject* Existing = StaticFindObjectFast(nullptr, Package, *AssetName))
+    {
+        Existing->Rename(
+            *FString::Printf(TEXT("%s_OLD"), *AssetName),
+            GetTransientPackage(),
+            REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional
+        );
+    }
 
     UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
     Factory->ParentClass = ParentClass;
@@ -539,6 +547,12 @@ static UWidgetBlueprint* CreateWidgetBP(
     UWidgetBlueprint* WBP = Cast<UWidgetBlueprint>(
         Factory->FactoryCreateNew(UWidgetBlueprint::StaticClass(),
                                   Package, *AssetName, RF_Public | RF_Standalone, nullptr, GWarn));
+
+    if (!WBP)
+    {
+        UE_LOG(LogTemp, Error, TEXT("Failed to create Widget Blueprint: %s"), *FullPath);
+        return nullptr;
+    }
 
     return WBP;
 }
@@ -808,7 +822,7 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
     // ── 物品类型 ─────────────────────────────────────────────────────────────
     BuildLabelValue(B,
                     FName("Label_ItemType"), FName("TextBlock_ItemType"),
-                    TEXT("期望物品"), TEXT("—"),
+                    TEXT("物品类型"), TEXT("—"),
                     IX, 60.f, IW);
 
     // ── 库存数量 ─────────────────────────────────────────────────────────────
@@ -826,22 +840,22 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
     // ── 分割线 ───────────────────────────────────────────────────────────────
     B.Rect(FName("Border_InfoSep"), 0.f, 216.f, CW, 1.f, WidgetColors::Divider);
 
-    // ── 物流参数区 ───────────────────────────────────────────────────────────
+    // ── 运行模式 ───────────────────────────────────────────────────────────
     BuildLabelValue(B,
-                    FName("Label_Coverage"), FName("TextBlock_CoverageRadius"),
-                    TEXT("覆盖半径"), TEXT("—"),
+                    FName("Label_Mode"), FName("TextBlock_Mode"),
+                    TEXT("运行模式"), TEXT("仓储"),
                     IX, 224.f, IW * 0.5f);
 
+    // ── 请求阈值 + 单架运量 ─────────────────────────────────────────────
     BuildLabelValue(B,
-                    FName("Label_Drone"), FName("TextBlock_DroneCount"),
-                    TEXT("扫描间隔"), TEXT("—"),
-                    IX + IW * 0.5f, 224.f, IW * 0.5f);
+                    FName("Label_Threshold"), FName("TextBlock_Threshold"),
+                    TEXT("请求阈值"), TEXT("—"),
+                    IX, 272.f, IW * 0.5f);
 
-    // ── 运行状态 ─────────────────────────────────────────────────────────────
     BuildLabelValue(B,
-                    FName("Label_Status"), FName("TextBlock_Status"),
-                    TEXT("调度状态"), TEXT("空闲"),
-                    IX, 294.f, IW);
+                    FName("Label_DroneCount"), FName("TextBlock_DroneCount"),
+                    TEXT("单次运量"), TEXT("—"),
+                    IX + IW * 0.5f, 272.f, IW * 0.5f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -852,6 +866,9 @@ void UMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
+    // 在全部创建前强制清理一次
+    CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
     struct FEntry
     {
         FString Name;
@@ -859,16 +876,20 @@ void UMaterialGeneratorUtils::CreateBuildingWidgets()
         void (*Build)(UWidgetBlueprint*);
     };
     const FEntry Entries[] = {
-        {TEXT("BP_Miner"),          UMassDspMinerWidget::StaticClass(),          &BuildMinerLayout},
-        {TEXT("BP_Maker"),          UMassDspAssemblerWidget::StaticClass(),      &BuildAssemblerLayout},
-        {TEXT("BP_Storage"),        UMassDspStorageWidget::StaticClass(),        &BuildStorageLayout},
+        {TEXT("BP_Miner"), UMassDspMinerWidget::StaticClass(), &BuildMinerLayout},
+        {TEXT("BP_Maker"), UMassDspAssemblerWidget::StaticClass(), &BuildAssemblerLayout},
+        {TEXT("BP_Storage"), UMassDspStorageWidget::StaticClass(), &BuildStorageLayout},
         {TEXT("BP_LogisticsTower"), UMassDspLogisticsTowerWidget::StaticClass(), &BuildLogisticsTowerLayout},
     };
 
     for (const FEntry& E : Entries)
     {
         UWidgetBlueprint* WBP = CreateWidgetBP(UIRoot, E.Name, E.Parent);
-        if (!WBP) continue; // 已存在
+        if (!WBP)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Failed to create: %s"), *E.Name);
+            continue;
+        }
         E.Build(WBP);
         FinalizeWidgetBP(WBP);
     }

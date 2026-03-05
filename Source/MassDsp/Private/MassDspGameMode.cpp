@@ -10,6 +10,7 @@
 
 #include "Logistics/MassDspDroneStrategy.h"
 #include "Fragments/MassDspLogisticsTowerFragment.h"
+#include "Fragments/MassDspMinerFragment.h"
 
 #include "MassEntitySubsystem.h"
 #include "Engine/Engine.h"
@@ -28,21 +29,106 @@ void AMassDspGameMode::BeginPlay()
         GEngine->bEnableOnScreenDebugMessages = true;
     }
 
+    // TestCase1();
+    TestCase2();
+}
+
+void AMassDspGameMode::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+
+    ProcessConveyor(DeltaTime);
+}
+
+void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
+{
+    UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
+    if (!Manager || Manager->BeltEntityRegistry.IsEmpty()) return;
+
+    // --- Step 1: 若传送带数量变化则 O(N) 重建 SoA（正常情况不触发）---
+    if (Manager->BeltEntityRegistry.Num() != Manager->Belt_CachedCount)
+        Manager->RebuildBeltSoA();
+
+    const int32 NumBelts = Manager->Belt_Ptrs.Num();
+    if (NumBelts == 0) return;
+
+    float* RESTRICT TM = Manager->Belt_TotalMove.GetData();
+    const float* RESTRICT BS = Manager->Belt_Speed.GetData();
+    FBeltData** RESTRICT Ptrs = Manager->Belt_Ptrs.GetData();
+
+    // --- Step 2 Pass 2: 同步回 BeltData + 阻塞组合并检查 + Rebase ---
+    static constexpr float RebaseThreshold = 1e6f;
+    for (int32 i = 0; i < NumBelts; ++i)
+    {
+        TM[i] += BS[i] * DeltaTime;
+        FBeltData* BeltData = Ptrs[i];
+        BeltData->TotalMove = TM[i];
+
+        const int32 N = BeltData->ItemCache.Num();
+        if (N == 0) continue;
+
+        if (BeltData->BlockedCount < N)
+        {
+            const float BackOfGroup = (BeltData->BlockedCount > 0)
+                                          ? BeltData->GetGroupFront()
+                                          - static_cast<float>(BeltData->BlockedCount) * FGameConst::ItemSpace
+                                          : BeltData->BeltLength - FGameConst::HalfLength;
+
+            const float FrontFreePos =
+                BeltData->ItemCache[BeltData->BlockedCount].Offset + TM[i];
+
+            if (FrontFreePos >= BackOfGroup)
+            {
+                if (BeltData->BlockedCount == 0)
+                    BeltData->GroupFrontOffset =
+                        (BeltData->BeltLength - FGameConst::HalfLength) - TM[i];
+                ++BeltData->BlockedCount;
+            }
+        }
+
+        if (TM[i] > RebaseThreshold)
+        {
+            for (int32 j = BeltData->BlockedCount; j < N; ++j)
+                BeltData->ItemCache[j].Offset += TM[i];
+            BeltData->GroupFrontOffset += TM[i];
+            TM[i] = BeltData->TotalMove = 0.f;
+        }
+    }
+
+    // --- Step 3: ~30fps 同步视锥体内物品 Transform 到 ISM ---
+    // 视野外传送带完全跳过（CPU 侧视锥剔除），GPU 上传量 = O(可见物品数)
+    Manager->SyncAccum += DeltaTime;
+    if (Manager->SyncAccum >= 1.0f / 60.0f)
+    {
+        Manager->SyncAccum = 0.f;
+
+        // 构建当前帧视锥体（ViewProjectionMatrix → FConvexVolume）
+        FConvexVolume ViewFrustum;
+        FVector CamLoc = FVector::ZeroVector;
+        APlayerController* PC = GetWorld()->GetFirstPlayerController();
+        ULocalPlayer* LP = PC ? PC->GetLocalPlayer() : nullptr;
+        if (LP && LP->ViewportClient && LP->ViewportClient->Viewport)
+        {
+            FSceneViewProjectionData ProjData;
+            if (LP->GetProjectionData(LP->ViewportClient->Viewport, ProjData))
+            {
+                GetViewFrustumBounds(ViewFrustum, ProjData.ComputeViewProjectionMatrix(),
+                                     /*bUseNearPlane=*/true);
+                CamLoc = ProjData.ViewOrigin;
+            }
+        }
+        Manager->UpdateAllBeltItemTransforms(ViewFrustum, CamLoc);
+    }
+}
+
+
+void AMassDspGameMode::TestCase1() const
+{
     UWorld* World = GetWorld();
     UMassDspManager* DspManager = World->GetSubsystem<UMassDspManager>();
     if (!DspManager) return;
 
-    if (!MinerClass || !StorageClass || !AssemblerClass)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("Building Classes not set in GameMode!"));
-        return;
-    }
-
-    // ===== 新方案：批量创建Building Entity（无Actor实例化）=====
-
-    // 大规模创建
-
-    constexpr int N = 100;
+    constexpr int N = 10; // TODO 300的时候内存炸了
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据
@@ -102,9 +188,6 @@ void AMassDspGameMode::BeginPlay()
            AllCreatedBuildings.Num(), SpawnElapsed * 1000.0, AvgSpawnTimeMs);
 
     // 第三步：遍历每组，连接传送带
-    constexpr int BeltsPerGroup = 4; // 每组传送带数量
-    constexpr int TotalBelts = N * N * BeltsPerGroup;
-
     for (int GroupIndex = 0; GroupIndex < N * N; ++GroupIndex)
     {
         const int BaseIndex = GroupIndex * BuildingsPerGroup;
@@ -123,114 +206,152 @@ void AMassDspGameMode::BeginPlay()
     }
 
     DspManager->FlushBeltMesh();
+}
 
-    auto Time3 = FPlatformTime::Seconds();
-
-    const double BeltLinkElapsed = Time3 - Time2;
-    const double AvgBeltTimeMs = (TotalBelts > 0) ? (BeltLinkElapsed * 1000.0 / TotalBelts) : 0.0;
-    UE_LOG(LogTemp, Log, TEXT("[Belt Profile] Total: %d belts | Total time: %.3f ms | Avg per belt: %.4f ms"),
-           TotalBelts, BeltLinkElapsed * 1000.0, AvgBeltTimeMs);
-
-    if (this) return;
-
-    // =====================================================================
-    // 物流演示场景（DSP 风格：塔角色配置 → 系统全自动调度）
+void AMassDspGameMode::TestCase2()
+{
+    // ─────────────────────────────────────────────────────────────────────────
+    // DSP 行星内物流演示（固定种子 = 42，100 组供需配对，全自动调度）
     //
-    //   矿机 A1/A2/A3  ──快速传送带──▶  物流塔 B（供应协调塔）
-    //                                         │  30 架无人机
-    //                                         ▼
-    //                                  物流塔 C（需求方，CoordinatorTower = B）
-    //                                         │
-    //                                  仓库 D（消端）
+    //   10 × 10 网格，每格间距 8000 cm
+    //   每组结构（沿 X 轴排列）：
+    //     矿机 ──Express──▶ 供应塔 ◀···无人机···▶ 需求塔 ──Express──▶ 仓库
     //
-    //   Processor 每 0.5s 扫描一次：
-    //     · 塔 B 自身库存 > 5%  → 提交 Supply(TowerB) 到 TowerB 队列
-    //     · 塔 C DesiredItemType=IronOre, 库存 < 95%
-    //           → 提交 Demand(TowerC) 也路由到 TowerB 队列
-    //     · MatchPendingRequests 在 TowerB 队列内找到 Supply+Demand 配对
-    //       → 立即派遣就近空闲无人机
-    // =====================================================================
-    UMassDspLogisticsSubsystem* LogisticsSub =
-        World->GetSubsystem<UMassDspLogisticsSubsystem>();
+    //   随机物品类型：IronOre / CopperOre / Stone / Coal（种子 42 固定）
+    //   供应塔：Supply 模式，RequestThreshold=50，DroneCargoCount=5
+    //   需求塔：Demand 模式，RequestThreshold=20，DroneCargoCount=5
+    //   无人机：每个供应塔 3 架（共 300 架）
+    // ─────────────────────────────────────────────────────────────────────────
 
+    auto World = GetWorld();
+    UMassDspLogisticsSubsystem* LogisticsSub = World->GetSubsystem<UMassDspLogisticsSubsystem>();
+    auto DspManager = World->GetSubsystem<UMassDspManager>();
     if (!LogisticsSub || !LogisticsTowerClass)
     {
-        UE_LOG(LogTemp, Warning,
-               TEXT("物流演示跳过：LogisticsSubsystem 或 LogisticsTowerClass 为空"));
         return;
     }
 
-    // ── 布局（XY 平面，Z=0）──
-    // A1/A2/A3：三矿机在 TowerB 西侧排列，保证 TowerB 存货充沛
-    // TowerB/C 的覆盖半径默认 2000 cm；B→C 间距 3500 cm，故需扩大半径
-    const FVector TowerBPos = FVector(0.f, 0.f, 0.f);
-    const FVector TowerCPos = FVector(0.f, 4000.f, 0.f); // 离 B 4000 cm，有飞行视觉感
-    const FVector MinerA1Pos = FVector(-2000.f, -800.f, 0.f);
-    const FVector MinerA2Pos = FVector(-2000.f, 0.f, 0.f);
-    const FVector MinerA3Pos = FVector(-2000.f, 800.f, 0.f);
-    const FVector StorageDPos = FVector(0.f, 7000.f, 0.f); // 消端：TowerC 下游
+    constexpr int32 GroupRows = 10;
+    constexpr int32 GroupCols = 10;
+    constexpr int32 NumGroups = GroupRows * GroupCols; // 100
+    constexpr int32 DronesPerTower = 100;
+    constexpr int32 BuildingsPerGroup = 4; // Miner+Supply+Demand+Storage
 
-    TArray<FBuildingSpawnData> DemoSpawn;
-    DemoSpawn.Add({MinerClass, FTransform(FRotator(0, 90, 0), MinerA1Pos), EBuildingType::Miner});
-    DemoSpawn.Add({MinerClass, FTransform(FRotator(0, 90, 0), MinerA2Pos), EBuildingType::Miner});
-    DemoSpawn.Add({MinerClass, FTransform(FRotator(0, 90, 0), MinerA3Pos), EBuildingType::Miner});
-    DemoSpawn.Add({LogisticsTowerClass, FTransform(FRotator::ZeroRotator, TowerBPos), EBuildingType::LogisticsTower});
-    DemoSpawn.Add({LogisticsTowerClass, FTransform(FRotator::ZeroRotator, TowerCPos), EBuildingType::LogisticsTower});
-    DemoSpawn.Add({StorageClass, FTransform(FRotator::ZeroRotator, StorageDPos), EBuildingType::Storage});
+    // 固定种子随机流（保证每次运行结果相同）
+    FRandomStream Rand(42);
 
-    TArray<FMassEntityHandle> DemoEntities = DspManager->BatchSpawnBuildings(DemoSpawn);
-    if (DemoEntities.Num() < 6)
+    static constexpr EItemType ItemTypes[] = {
+        EItemType::IronOre, // EItemType::CopperOre, EItemType::Stone, EItemType::Coal
+    };
+    static constexpr int32 NumItemTypes = UE_ARRAY_COUNT(ItemTypes);
+
+    TArray<FBuildingSpawnData> LogisticsSpawn;
+    LogisticsSpawn.Reserve(NumGroups * BuildingsPerGroup);
+
+    TArray<EItemType> GroupItemTypes;
+    GroupItemTypes.Reserve(NumGroups);
+
+    for (int32 Row = 0; Row < GroupRows; ++Row)
     {
-        UE_LOG(LogTemp, Error, TEXT("物流演示建筑创建失败"));
+        for (int32 Col = 0; Col < GroupCols; ++Col)
+        {
+            constexpr float IntraSpacing = 1500.f;
+            constexpr float GroupSpacingY = 8000.f;
+            constexpr float GroupSpacingX = 8000.f;
+            const FVector GroupOrigin = FVector(
+                (Col - GroupCols * 0.5f) * GroupSpacingX,
+                (Row - GroupRows * 0.5f) * GroupSpacingY,
+                0.f);
+
+            const EItemType ItemT = ItemTypes[Rand.RandRange(0, NumItemTypes - 1)];
+            GroupItemTypes.Add(ItemT);
+
+            // 矿机
+            LogisticsSpawn.Add({
+                MinerClass,
+                FTransform(FRotator(0, 90, 0), GroupOrigin),
+                EBuildingType::Miner
+            });
+            // 供应塔
+            LogisticsSpawn.Add({
+                LogisticsTowerClass,
+                FTransform(FRotator::ZeroRotator, GroupOrigin + FVector(IntraSpacing, 0.f, 0.f)),
+                EBuildingType::LogisticsTower
+            });
+            // 需求塔
+            LogisticsSpawn.Add({
+                LogisticsTowerClass,
+                FTransform(FRotator::ZeroRotator, GroupOrigin + FVector(IntraSpacing * 2.f, 0.f, 0.f)),
+                EBuildingType::LogisticsTower
+            });
+            // 仓库
+            LogisticsSpawn.Add({
+                StorageClass,
+                FTransform(FRotator(0, 180, 0), GroupOrigin + FVector(IntraSpacing * 3.f, 0.f, 0.f)),
+                EBuildingType::Storage
+            });
+        }
+    }
+
+    TArray<FMassEntityHandle> LogisticsEntities = DspManager->BatchSpawnBuildings(LogisticsSpawn);
+    if (LogisticsEntities.Num() < NumGroups * BuildingsPerGroup)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[Logistics] 建筑批量创建失败，期望 %d，实际 %d"),
+               NumGroups * BuildingsPerGroup, LogisticsEntities.Num());
         return;
     }
 
-    const FMassEntityHandle MinerA1 = DemoEntities[0];
-    const FMassEntityHandle MinerA2 = DemoEntities[1];
-    const FMassEntityHandle MinerA3 = DemoEntities[2];
-    const FMassEntityHandle TowerB = DemoEntities[3];
-    const FMassEntityHandle TowerC = DemoEntities[4];
-    const FMassEntityHandle StorageD = DemoEntities[5];
-
-    // ── Fragment 配置（在 EntityManager 上直接写，无需 Actor）──
+    // 传送带连接 + Fragment 写入
     if (UMassEntitySubsystem* ESub = World->GetSubsystem<UMassEntitySubsystem>())
     {
         FMassEntityManager& EM = ESub->GetMutableEntityManager();
 
-        // 塔 B：纯供应协调方
-        //   · SupplyTriggerRatio=0.05 → 库存超过 5% 立即发 Supply（近乎总是发）
-        //   · ScanInterval=0.5s → 高频扫描
-        //   · CoverageRadius=6000 → 覆盖全演示场景
-        if (FMassDspLogisticsTowerFragment* BFrag =
-            EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerB))
+        for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
         {
-            BFrag->SupplyTriggerRatio = 0.05f;
-            BFrag->ScanInterval = 0.5f;
-            BFrag->CoverageRadius = 6000.f;
-        }
+            const int32 Base = GroupIdx * BuildingsPerGroup;
+            const FMassEntityHandle MinerEnt = LogisticsEntities[Base + 0];
+            const FMassEntityHandle SupplyTowerEnt = LogisticsEntities[Base + 1];
+            const FMassEntityHandle DemandTowerEnt = LogisticsEntities[Base + 2];
+            const FMassEntityHandle StorageEnt = LogisticsEntities[Base + 3];
+            const EItemType ItemT = GroupItemTypes[GroupIdx];
 
-        // 塔 C：需求消费方
-        //   · DesiredItemType=IronOre → Processor 扫描时自动提交 Demand
-        //   · DemandTriggerRatio=0.95 → 库存低于 95% 就补货（几乎总是请求）
-        //   · CoordinatorTowerEntity=TowerB → Demand 路由到 TowerB 队列与 Supply 配对
-        if (FMassDspLogisticsTowerFragment* CFrag =
-            EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerC))
-        {
-            CFrag->DesiredItemType = EItemType::IronOre;
-            CFrag->DemandTriggerRatio = 0.95f;
-            CFrag->ScanInterval = 0.5f;
-            CFrag->CoordinatorTowerEntity = TowerB; // 关键：路由到 B 的队列
+            // 传送带：矿机 → 供应塔；需求塔 → 仓库
+            DspManager->CreateAndLinkBeltForSlot(MinerEnt, 0, SupplyTowerEnt, 0, EBeltType::Express);
+            DspManager->CreateAndLinkBeltForSlot(DemandTowerEnt, 0, StorageEnt, 0, EBeltType::Express);
+
+            // 矿机：生产指定物品
+            if (FMassDspMinerFragment* MF = EM.GetFragmentDataPtr<FMassDspMinerFragment>(MinerEnt))
+            {
+                MF->StoredItemType = ItemT;
+            }
+
+            // 供应塔：Supply 模式
+            if (FMassDspLogisticsTowerFragment* SF =
+                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(SupplyTowerEnt))
+            {
+                SF->TowerMode = ELogisticsTowerMode::Supply;
+                SF->ItemType = ItemT;
+                SF->RequestThreshold = 50;
+                SF->DroneCargoCount = 5;
+                SF->ScanInterval = 0.5f;
+            }
+
+            // 需求塔：Demand 模式
+            if (FMassDspLogisticsTowerFragment* DF =
+                EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(DemandTowerEnt))
+            {
+                DF->TowerMode = ELogisticsTowerMode::Demand;
+                DF->ItemType = ItemT;
+                DF->RequestThreshold = 20;
+                DF->DroneCargoCount = 5;
+                DF->ScanInterval = 0.5f;
+            }
         }
     }
 
-    // ── 传送带：3 矿机 → TowerB；TowerC → StorageD ──
-    DspManager->CreateAndLinkBeltForSlot(MinerA1, 0, TowerB, 0, EBeltType::Express);
-    DspManager->CreateAndLinkBeltForSlot(MinerA2, 0, TowerB, 1, EBeltType::Express);
-    DspManager->CreateAndLinkBeltForSlot(MinerA3, 0, TowerB, 2, EBeltType::Express);
-    DspManager->CreateAndLinkBeltForSlot(TowerC, 0, StorageD, 0, EBeltType::Express);
     DspManager->FlushBeltMesh();
 
-    // ── ISM 宿主 Actor（AGameModeBase 无 RootComponent，必须单独 spawn）──
+    // ── ISM 宿主 Actor ──────────────────────────────────────────────────────
     if (DroneMesh)
     {
         FActorSpawnParameters ISMHostParams;
@@ -254,143 +375,35 @@ void AMassDspGameMode::BeginPlay()
         ISMHost->AddInstanceComponent(DroneISM);
         DroneISM->RegisterComponent();
         LogisticsSub->SetupISMComponents(DroneISM, nullptr, nullptr);
-
-        UE_LOG(LogTemp, Log, TEXT("[Logistics] DroneISM created, Mesh=%s"), *DroneMesh->GetName());
     }
     else
     {
         UE_LOG(LogTemp, Warning, TEXT("[Logistics] DroneMesh 未配置，无人机不会显示"));
     }
 
-    // ── 注册无人机分派策略 ──
+    // ── 注册无人机分派策略 ──────────────────────────────────────────────────
     LogisticsSub->RegisterDispatchStrategy(
         ELogisticsDeviceType::Drone,
         MakeUnique<FDroneDispatchStrategy>(LogisticsSub));
 
-    // ── 创建 30 架无人机，全部归属 TowerB（供应侧持有无人机池）──
-    // 初始停靠位置均匀散布在 TowerB 附近，避免首帧全部挤在同一点
-    constexpr int32 TotalDrones = 30;
-    for (int32 i = 0; i < TotalDrones; ++i)
+    // ── 每个供应塔创建 DronesPerTower 架无人机（环形初始位置）─────────────
+    for (int32 GroupIdx = 0; GroupIdx < NumGroups; ++GroupIdx)
     {
-        // 在 TowerB 周围半径 200 cm 内环形分布初始悬停点
-        const float Angle = (static_cast<float>(i) / TotalDrones) * 2.f * PI;
-        const float Spread = 200.f;
-        const FVector InitPos = TowerBPos + FVector(FMath::Cos(Angle) * Spread,
-                                                    FMath::Sin(Angle) * Spread,
-                                                    100.f + i * 5.f);
-        // 直接将 InitPos 传入 CreateDrone，P0~P3 与 ISM 一步到位，避免首次起飞位置跳变
-        LogisticsSub->CreateDrone(TowerB, InitPos);
+        const int32 Base = GroupIdx * BuildingsPerGroup;
+        const FMassEntityHandle SupplyTowerEnt = LogisticsEntities[Base + 1];
+        const FVector TowerPos = LogisticsSpawn[Base + 1].WorldTransform.GetLocation();
+
+        for (int32 d = 0; d < DronesPerTower; ++d)
+        {
+            const float Angle = (static_cast<float>(d) / DronesPerTower) * 2.f * PI;
+            const FVector InitPos = TowerPos + FVector(FMath::Cos(Angle) * 200.f,
+                                                       FMath::Sin(Angle) * 200.f,
+                                                       100.f + d * 10.f);
+            LogisticsSub->CreateDrone(SupplyTowerEnt, InitPos);
+        }
     }
 
     UE_LOG(LogTemp, Log,
-           TEXT("[Logistics Demo] 初始化完成 | TowerB[%d,%d] TowerC[%d,%d] | %d 架无人机"
-               " | 3 矿机持续补货 | Processor 0.5s/次全自动调度"),
-           TowerB.Index, TowerB.SerialNumber,
-           TowerC.Index, TowerC.SerialNumber,
-           TotalDrones);
-}
-
-void AMassDspGameMode::Tick(float DeltaTime)
-{
-    Super::Tick(DeltaTime);
-
-    ProcessConveyor(DeltaTime);
-}
-
-void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
-{
-    auto BeginTime = FPlatformTime::Seconds();
-
-    UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
-    if (!Manager || Manager->BeltEntityRegistry.IsEmpty()) return;
-
-    // --- Step 1: 若传送带数量变化则 O(N) 重建 SoA（正常情况不触发）---
-    if (Manager->BeltEntityRegistry.Num() != Manager->Belt_CachedCount)
-        Manager->RebuildBeltSoA();
-
-    const int32 NumBelts = Manager->Belt_Ptrs.Num();
-    if (NumBelts == 0) return;
-
-    float* RESTRICT TM = Manager->Belt_TotalMove.GetData();
-    const float* RESTRICT BS = Manager->Belt_Speed.GetData();
-    FBeltData** RESTRICT Ptrs = Manager->Belt_Ptrs.GetData();
-
-    // --- Step 2 Pass 1: 纯连续内存 SIMD 加法（AVX2 自动向量化：8 条带/周期）---
-    for (int32 i = 0; i < NumBelts; ++i)
-        TM[i] += BS[i] * DeltaTime;
-
-    // --- Step 2 Pass 2: 同步回 BeltData + 阻塞组合并检查 + Rebase ---
-    static constexpr float RebaseThreshold = 1e6f;
-    for (int32 i = 0; i < NumBelts; ++i)
-    {
-        FBeltData* BeltData = Ptrs[i];
-        BeltData->TotalMove = TM[i];
-
-        const int32 N = BeltData->ItemCache.Num();
-        if (N == 0) continue;
-
-        if (BeltData->BlockedCount < N)
-        {
-            const float BackOfGroup = (BeltData->BlockedCount > 0)
-                                          ? BeltData->GetGroupFront()
-                                          - static_cast<float>(BeltData->BlockedCount) * FGameConst::ItemSpace
-                                          : BeltData->BeltLength - FGameConst::HalfLength;
-
-            const float FrontFreePos =
-                BeltData->ItemCache[BeltData->BlockedCount].Offset + TM[i];
-
-            if (FrontFreePos >= BackOfGroup)
-            {
-                if (BeltData->BlockedCount == 0)
-                    BeltData->GroupFrontOffset =
-                        (BeltData->BeltLength - FGameConst::HalfLength) - TM[i];
-                ++BeltData->BlockedCount;
-            }
-        }
-
-        if (TM[i] > RebaseThreshold)
-        {
-            for (int32 j = BeltData->BlockedCount; j < N; ++j)
-                BeltData->ItemCache[j].Offset += TM[i];
-            BeltData->GroupFrontOffset += TM[i];
-            TM[i] = BeltData->TotalMove = 0.f;
-        }
-    }
-
-    auto EndTime = FPlatformTime::Seconds();
-
-    const double ElapsedMs = (EndTime - BeginTime) * 1000.0;
-    // UE_LOG(LogTemp, Log, TEXT("[Tick Profile] Conveyor Update Time: %.3f ms"), ElapsedMs);
-
-    // --- Step 3: ~30fps 同步视锥体内物品 Transform 到 ISM ---
-    // 视野外传送带完全跳过（CPU 侧视锥剔除），GPU 上传量 = O(可见物品数)
-    Manager->SyncAccum += DeltaTime;
-    if (Manager->SyncAccum >= 1.0f / 60.0f)
-    {
-        Manager->SyncAccum = 0.f;
-
-        auto BeginTime2 = FPlatformTime::Seconds();
-
-        // 构建当前帧视锥体（ViewProjectionMatrix → FConvexVolume）
-        FConvexVolume ViewFrustum;
-        FVector CamLoc = FVector::ZeroVector;
-        APlayerController* PC = GetWorld()->GetFirstPlayerController();
-        ULocalPlayer* LP = PC ? PC->GetLocalPlayer() : nullptr;
-        if (LP && LP->ViewportClient && LP->ViewportClient->Viewport)
-        {
-            FSceneViewProjectionData ProjData;
-            if (LP->GetProjectionData(LP->ViewportClient->Viewport, ProjData))
-            {
-                GetViewFrustumBounds(ViewFrustum, ProjData.ComputeViewProjectionMatrix(),
-                                     /*bUseNearPlane=*/true);
-                CamLoc = ProjData.ViewOrigin;
-            }
-        }
-        Manager->UpdateAllBeltItemTransforms(ViewFrustum, CamLoc);
-
-        auto EndTime2 = FPlatformTime::Seconds();
-
-        const double SyncElapsedMs = (EndTime2 - BeginTime2) * 1000.0;
-        // UE_LOG(LogTemp, Log, TEXT("[Tick Profile] ISM Sync Time: %.3f ms %.3f ms"), SyncElapsedMs, ElapsedMs);
-    }
+           TEXT("[Logistics] 100 组物流初始化完成 | %d 供应塔 | %d 需求塔 | %d 架无人机（种子=42）"),
+           NumGroups, NumGroups, NumGroups * DronesPerTower);
 }

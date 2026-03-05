@@ -417,7 +417,7 @@ FMassEntityHandle UMassDspLogisticsSubsystem::FindNearestEligibleTower(FMassEnti
 }
 
 // 
-//  私有：请求匹配
+//  私有：全局跨塔请求匹配（DSP 行星内物流风格）
 // 
 
 void UMassDspLogisticsSubsystem::MatchPendingRequests()
@@ -429,143 +429,173 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
     if (!EntityManagerPtr) return;
     FMassEntityManager& EntityManager = *EntityManagerPtr;
 
+    // ── Step 1：检查是否有任何塔是脏的 ──────────────────────────────────────
+    bool bAnyDirty = false;
+    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
+    {
+        if (!EntityManager.IsEntityValid(TowerEntity)) continue;
+        const FMassDspLogisticsTowerFragment* TF =
+            EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity);
+        if (TF && TF->bDirty)
+        {
+            bAnyDirty = true;
+            break;
+        }
+    }
+    if (!bAnyDirty) return;
+
+    // ── Step 2：收集全局 Supply / Demand 请求，按 ItemType 分桶 ───────────
+    TMap<EItemType, TArray<FGuid>> SupplyByType;
+    TMap<EItemType, TArray<FGuid>> DemandByType;
+    int32 TotalSupply = 0, TotalDemand = 0;
+
     for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
     {
         if (!EntityManager.IsEntityValid(TowerEntity)) continue;
 
-        FMassDspLogisticsTowerFragment* TowerFrag =
-            EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity);
-
-        if (!TowerFrag || !TowerFrag->bDirty) continue;
-
-        UE_LOG(LogTemp, Log,
-               TEXT("[Logistics] MatchPending: tower=[%d,%d] pendingReqs=%d"),
-               TowerEntity.Index, TowerEntity.SerialNumber,
-               RuntimeData.PendingRequestIds.Num());
-
-        // 统计供/需各多少
-        int32 SupplyCnt = 0, DemandCnt = 0;
-        for (const FGuid& RId : RuntimeData.PendingRequestIds)
+        for (const FGuid& ReqId : RuntimeData.PendingRequestIds)
         {
-            if (const FLogisticsRequest* R = AllRequests.Find(RId))
-                (R->Type == ELogisticsRequestType::Supply ? SupplyCnt : DemandCnt)++;
+            const FLogisticsRequest* Req = AllRequests.Find(ReqId);
+            if (!Req) continue;
+
+            if (Req->Type == ELogisticsRequestType::Supply)
+            {
+                SupplyByType.FindOrAdd(Req->ItemType).Add(ReqId);
+                ++TotalSupply;
+            }
+            else
+            {
+                DemandByType.FindOrAdd(Req->ItemType).Add(ReqId);
+                ++TotalDemand;
+            }
         }
-        UE_LOG(LogTemp, Log,
-               TEXT("[Logistics]   Supply=%d Demand=%d IdleDrones=%d Strategies=%d"),
-               SupplyCnt, DemandCnt, IdleDroneIndices.Num(), DispatchStrategies.Num());
-
-        TryMatchAndDispatchForTower(TowerEntity, RuntimeData);
-
-        TowerFrag->bDirty = false;
-    }
-}
-
-void UMassDspLogisticsSubsystem::TryMatchAndDispatchForTower(
-    FMassEntityHandle TowerEntity, FLogisticsTowerRuntimeData& RuntimeData)
-{
-    // 分拣：按物品类型分桶 Supply/Demand
-    TMap<EItemType, TArray<FGuid>> SupplyByType;
-    TMap<EItemType, TArray<FGuid>> DemandByType;
-
-    for (const FGuid& ReqId : RuntimeData.PendingRequestIds)
-    {
-        const FLogisticsRequest* Req = AllRequests.Find(ReqId);
-        if (!Req) continue;
-        if (Req->Type == ELogisticsRequestType::Supply)
-            SupplyByType.FindOrAdd(Req->ItemType).Add(ReqId);
-        else
-            DemandByType.FindOrAdd(Req->ItemType).Add(ReqId);
     }
 
-    // 对每种物品类型匹配 Supply + Demand
+    UE_LOG(LogTemp, Log,
+           TEXT("[Logistics] GlobalMatch: Supply=%d Demand=%d IdleDrones=%d"),
+           TotalSupply, TotalDemand, IdleDroneIndices.Num());
+
+    // ── Step 3：逐物品类型配对派遣 ──────────────────────────────────────────
     for (auto& [ItemType, SupplyIds] : SupplyByType)
     {
         TArray<FGuid>* DemandIds = DemandByType.Find(ItemType);
         if (!DemandIds || DemandIds->IsEmpty()) continue;
 
-        // 逐个配对，且对同一对 Supply/Demand 尽量批量派遣多架无人机
-        while (!SupplyIds.IsEmpty() && !DemandIds->IsEmpty())
+        DispatchMatchedPairs(SupplyIds, *DemandIds);
+    }
+
+    // ── Step 4：清除所有脏标记 ───────────────────────────────────────────────
+    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
+    {
+        if (!EntityManager.IsEntityValid(TowerEntity)) continue;
+        if (FMassDspLogisticsTowerFragment* TF =
+                EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity))
         {
-            const FGuid SupplyId = SupplyIds[0];
-            const FGuid DemandId = (*DemandIds)[0];
-
-            FLogisticsRequest* Supply = AllRequests.Find(SupplyId);
-            FLogisticsRequest* Demand = AllRequests.Find(DemandId);
-            if (!Supply || !Demand)
-            {
-                SupplyIds.RemoveAt(0);
-                DemandIds->RemoveAt(0);
-                continue;
-            }
-
-            // 获取取货/送货世界位置（只查询一次，复用到所有批次任务）
-            FVector PickupLoc = FVector::ZeroVector;
-            FVector DeliveryLoc = FVector::ZeroVector;
-            if (UWorld* W = GetWorld())
-            {
-                FMassEntityManager* EMPtr = GetEntityManagerSafe(W);
-                if (EMPtr)
-                {
-                    if (const FTransformFragment* PTF = EMPtr->GetFragmentDataPtr<FTransformFragment>(Supply->SourceEntity))
-                        PickupLoc = PTF->GetTransform().GetLocation();
-                    if (const FTransformFragment* DTF = EMPtr->GetFragmentDataPtr<FTransformFragment>(Demand->SourceEntity))
-                        DeliveryLoc = DTF->GetTransform().GetLocation();
-                }
-            }
-
-            // 批量派遣：一对 Supply/Demand 允许同时派出多架无人机
-            // 每批次运量 = min(CarryCapacity, Supply剩余, Demand剩余)
-            int32 SupplyRemaining = Supply->Quantity;
-            int32 DemandRemaining = Demand->Quantity;
-            bool bAnyDispatched = false;
-            int32 StaggerIndex = 0; // 第 N 架无人机延迟 N*Stagger 秒起飞
-
-            while (SupplyRemaining > 0 && DemandRemaining > 0 && !IdleDroneIndices.IsEmpty())
-            {
-                const int32 BatchQty = FMath::Min3(SupplyRemaining, DemandRemaining,
-                                                   FGameConst::DroneCarryCapacity);
-
-                FLogisticsTask Task;
-                Task.TaskId = FGuid::NewGuid();
-                Task.SupplyRequestId = SupplyId;
-                Task.DemandRequestId = DemandId;
-                Task.State = ELogisticsTaskState::Pending;
-                Task.PickupEntity = Supply->SourceEntity;
-                Task.DeliveryEntity = Demand->SourceEntity;
-                Task.PickupLocation = PickupLoc;
-                Task.DeliveryLocation = DeliveryLoc;
-                Task.TransferQuantity = BatchQty;
-                Task.DeviceType = ELogisticsDeviceType::Drone;
-
-                if (!TryDispatchTask(Task)) break; // 无更多空闲无人机
-
-                // 错峰起飞：第 0 架立即起飞，第 N 架延迟 N*Stagger 秒
-                if (StaggerIndex > 0)
-                {
-                    FDroneData& DispatchedDrone = DronePool[Task.DevicePoolIndex];
-                    DispatchedDrone.ElapsedTime =
-                        -(StaggerIndex * FGameConst::DroneDispatchStaggerInterval);
-                }
-
-                AllTasks.Add(Task.TaskId, Task);
-                RuntimeData.ActiveTaskIds.Add(Task.TaskId);
-
-                SupplyRemaining -= BatchQty;
-                DemandRemaining -= BatchQty;
-                bAnyDispatched = true;
-                ++StaggerIndex;
-            }
-
-            // 无论派出多少架，本轮请求对均视为已处理（从待匹配队列摘出）
-            if (bAnyDispatched)
-            {
-                RuntimeData.PendingRequestIds.Remove(SupplyId);
-                RuntimeData.PendingRequestIds.Remove(DemandId);
-            }
-
-            SupplyIds.RemoveAt(0);
-            DemandIds->RemoveAt(0);
+            TF->bDirty = false;
         }
+    }
+}
+
+void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
+    TArray<FGuid>& SupplyIds,
+    TArray<FGuid>& DemandIds)
+{
+    UWorld* World = GetWorld();
+    FMassEntityManager* EntityManagerPtr = World ? GetEntityManagerSafe(World) : nullptr;
+
+    while (!SupplyIds.IsEmpty() && !DemandIds.IsEmpty() && !IdleDroneIndices.IsEmpty())
+    {
+        const FGuid SupplyId = SupplyIds[0];
+        const FGuid DemandId = DemandIds[0];
+
+        FLogisticsRequest* Supply = AllRequests.Find(SupplyId);
+        FLogisticsRequest* Demand = AllRequests.Find(DemandId);
+
+        if (!Supply || !Demand)
+        {
+            SupplyIds.RemoveAt(0);
+            DemandIds.RemoveAt(0);
+            continue;
+        }
+
+        // 取货/送货世界坐标
+        FVector PickupLoc = FVector::ZeroVector;
+        FVector DeliveryLoc = FVector::ZeroVector;
+        if (EntityManagerPtr)
+        {
+            if (const FTransformFragment* TF =
+                    EntityManagerPtr->GetFragmentDataPtr<FTransformFragment>(Supply->SourceEntity))
+                PickupLoc = TF->GetTransform().GetLocation();
+            if (const FTransformFragment* TF =
+                    EntityManagerPtr->GetFragmentDataPtr<FTransformFragment>(Demand->SourceEntity))
+                DeliveryLoc = TF->GetTransform().GetLocation();
+        }
+
+        // 从 Supply 塔 Fragment 读取单架运量上限
+        int32 CargoPerDrone = FGameConst::DroneCarryCapacity;
+        if (EntityManagerPtr)
+        {
+            if (const FMassDspLogisticsTowerFragment* STF =
+                    EntityManagerPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(
+                        Supply->SourceEntity))
+                CargoPerDrone = FMath::Max(1, STF->DroneCargoCount);
+        }
+
+        int32 SupplyRemaining = Supply->Quantity;
+        int32 DemandRemaining = Demand->Quantity;
+        bool  bAnyDispatched  = false;
+        int32 StaggerIndex    = 0;
+
+        while (SupplyRemaining > 0 && DemandRemaining > 0 && !IdleDroneIndices.IsEmpty())
+        {
+            const int32 BatchQty = FMath::Min3(SupplyRemaining, DemandRemaining, CargoPerDrone);
+
+            FLogisticsTask Task;
+            Task.TaskId          = FGuid::NewGuid();
+            Task.SupplyRequestId = SupplyId;
+            Task.DemandRequestId = DemandId;
+            Task.State           = ELogisticsTaskState::Pending;
+            Task.PickupEntity    = Supply->SourceEntity;
+            Task.DeliveryEntity  = Demand->SourceEntity;
+            Task.PickupLocation  = PickupLoc;
+            Task.DeliveryLocation = DeliveryLoc;
+            Task.TransferQuantity = BatchQty;
+            Task.DeviceType      = ELogisticsDeviceType::Drone;
+
+            if (!TryDispatchTask(Task)) break;
+
+            // 错峰起飞
+            if (StaggerIndex > 0)
+            {
+                FDroneData& D = DronePool[Task.DevicePoolIndex];
+                D.ElapsedTime = -(StaggerIndex * FGameConst::DroneDispatchStaggerInterval);
+            }
+
+            AllTasks.Add(Task.TaskId, Task);
+
+            // 挂入 Supply / Demand 两个塔的 ActiveTaskIds（两个不同塔）
+            if (FLogisticsTowerRuntimeData* SRTD = TowerRuntimeData.Find(Supply->PreferredTowerEntity))
+                SRTD->ActiveTaskIds.AddUnique(Task.TaskId);
+            if (FLogisticsTowerRuntimeData* DRTD = TowerRuntimeData.Find(Demand->PreferredTowerEntity))
+                DRTD->ActiveTaskIds.AddUnique(Task.TaskId);
+
+            SupplyRemaining -= BatchQty;
+            DemandRemaining -= BatchQty;
+            bAnyDispatched = true;
+            ++StaggerIndex;
+        }
+
+        if (bAnyDispatched)
+        {
+            // 从各自塔的 PendingRequestIds 中摘出
+            if (FLogisticsTowerRuntimeData* SRTD = TowerRuntimeData.Find(Supply->PreferredTowerEntity))
+                SRTD->PendingRequestIds.Remove(SupplyId);
+            if (FLogisticsTowerRuntimeData* DRTD = TowerRuntimeData.Find(Demand->PreferredTowerEntity))
+                DRTD->PendingRequestIds.Remove(DemandId);
+        }
+
+        SupplyIds.RemoveAt(0);
+        DemandIds.RemoveAt(0);
     }
 }
 

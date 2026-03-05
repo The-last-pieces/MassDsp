@@ -95,6 +95,20 @@ enum class EBuildingType : uint8
     LogisticsTower = 4 UMETA(DisplayName = "物流塔"),
 };
 
+/**
+ * 物流塔运行模式（戴森球计划风格）
+ *   Supply  — 供货方：库存超过 RequestThreshold 时发出供货请求
+ *   Demand  — 需货方：库存低于 RequestThreshold 时发出补货请求
+ *   Storage — 纯仓储：不参与无人机调度，仅作传送带中转缓存
+ */
+UENUM(BlueprintType)
+enum class ELogisticsTowerMode : uint8
+{
+    Supply  = 0 UMETA(DisplayName = "供应"),
+    Demand  = 1 UMETA(DisplayName = "需求"),
+    Storage = 2 UMETA(DisplayName = "仓储"),
+};
+
 // 传送带类型枚举
 UENUM(BlueprintType)
 enum class EBeltType : uint8

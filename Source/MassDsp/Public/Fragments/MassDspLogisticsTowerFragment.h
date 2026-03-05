@@ -7,74 +7,71 @@
 #include "MassDspLogisticsTowerFragment.generated.h"
 
 /**
- * 物流塔专用 Mass Fragment（全 POD，无 TArray）
+ * 物流塔专用 Mass Fragment（全 POD，无 TArray）——戴森球计划行星内物流风格
  *
  * 物流塔继承自 AMassDspStorage，因此同时拥有：
- *   - FMassDspStorageFragment       物品缓冲（传送带 I/O 照常走带，免费）
- *   - FMassDspBuildingSlotsFragment  槽口（可保留用于传送带联动）
+ *   - FMassDspStorageFragment        物品缓冲（传送带 I/O 照常走带）
+ *   - FMassDspBuildingSlotsFragment   槽口（传送带联动）
  *   - FMassDspLogisticsTowerFragment  本 Fragment，物流调度专属
  *
- * 所有动态列表（请求 ID、任务 ID、归属无人机句柄）存在子系统
- * UMassDspLogisticsSubsystem::TowerRuntimeData[EntityHandle] 中，
- * Fragment 只保留必要的 POD 触发字段。
+ * 运行模式（TowerMode）：
+ *   Supply  — 库存 > RequestThreshold 时向全局队列提交 Supply 请求
+ *   Demand  — 库存 < RequestThreshold 时向全局队列提交 Demand 请求
+ *   Storage — 不参与无人机调度，仅缓冲传送带物品
+ *
+ * 全局匹配：SubSystem 跨所有塔收集 Supply/Demand，按 ItemType 分桶配对，
+ *           无需显式指定协调塔（CoordinatorTowerEntity 已移除）。
+ *
+ * 所有动态列表存在 UMassDspLogisticsSubsystem::TowerRuntimeData 中，
+ * Fragment 只保留 POD 触发字段，避免 Mass Chunk 膨胀。
  */
 USTRUCT()
 struct MASSDSP_API FMassDspLogisticsTowerFragment : public FMassFragment
 {
     GENERATED_BODY()
 
-    /** 服务覆盖半径（cm）：Processor 扫描此范围内的建筑并提交请求 */
+    // ─── 运行模式 ────────────────────────────────────────────────────────────
+
+    /** 物流运行模式：供应 / 需求 / 仓储 */
+    UPROPERTY()
+    ELogisticsTowerMode TowerMode = ELogisticsTowerMode::Storage;
+
+    /** 该塔处理的物品类型（None = 未配置，不参与调度） */
+    UPROPERTY()
+    EItemType ItemType = EItemType::None;
+
+    /**
+     * 请求阈值（绝对数量）：
+     *   Supply 模式 — 库存 > RequestThreshold 时发出供货请求，发货量 = InventoryCount - RequestThreshold
+     *   Demand 模式 — 库存 < RequestThreshold 时发出补货请求，补货量 = RequestThreshold - InventoryCount
+     *   Storage 模式 — 作为容量上限参考，不触发请求
+     */
+    UPROPERTY()
+    int32 RequestThreshold = 30;
+
+    /** 单架无人机单次携带货物数量上限（覆盖全局默认值 FGameConst::DroneCarryCapacity） */
+    UPROPERTY()
+    int32 DroneCargoCount = FGameConst::DroneCarryCapacity;
+
+    // ─── 调度控制 ────────────────────────────────────────────────────────────
+
+    /** 服务覆盖半径（cm）：当前保留，未来可用于限制塔间匹配距离 */
     UPROPERTY()
     float CoverageRadius = FGameConst::DefaultLogisticsCoverageRadius;
 
-    /**
-     * 兜底轮询扫描间隔（秒）。
-     * 事件推送（bDirty）优先；超过此间隔仍无活动则 Processor 主动扫描。
-     */
+    /** 兜底轮询间隔（秒）：事件推送（bDirty）优先，超时则 Processor 主动触发扫描 */
     UPROPERTY()
     float ScanInterval = FGameConst::DefaultLogisticsScanInterval;
 
-    /** 上次 Processor 兜底扫描的时间戳（世界时间，秒） */
+    /** 上次兜底扫描的时间戳（世界时间，秒） */
     UPROPERTY()
     float LastScanTime = 0.f;
 
-    /**
-     * 脏标记：有新请求通过事件推送挂入时置 true。
-     * UMassDspLogisticsSubsystem::Tick 收集所有 bDirty=true 的塔优先匹配，
-     * 处理完毕后清零。
-     * 混合策略：事件推送快速响应 + Processor 轮询兜底覆盖漏网请求。
-     */
+    /** 脏标记：有新请求入队时置 true，SubSystem Tick Step2 优先处理后清零 */
     UPROPERTY()
     bool bDirty = false;
 
-    /**
-     * 当前塔是否支持接受外部请求提交（蓝图/运行时可动态开关）。
-     * false 时 SubmitXxxRequest 会跳过此塔的自动路由。
-     */
+    /** 是否接受请求（运行时可动态关闭，置 false 后不再提交新请求） */
     UPROPERTY()
     bool bAcceptsRequests = true;
-
-    /**
-     * 该塔作为消费方时想要的物品类型（None = 纯供应方）。
-     * Processor 看到 DesiredItemType != None 时，该塔就会持续发出该物品的 Demand。
-     */
-    UPROPERTY()
-    EItemType DesiredItemType = EItemType::None;
-
-    /** Supply 触发阈值：自身库存 > 此比例时提交 Supply。不控制附近建筑。 */
-    UPROPERTY()
-    float SupplyTriggerRatio = 0.8f;
-
-    /** Demand 触发阈值：自身库存 < 此比例时提交 Demand（仅当 DesiredItemType != None）。 */
-    UPROPERTY()
-    float DemandTriggerRatio = 0.8f;
-
-    /**
-     * 需求方塔显式指定的协调塔（供应侧的物流塔）。
-     * 有效时，本塔发出的所有 Demand 请求会路由到该塔的队列，
-     * 与该塔发出的 Supply 在同一队列内匹配并调度无人机。
-     * 无效（默认）时需求提交到自身队列（纯自管理模式）。
-     */
-    UPROPERTY()
-    FMassEntityHandle CoordinatorTowerEntity;
 };

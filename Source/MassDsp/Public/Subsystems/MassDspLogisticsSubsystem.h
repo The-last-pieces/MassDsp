@@ -281,16 +281,16 @@ private:
      */
     FMassEntityHandle FindNearestEligibleTower(FMassEntityHandle SourceEntity) const;
 
-    /** 推进脏塔的请求匹配（Tick 每帧 Step 2） */
+    /** 全局跨塔匹配：收集所有塔的 Supply/Demand 请求，按 ItemType 分桶配对，Tick Step2 调用 */
     void MatchPendingRequests();
 
     /**
-     * 尝试为单个塔匹配一对 Supply + Demand 请求并派发任务。
-     * 每次调用只处理一对（避免长帧），可在一帧内多次迭代。
+     * 对全局匹配后的 Supply/Demand 对批量派遗无人机。
+     * SupplyIds / DemandIds 是同一 ItemType 的请求列表（已分桶）。
      */
-    void TryMatchAndDispatchForTower(
-        FMassEntityHandle TowerEntity,
-        FLogisticsTowerRuntimeData& RuntimeData);
+    void DispatchMatchedPairs(
+        TArray<FGuid>& SupplyIds,
+        TArray<FGuid>& DemandIds);
 
     /** 派发任务到空闲设备（调用策略表，写设备 POD 状态） */
     bool TryDispatchTask(FLogisticsTask& Task);

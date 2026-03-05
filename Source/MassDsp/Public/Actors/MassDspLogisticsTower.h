@@ -45,62 +45,50 @@ protected:
     virtual const UScriptStruct* GetStaticStructForFragment() const override;
 
 public:
-    //  物流塔配置 
+    // ──────────────────────────────────────────────────────
+    //  物流塔配置（DSP 行星内物流风格）
+    // ──────────────────────────────────────────────────────
 
     /**
-     * 服务覆盖半径（cm）。
-     * 指定范围内的 Storage / Assembler 将被 Processor 纳入请求扫描。
+     * 运行模式：供应 / 需求 / 仓储
+     *   Supply  — 库存 > RequestThreshold 时向全局队列提交 Supply
+     *   Demand  — 库存 < RequestThreshold 时向全局队列提交 Demand
+     *   Storage — 不参与无人机调度，仅作传送带中转缓冲
      */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower")
+    ELogisticsTowerMode TowerMode = ELogisticsTowerMode::Storage;
+
+    /** 该塔处理的物品类型（None = 未配置，不参与调度） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower")
+    EItemType ItemType = EItemType::None;
+
+    /**
+     * 请求阈值（绝对数量）：
+     *   Supply 模式 — 库存 > 此值时发货，发送量 = InventoryCount - RequestThreshold
+     *   Demand 模式 — 库存 < 此值时补货，补货量 = RequestThreshold - InventoryCount
+     *   Storage 模式 — 仅作参考上限，不触发请求
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
+        meta = (ClampMin = "0", ClampMax = "10000"))
+    int32 RequestThreshold = 30;
+
+    /** 单架无人机单次携带货物数量上限（覆盖全局 FGameConst::DroneCarryCapacity） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
+        meta = (ClampMin = "1", ClampMax = "200"))
+    int32 DroneCargoCount = FGameConst::DroneCarryCapacity;
+
+    /** 服务覆盖半径（cm），目前保留用于调试可视化，匹配不再依赖距离 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
         meta = (ClampMin = "100.0", ClampMax = "50000.0"))
     float CoverageRadius = FGameConst::DefaultLogisticsCoverageRadius;
 
-    /**
-     * 兜底扫描间隔（秒）。
-     * 事件推送优先（bDirty），超过此间隔仍无活动则 Processor 主动扫描周边建筑。
-     */
+    /** 兜底轮询扫描间隔（秒）：事件推送优先，超时后 Processor 主动检查 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
         meta = (ClampMin = "0.1"))
     float ScanInterval = FGameConst::DefaultLogisticsScanInterval;
 
-    /**
-     * 归属此塔的无人机上限数量。
-     * 超出上限的创建请求将被路由到全局无人机池（无塔归属）。
-     */
+    /** 归属此塔的无人机上限数量（用于 GameMode 初始化时批量 CreateDrone） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
         meta = (ClampMin = "0", ClampMax = "500"))
-    int32 MaxAffiliatedDrones = 20;
-
-    /**
-     * 此塔支持使用的设备类型。
-     * 任务分配时子系统只向已启用的设备类型查询空闲设备。
-     * 留空 = 不接受任何设备（用于纯传送带仓库）。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower")
-    TArray<ELogisticsDeviceType> SupportedDeviceTypes = {ELogisticsDeviceType::Drone};
-
-    /**
-     * 库存触发阈值：Supply 请求触发比例（InventoryCount / MaxInventory > 此值时提交供货请求）。
-     * 建议 0.8（80% 满触发外运）。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
-        meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float SupplyTriggerRatio = 0.8f;
-
-    /**
-     * 库存触发阈值：Demand 请求触发比例（InventoryCount / MaxInventory < 此值时提交需货请求）。
-     * 建议 0.2（20% 空触发补货）。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
-        meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float DemandTriggerRatio = 0.2f;
-
-    /**
-     * 该塔作为消费方时希望不断补充的物品类型。
-     * 设置后 Processor 每次扫描都会给该塔提交 Demand，
-     * 无论塔自身库存是否有内容（解决空库不能自动转入问题）。
-     * None = 纯供应方，不主动请求补货。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower")
-    EItemType DesiredItemType = EItemType::None;
+    int32 MaxAffiliatedDrones = 3;
 };

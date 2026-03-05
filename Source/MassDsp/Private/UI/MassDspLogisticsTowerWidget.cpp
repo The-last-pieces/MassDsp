@@ -33,64 +33,56 @@ bool UMassDspLogisticsTowerWidget::GetFragments(
 
 void UMassDspLogisticsTowerWidget::RefreshWidgets()
 {
-    const FMassDspStorageFragment*       SF = nullptr;
+    const FMassDspStorageFragment*        SF = nullptr;
     const FMassDspLogisticsTowerFragment* TF = nullptr;
     if (!GetFragments(SF, TF)) return;
 
-    //  物品类型：优先显示 DesiredItemType，其次显示实际存储类型 
-    const EItemType DisplayItem = (TF->DesiredItemType != EItemType::None)
-        ? TF->DesiredItemType
+    // ── 物品类型：优先显示塔配置的 ItemType，再回退到实际存储类型 ──────────
+    const EItemType DisplayItem = (TF->ItemType != EItemType::None)
+        ? TF->ItemType
         : SF->StoredItemType;
     TextBlock_ItemType->SetText(GetItemTypeDisplayName(DisplayItem));
 
-    //  库存数量 
+    // ── 库存数量 ─────────────────────────────────────────────────────────────
     TextBlock_Inventory->SetText(
         FText::Format(NSLOCTEXT("MassDsp", "LogisticsTowerInventory", "{0} / {1}"),
             FText::AsNumber(SF->InventoryCount),
             FText::AsNumber(SF->MaxInventory)));
 
-    //  库存进度条 
+    // ── 库存进度条 ───────────────────────────────────────────────────────────
     const float Fill = SF->MaxInventory > 0
         ? static_cast<float>(SF->InventoryCount) / static_cast<float>(SF->MaxInventory)
         : 0.f;
     ProgressBar_Storage->SetPercent(Fill);
 
-    //  可选控件：覆盖半径 
-    if (TextBlock_CoverageRadius)
+    // ── 可选：运行模式 ───────────────────────────────────────────────────────
+    if (TextBlock_Mode)
     {
-        // 将 cm 转换并显示为 m，小数点两位
-        const float RadiusM = TF->CoverageRadius / 100.f;
-        TextBlock_CoverageRadius->SetText(
-            FText::Format(NSLOCTEXT("MassDsp", "LogisticsTowerRadius", "{0} m"),
-                FText::AsNumber(FMath::RoundToInt(RadiusM))));
+        FText ModeText;
+        switch (TF->TowerMode)
+        {
+        case ELogisticsTowerMode::Supply:
+            ModeText = NSLOCTEXT("MassDsp", "LogisticsTowerModeSupply",  "供应");
+            break;
+        case ELogisticsTowerMode::Demand:
+            ModeText = NSLOCTEXT("MassDsp", "LogisticsTowerModeDemand",  "需求");
+            break;
+        default:
+            ModeText = NSLOCTEXT("MassDsp", "LogisticsTowerModeStorage", "仓储");
+            break;
+        }
+        TextBlock_Mode->SetText(ModeText);
     }
 
-    //  可选控件：无人机上限（从 Actor CDO 读取静态配置） 
-    // 注意：当前仅展示扫描间隔配置，实时无人机计数留待后续扩展
+    // ── 可选：请求阈值 ───────────────────────────────────────────────────────
+    if (TextBlock_Threshold)
+    {
+        TextBlock_Threshold->SetText(FText::AsNumber(TF->RequestThreshold));
+    }
+
+    // ── 可选：单次运量 ───────────────────────────────────────────────────────
     if (TextBlock_DroneCount)
     {
-        TextBlock_DroneCount->SetText(
-            FText::Format(
-                NSLOCTEXT("MassDsp", "LogisticsTowerScanInterval", "扫描间隔 {0} s"),
-                FText::AsNumber(FMath::RoundToInt(TF->ScanInterval))));
-    }
-
-    //  可选控件：运行状态 
-    if (TextBlock_Status)
-    {
-        FText StatusText;
-        if (!TF->bAcceptsRequests)
-        {
-            StatusText = NSLOCTEXT("MassDsp", "LogisticsTowerStatusPaused", "暂停调度");
-        }
-        else if (TF->bDirty)
-        {
-            StatusText = NSLOCTEXT("MassDsp", "LogisticsTowerStatusActive", "调度中");
-        }
-        else
-        {
-            StatusText = NSLOCTEXT("MassDsp", "LogisticsTowerStatusIdle", "空闲");
-        }
-        TextBlock_Status->SetText(StatusText);
+        TextBlock_DroneCount->SetText(FText::AsNumber(TF->DroneCargoCount));
     }
 }
