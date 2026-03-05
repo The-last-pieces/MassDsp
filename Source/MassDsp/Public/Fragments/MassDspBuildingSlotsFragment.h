@@ -86,6 +86,14 @@ private:
     int32 InputOffset = 0;
 
 public:
+    // 已接入传送带的 Output/Input 槽数量（ProcessSlots 顶层早退用）。
+    // 仅在 CreateAndLinkBeltForSlot 成功时由 Manager 自增。
+    int32 ConnectedOutputCount = 0;
+    int32 ConnectedInputCount  = 0;
+
+    FORCEINLINE void MarkOutputConnected() { ++ConnectedOutputCount; }
+    FORCEINLINE void MarkInputConnected()  { ++ConnectedInputCount; }
+
     void AddSlot(const FBuildingSlotState& NewSlot);
 
     TArrayView<FBuildingSlotState> GetOutputSlots();

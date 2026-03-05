@@ -51,17 +51,11 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     // 将 IsValid 检查提升到 Execute 顶层一次，避免在每个实体的 ProcessSlots 里重复检查
     if (!DspManager.IsValid()) return;
 
-    auto BeginTime = FPlatformTime::Seconds();
-
     const float WorldTime = World->GetTimeSeconds();
 
     ProcessBuilding<FMassDspMinerFragment>(MinerQuery, Context, WorldTime);
     ProcessBuilding<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
     ProcessBuilding<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
-
-    auto Elapsed = FPlatformTime::Seconds() - BeginTime;
-
-    UE_LOG(LogTemp, Log, TEXT("BuildingProcessor Execute time: %.3f ms"), Elapsed * 1000.f);
 }
 
 template <class TT> requires IsDspBuildFragment<TT>
@@ -125,9 +119,10 @@ void UMassDspBuildingProcessor::ProcessSlots(FMassDspBuildingSlotsFragment& Slot
     }
 
     // —— 输出 Slot 处理 ——
-    const auto OutputsNum = SlotsData.GetOutputSlots().Num();
-    if (OutputsNum > 0 && !bSkipOutput)
+    // ConnectedOutputCount == 0：此建筑所有输出槽均未接入传送带，跳过全部遍历
+    if (SlotsData.ConnectedOutputCount > 0 && !bSkipOutput)
     {
+        const int32 OutputsNum = SlotsData.GetOutputSlots().Num();
         bool AnySuc = false;
         for (int Idx = 0; Idx < OutputsNum; ++Idx)
         {
@@ -152,9 +147,9 @@ void UMassDspBuildingProcessor::ProcessSlots(FMassDspBuildingSlotsFragment& Slot
     }
 
     // —— 输入 Slot 处理 ——
-    const auto InputsNum = SlotsData.GetInputSlots().Num();
-    if (InputsNum > 0 && !bSkipInput)
+    if (SlotsData.ConnectedInputCount > 0 && !bSkipInput)
     {
+        const int32 InputsNum = SlotsData.GetInputSlots().Num();
         bool AnySuc = false;
         for (int Idx = 0; Idx < InputsNum; ++Idx)
         {

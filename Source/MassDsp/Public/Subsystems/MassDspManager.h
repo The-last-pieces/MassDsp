@@ -4,7 +4,6 @@
 #include "GameConst.h"
 
 #include "Subsystems/WorldSubsystem.h"
-#include "MassEntityTemplate.h"
 #include "MassEntityManager.h"
 #include "MassDspBeltTypes.h"
 #include "ProceduralMeshComponent.h"
@@ -67,15 +66,15 @@ public:
 
     // ── SoA 热数据（供 ProcessConveyor SIMD Pass 使用）──────────────────────
     // 与 BeltEntityRegistry 元素一一对应，通过 FBeltData::TickIdx 索引。
-    TArray<float>      Belt_TotalMove;        // 对应 FBeltData::TotalMove
-    TArray<float>      Belt_Speed;            // 对应 FBeltData::BeltSpeed（初始化后不变）
-    TArray<FBeltData*> Belt_Ptrs;             // 指向 BeltEntityRegistry 内元素
-    int32              Belt_CachedCount = -1; // 触发重建的标记
+    TArray<float> Belt_TotalMove; // 对应 FBeltData::TotalMove
+    TArray<float> Belt_Speed; // 对应 FBeltData::BeltSpeed（初始化后不变）
+    TArray<FBeltData*> Belt_Ptrs; // 指向 BeltEntityRegistry 内元素
+    int32 Belt_CachedCount = -1; // 触发重建的标记
 
     // ── SoA 剔除热数据（供 UpdateAllBeltItemTransforms 空间网格使用）────────
-    TArray<FVector> Belt_RepPos;       // BeltTrajectories[i].RepresentativePosition
-    TArray<float>   Belt_BoundRadius;  // BeltTrajectories[i].BoundRadius
-    TArray<int32>   Belt_TrajIndex;    // BeltTrajectories 直接寻址下标（= Handle.Index）
+    TArray<FVector> Belt_RepPos; // BeltTrajectories[i].RepresentativePosition
+    TArray<float> Belt_BoundRadius; // BeltTrajectories[i].BoundRadius
+    TArray<int32> Belt_TrajIndex; // BeltTrajectories 直接寻址下标（= Handle.Index）
 
     // 空间哈希网格：格子坐标 → SoA 下标列表，格子边长 SpatialGridCellSize
     static constexpr float SpatialGridCellSize = 5000.f; // 50m
@@ -170,12 +169,72 @@ public:
     void FlushBeltMesh();
 
     /** 上游建筑将物品放入传送带入口端（Front，distance ≈ 0）。
-     *  若入口无空间返回 false，不消耗 GetItemFunc。*/
-    bool ProvideItemToBelt(FBeltHandle BeltHandle, const TFunction<EItemType()>& GetItemFunc);
+     *  若入口无空间返回 false，不消耗 GetItemFunc。
+     *  接受任意可调用类型（lambda/functor），编译器可完全内联，消除 TFunction 虚分派开销。*/
+    template <typename TGetItem>
+    bool ProvideItemToBelt(FBeltHandle BeltHandle, TGetItem&& GetItemFunc)
+    {
+        if (!BeltHandle.IsValid()) return false;
+
+        if (const FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle))
+        {
+            if (!BeltData->ItemCache.IsEmpty())
+            {
+                if (BeltData->GetEffectivePosition(BeltData->ItemCache.Num() - 1)
+                    <= FGameConst::HalfLength * 3 + FGameConst::MinSpacing)
+                    return false;
+            }
+        }
+
+        const EItemType ItemType = GetItemFunc();
+        if (ItemType == EItemType::None) return false;
+
+        FBeltData& BeltData = BeltEntityRegistry.FindOrAdd(BeltHandle);
+
+        // 如果还没有初始化传送带参数，从轨迹同步
+        if (BeltData.BeltLength <= 0.f && BeltTrajectories.IsValidIndex(BeltHandle.Index))
+        {
+            const FBeltTrajectory& Belt = BeltTrajectories[BeltHandle.Index];
+            BeltData.BeltLength = Belt.TotalLength;
+            BeltData.BeltSpeed = Belt.Speed;
+            if (BeltData.TickIdx >= 0 && BeltData.TickIdx < Belt_Speed.Num())
+                Belt_Speed[BeltData.TickIdx] = BeltData.BeltSpeed;
+        }
+
+        FBeltItemCache NewItem;
+        NewItem.Offset = FGameConst::HalfLength - BeltData.TotalMove;
+        NewItem.ItemType = ItemType;
+        BeltData.ItemCache.PushLast(NewItem);
+        return true;
+    }
 
     /** 下游建筑从传送带出口端（Tail，distance ≈ BeltLength）取走物品。
-     *  物品尚未到达出口或 ValidateItemFunc 拒绝时返回 EItemType::None。*/
-    EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, const TFunction<bool(EItemType)>& ValidateItemFunc);
+     *  物品尚未到达出口或 ValidateItemFunc 拒绝时返回 EItemType::None。
+     *  接受任意可调用类型（lambda/functor），编译器可完全内联，消除 TFunction 虚分派开销。*/
+    template <typename TValidate>
+    EItemType ConsumeItemFromBelt(FBeltHandle BeltHandle, TValidate&& ValidateItemFunc)
+    {
+        FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle);
+        if (!BeltData || BeltData->ItemCache.IsEmpty()) return EItemType::None;
+        if (BeltData->BlockedCount <= 0) return EItemType::None;
+
+        if (ValidateItemFunc(BeltData->ItemCache[0].ItemType))
+        {
+            const EItemType ConsumedType = BeltData->ItemCache[0].ItemType;
+            BeltData->ItemCache.PopFirst();
+            --BeltData->BlockedCount;
+
+            // O(1)：只修改 GroupFrontOffset，整组同步获得新起点
+            if (BeltData->BlockedCount > 0)
+            {
+                BeltData->GroupFrontOffset =
+                    (BeltData->BeltLength - FGameConst::HalfLength - FGameConst::ItemSpace)
+                    - BeltData->TotalMove;
+            }
+            return ConsumedType;
+        }
+        return EItemType::None;
+    }
 
     // ISM 渲染：只把位于视锥体内且距离小于 MaxRenderDistance 的传送带物品放入 ISM
     // 平视：视锥剔除侧面/背面；飞高：距离上限截断覆盖面积，两者互补
@@ -293,11 +352,8 @@ public:
      * @param OutEntity       结果实体句柄
      * @param OutBuildingType 最近建筑的类型
      * @param OutLocation     最近建筑的世界坐标
-     * @return                是否找到有效建筑
-     */
-    /**
-     * @param LocationFilter  可选过滤器，传入建筑世界坐标，返回 false 则跳过该建筑。
-     *                        可用于视锥检测等额外筛选。
+     * @param LocationFilter  可选过滤器，传入建筑世界坐标，返回 false 则跳过该建筑。可用于视锥检测等额外筛选。
+     * @return                是否找到有效建筑 
      */
     bool FindNearestBuilding(
         const FVector& PlayerLocation,
@@ -316,7 +372,7 @@ public:
 private:
     // ──── 建筑空间哈希网格 (XY 二维) ─────────────────────────────────────────
     /** 网格单元尺寸 (cm)，每格 40m；查询时按 floor((Q±R)/CellSize) 范围遍历格子 */
-    static constexpr float BuildingGridCellSize  = 4000.f;
+    static constexpr float BuildingGridCellSize = 4000.f;
 
     /** 槽口相对建筑中心的最大偏移 (cm)，槽口查询时在建筑搜索半径外再扩展此量 */
     static constexpr float MaxBuildingSlotOffset = 1000.f;
@@ -390,7 +446,7 @@ private:
      */
     static FDubinsPathData ComputeDubinsPath(
         const FVector2D& StartPos, float StartHeading,
-        const FVector2D& EndPos,   float EndHeading,
+        const FVector2D& EndPos, float EndHeading,
         float r = DubinsMinTurningRadius);
 
     /**
