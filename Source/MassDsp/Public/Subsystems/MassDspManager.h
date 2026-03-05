@@ -181,10 +181,6 @@ public:
     // 平视：视锥剔除侧面/背面；飞高：距离上限截断覆盖面积，两者互补
     void UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, const FVector& CameraPos);
 
-    // 新增：从蓝图类创建单个Building Entity（运行时动态创建）
-    FMassEntityHandle SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,
-                                             EBuildingType BuildingType);
-
     // 新增：批量创建Building Entity（关卡初始化用）
     TArray<FMassEntityHandle> BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList);
 
@@ -342,9 +338,6 @@ private:
      * 因每个建筑只注册到一个格（其原点所在格），结果集内无重复项。
      */
     void QueryBuildingGridRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const;
-
-    // 内部辅助方法：创建Building Entity的核心逻辑
-    FMassEntityHandle CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData);
 
     // 按需懒创建指定物品类型的 ISM 组件
     UInstancedStaticMeshComponent* GetOrCreateIsmForItemType(EItemType ItemType);

@@ -38,23 +38,22 @@ struct FBuildingSlotState
     UPROPERTY()
     float BeltSpeed = 0.f;
 
-    // Slot冷却
+    // Slot 允许下次传输的绝对世界时间（代替剩余冷却秒数，避免每帧写入 Cache Line）
     UPROPERTY()
-    float Cooldown = 0.f;
+    float ReadyAtTime = 0.f;
 
-    bool CheckCooldown(float DeltaTime)
+    // 纯只读比较，不写内存
+    bool IsReady(float WorldTime) const
     {
-        if (Cooldown > 0.f)
-        {
-            Cooldown = FMath::Max(0.f, Cooldown - DeltaTime);
-            return false;
-        }
-        return true;
+        return WorldTime >= ReadyAtTime;
     }
 
-    void ResetCooldown()
+    void SetReadyAt(float WorldTime)
     {
-        Cooldown = (FGameConst::HalfLength * 2 + FGameConst::MinSpacing) / BeltSpeed;
+        if (BeltSpeed > 0.f)
+        {
+            ReadyAtTime = WorldTime + (FGameConst::HalfLength * 2 + FGameConst::MinSpacing) / BeltSpeed;
+        }
     }
 };
 

@@ -15,15 +15,24 @@ bool FMassDspMinerFragment::TryConsumeItemFromSlot(EItemType ItemType)
     return false;
 }
 
-void FMassDspMinerFragment::TickExecute(float DeltaTime)
+void FMassDspMinerFragment::TickExecute(float WorldTime)
 {
-    if (InventoryCount < MaxInventory)
+    if (InventoryCount >= MaxInventory) return;
+
+    // 第一帧初始化计时器，避免放置时立即产出
+    if (NextProductionWorldTime <= 0.f)
     {
-        ProductionProgress += DeltaTime / (ProductionInterval > 0 ? ProductionInterval : 1.0f);
-        if (auto ProgressInt = FMath::FloorToInt(ProductionProgress); ProgressInt >= 1)
-        {
-            InventoryCount = FMath::Min(InventoryCount + ProgressInt, MaxInventory);
-            ProductionProgress -= ProgressInt;
-        }
+        NextProductionWorldTime = WorldTime + ProductionInterval;
+        return;
     }
+
+    if (WorldTime < NextProductionWorldTime) return;
+
+    // 计算本帧应批量产出多少（追帧补产，如跳帧或暂停后恢复）
+    const int32 BatchCount = FMath::Min(
+        FMath::FloorToInt((WorldTime - NextProductionWorldTime) / ProductionInterval) + 1,
+        MaxInventory - InventoryCount
+    );
+    InventoryCount += BatchCount;
+    NextProductionWorldTime += BatchCount * ProductionInterval;
 }

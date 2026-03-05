@@ -19,8 +19,9 @@ void UMassDspMinerWidget::RefreshWidgets()
     const FMassDspMinerFragment* F = GetFragment();
     if (!F) return;
 
-    // 生产进度条
-    ProgressBar_Production->SetPercent(F->ProductionProgress);
+    // 生产进度条（从绝对时间戳推算 [0,1]）
+    const float WorldTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+    ProgressBar_Production->SetPercent(F->GetProductionProgress(WorldTime));
 
     // 物品类型名称
     TextBlock_ItemType->SetText(GetItemTypeDisplayName(F->StoredItemType));

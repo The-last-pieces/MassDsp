@@ -13,9 +13,9 @@ struct MASSDSP_API FMassDspMinerFragment : public FMassFragment
 {
     GENERATED_BODY()
 
-    // 当前生产进度 (0.0 - 1.0)
+    // 下次生产触发的绝对世界时间（0 = 尚未初始化，第一帧会自动设置）
     UPROPERTY()
-    float ProductionProgress = 0.0f;
+    float NextProductionWorldTime = 0.0f;
 
     // 生产间隔（秒）
     UPROPERTY()
@@ -36,6 +36,14 @@ struct MASSDSP_API FMassDspMinerFragment : public FMassFragment
     EItemType TryProvideItemToSlot(int SlotIdx);
 
     static bool TryConsumeItemFromSlot(EItemType ItemType);
-    
-    void TickExecute(float DeltaTime);
-};
+
+    // 参数为当前世界绝对时间（World->GetTimeSeconds()）
+    // 大多数帧内因未到触发时刻而立即返回，避免无意义的浮点除法
+    void TickExecute(float WorldTime);
+    // 返回 [0,1] 的生产进度（供 UI 进度条使用），WorldTime = World->GetTimeSeconds()
+    float GetProductionProgress(float WorldTime) const
+    {
+        if (NextProductionWorldTime <= 0.f || ProductionInterval <= 0.f) return 0.f;
+        const float Remaining = NextProductionWorldTime - WorldTime;
+        return FMath::Clamp(1.f - Remaining / ProductionInterval, 0.f, 1.f);
+    }};

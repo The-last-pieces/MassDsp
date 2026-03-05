@@ -391,6 +391,6 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
         auto EndTime2 = FPlatformTime::Seconds();
 
         const double SyncElapsedMs = (EndTime2 - BeginTime2) * 1000.0;
-        UE_LOG(LogTemp, Log, TEXT("[Tick Profile] ISM Sync Time: %.3f ms %.3f ms"), SyncElapsedMs, ElapsedMs);
+        // UE_LOG(LogTemp, Log, TEXT("[Tick Profile] ISM Sync Time: %.3f ms %.3f ms"), SyncElapsedMs, ElapsedMs);
     }
 }

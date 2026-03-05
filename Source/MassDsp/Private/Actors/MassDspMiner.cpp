@@ -25,7 +25,7 @@ void AMassDspMiner::InitFragmentForEntity(FMassEntityManager& EntityManager, FMa
     FMassDspMinerFragment& MinerFragment = EntityManager.GetFragmentDataChecked<FMassDspMinerFragment>(EntityHandle);
 
     MinerFragment.ProductionInterval = ProductionInterval;
-    MinerFragment.ProductionProgress = 0.0f;
+    MinerFragment.NextProductionWorldTime = 0.0f;  // 0 = 未初始化，第一帧 TickExecute 时自动设置
     MinerFragment.InventoryCount = 0;
     MinerFragment.MaxInventory = 50;
     MinerFragment.StoredItemType = EItemType::IronOre; // TODO

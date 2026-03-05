@@ -1,6 +1,7 @@
 ﻿#include "UI/MassDspAssemblerWidget.h"
 
 #include "MassEntitySubsystem.h"
+#include "Fragments/MassDspAssemblerFragment.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 
@@ -45,10 +46,10 @@ void UMassDspAssemblerWidget::RefreshBufferSlots(
                 FString SlotStr;
                 if (ReqAmount > 0)
                     SlotStr = FString::Printf(TEXT("%s  %d / %d"),
-                        *GetItemTypeDisplayName(DisplayType).ToString(), CurAmount, ReqAmount);
+                                              *GetItemTypeDisplayName(DisplayType).ToString(), CurAmount, ReqAmount);
                 else
                     SlotStr = FString::Printf(TEXT("%s  %d"),
-                        *GetItemTypeDisplayName(DisplayType).ToString(), CurAmount);
+                                              *GetItemTypeDisplayName(DisplayType).ToString(), CurAmount);
 
                 SlotText->SetText(FText::FromString(SlotStr));
                 SlotText->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -72,14 +73,24 @@ void UMassDspAssemblerWidget::RefreshBufferSlots(
 
 void UMassDspAssemblerWidget::RefreshWidgets()
 {
-    const FMassDspAssemblerFragment* F = GetFragment();
+    if (!TargetEntity.IsValid()) return;
+    UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!ESub) return;
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    if (!EM.IsEntityValid(TargetEntity)) return;
+
+    const FMassDspAssemblerFragment* F = EM.GetFragmentDataPtr<FMassDspAssemblerFragment>(TargetEntity);
     if (!F) return;
 
-    // 合成进度条
-    ProgressBar_Crafting->SetPercent(F->CraftingProgress);
+    // 从 SharedFragment 读配方（不依赖 Fragment 内的任何指针字段）
+    auto Recipe = &EM.GetSharedFragmentDataChecked<FMassDspRecipeSharedFragment>(TargetEntity).Recipe;
+
+    // 合成进度条（由绝对时间戳反推 [0,1]）
+    const float WidgetWorldTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+    ProgressBar_Crafting->SetPercent(F->GetCraftingProgress(WidgetWorldTime, *Recipe));
 
     // 配方名称
-    TextBlock_RecipeType->SetText(GetRecipeTypeDisplayName(F->CurrentRecipe.RecipeType));
+    TextBlock_RecipeType->SetText(GetRecipeTypeDisplayName(Recipe->RecipeType));
 
     // 速度倍率（可选）
     if (TextBlock_Speed)
@@ -88,17 +99,23 @@ void UMassDspAssemblerWidget::RefreshWidgets()
             FString::Printf(TEXT("×%.2f"), F->CraftingSpeedMultiplier)));
     }
 
-    // 输入缓冲区槽（传入配方输入条目以评断物品类型和需求量）
+    // 输入缓冲区槽
     UTextBlock* InputSlots[4] = {
         TextBlock_Input_0, TextBlock_Input_1,
         TextBlock_Input_2, TextBlock_Input_3
     };
-    RefreshBufferSlots(F->InputBuffers, F->CurrentRecipe.Inputs, F->CurrentRecipe.InputsCount, InputSlots);
+    if (Recipe)
+    {
+        RefreshBufferSlots(F->InputBuffers, Recipe->Inputs, Recipe->InputsCount, InputSlots);
+    }
 
     // 输出缓冲区槽
     UTextBlock* OutputSlots[4] = {
         TextBlock_Output_0, TextBlock_Output_1,
         TextBlock_Output_2, TextBlock_Output_3
     };
-    RefreshBufferSlots(F->OutputBuffers, F->CurrentRecipe.Outputs, F->CurrentRecipe.OutputsCount, OutputSlots);
+    if (Recipe)
+    {
+        RefreshBufferSlots(F->OutputBuffers, Recipe->Outputs, Recipe->OutputsCount, OutputSlots);
+    }
 }

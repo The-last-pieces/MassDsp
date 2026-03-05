@@ -5,9 +5,11 @@
 #include "MassDspGameMode.h"
 
 #include "Actors/MassDspBuilding.h"
+#include "Actors/MassDspAssembler.h"
 
 #include "Fragments/BeltItemFragment.h"
 #include "Fragments/MassDspBuildingSlotsFragment.h"
+#include "Fragments/MassDspAssemblerFragment.h"
 
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
@@ -497,31 +499,31 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 void UMassDspManager::RebuildBeltSoA()
 {
     const int32 N = BeltEntityRegistry.Num();
-    Belt_TotalMove  .SetNumUninitialized(N);
-    Belt_Speed      .SetNumUninitialized(N);
-    Belt_Ptrs       .SetNumUninitialized(N);
-    Belt_RepPos     .SetNumUninitialized(N);
+    Belt_TotalMove.SetNumUninitialized(N);
+    Belt_Speed.SetNumUninitialized(N);
+    Belt_Ptrs.SetNumUninitialized(N);
+    Belt_RepPos.SetNumUninitialized(N);
     Belt_BoundRadius.SetNumUninitialized(N);
-    Belt_TrajIndex  .SetNumUninitialized(N);
+    Belt_TrajIndex.SetNumUninitialized(N);
 
     int32 i = 0;
     for (auto& [Handle, BeltData] : BeltEntityRegistry)
     {
-        BeltData.TickIdx  = i;
+        BeltData.TickIdx = i;
         Belt_TotalMove[i] = BeltData.TotalMove;
-        Belt_Speed    [i] = BeltData.BeltSpeed;
-        Belt_Ptrs     [i] = &BeltData;
+        Belt_Speed[i] = BeltData.BeltSpeed;
+        Belt_Ptrs[i] = &BeltData;
         Belt_TrajIndex[i] = Handle.Index;
 
         if (BeltTrajectories.IsValidIndex(Handle.Index))
         {
             const FBeltTrajectory& Traj = BeltTrajectories[Handle.Index];
-            Belt_RepPos     [i] = Traj.RepresentativePosition;
+            Belt_RepPos[i] = Traj.RepresentativePosition;
             Belt_BoundRadius[i] = Traj.BoundRadius;
         }
         else
         {
-            Belt_RepPos     [i] = FVector::ZeroVector;
+            Belt_RepPos[i] = FVector::ZeroVector;
             Belt_BoundRadius[i] = 0.f;
         }
         ++i;
@@ -654,7 +656,7 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     if (Belt_CachedCount <= 0) return;
 
     const float MaxDistSq = MaxRenderDistance * MaxRenderDistance;
-    const float InvCell   = 1.f / SpatialGridCellSize;
+    const float InvCell = 1.f / SpatialGridCellSize;
 
     // ── Step 0A: 空间粗筛——枚举相机 AABB 内的格子，收集候选 SoA 下标 ─────────
     // 从 ~N_all 次 TMap::Find 降至 ~(2R/cell)² 次格子查询（典型约 20×20=400 次）
@@ -683,8 +685,8 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     TArray<int32> VisibleIndices;
     VisibleIndices.Reserve(Candidates.Num());
 
-    const FVector* RESTRICT RepPosData   = Belt_RepPos.GetData();
-    const float*   RESTRICT BoundRadData = Belt_BoundRadius.GetData();
+    const FVector* RESTRICT RepPosData = Belt_RepPos.GetData();
+    const float* RESTRICT BoundRadData = Belt_BoundRadius.GetData();
 
     for (const int32 Idx : Candidates)
     {
@@ -722,7 +724,11 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     }
 
     // ── Step 2: 预分配平坦输出数组（仅可见物品）──────────────────────────────
-    struct FItemEntry { EItemType Type; FTransform T; };
+    struct FItemEntry
+    {
+        EItemType Type;
+        FTransform T;
+    };
     TArray<FItemEntry> FlatEntries;
     FlatEntries.SetNumUninitialized(TotalVisibleItems);
 
@@ -730,7 +736,7 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     const int32* RESTRICT TrajIdxData = Belt_TrajIndex.GetData();
     ParallelFor(NumVisible, [&](int32 vi)
     {
-        const int32 SoaIdx  = VisibleIndices[vi];
+        const int32 SoaIdx = VisibleIndices[vi];
         const FBeltData* BD = Belt_Ptrs[SoaIdx];
         if (!BD || BD->ItemCache.IsEmpty()) return;
 
@@ -740,7 +746,7 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
         const FBeltTrajectory& Traj = BeltTrajectories[TrajIdx];
         if (!Traj.IsValid()) return;
 
-        int32 WriteIdx        = ItemOffsets[vi];
+        int32 WriteIdx = ItemOffsets[vi];
         const int32 ItemCount = BD->ItemCache.Num();
         for (int32 ItemIdx = 0; ItemIdx < ItemCount; ++ItemIdx)
         {
@@ -793,29 +799,6 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
 
 // ===== 新增：Building Entity批量创建系统 =====
 
-FMassEntityHandle UMassDspManager::SpawnBuildingFromClass(FMassCommandBuffer& CommandBuffer, TSubclassOf<AMassDspBuilding> BuildingClass, const FTransform& WorldTransform,
-                                                          EBuildingType BuildingType)
-{
-    if (!BuildingClass)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("SpawnBuildingFromClass: Invalid BuildingClass"));
-        return FMassEntityHandle();
-    }
-
-    FBuildingSpawnData SpawnData(BuildingClass, WorldTransform, BuildingType);
-
-    FMassEntityHandle ResultHandle;
-
-    CommandBuffer.PushCommand<FMassDeferredCreateCommand>([this, SpawnData, &ResultHandle](FMassEntityManager& EntityManager)
-    {
-        ResultHandle = CreateBuildingEntityInternal(EntityManager, SpawnData);
-    });
-
-    // TODO 这块有问题
-
-    return ResultHandle;
-}
-
 TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList)
 {
     // 预分配与输入等长的数组，保证输出顺序与输入一致；未成功创建的槽位保持默认无效 Handle
@@ -853,6 +836,18 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
         const FBuildingSpawnData& FirstData = SpawnDataList[Indices[0]];
         if (!FirstData.BuildingClass) continue;
 
+        const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(FirstData.BuildingClass);
+        if (!CDO) continue;
+
+        auto Shared = EntityTemplate.GetSharedFragmentValues();
+        if (auto AssemblerCDO = Cast<AMassDspAssembler>(CDO))
+        {
+            FMassDspRecipeSharedFragment Fragment;
+            Fragment.Recipe = GameMode->GameConfig->GetRecipeConfig(AssemblerCDO->RecipeType)->ToFragment(AssemblerCDO->RecipeType);
+            Shared.Add(FSharedStruct::Make<FMassDspRecipeSharedFragment>(Fragment));
+            Shared.Sort();
+        }
+
         // 获取或创建 Archetype（有缓存则直接取，避免重复 CreateArchetype）
         FMassArchetypeHandle Archetype;
         if (FMassArchetypeHandle* Cached = CachedBuildingArchetypes.Find(BuildingType))
@@ -861,13 +856,14 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
         }
         else
         {
-            const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(FirstData.BuildingClass);
-            if (!CDO) continue;
-
             FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
             for (const UScriptStruct* FragmentType : CDO->GetStaticStructs())
             {
                 Composition.GetContainer<FMassFragment>().Add(*FragmentType);
+            }
+            if (FirstData.BuildingType == EBuildingType::Assembler)
+            {
+                Composition.GetContainer<FMassSharedFragment>().Add(*FMassDspRecipeSharedFragment::StaticStruct());
             }
             Archetype = EntityManager.CreateArchetype(Composition);
             CachedBuildingArchetypes.Add(BuildingType, Archetype);
@@ -878,10 +874,10 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
         // 一次性批量分配本类型全部实体（核心优化：避免逐个 CreateEntity 的内存碎片和锁开销）
         TArray<FMassEntityHandle> BatchHandles;
         BatchHandles.Reserve(Indices.Num());
-        EntityManager.BatchCreateEntities(Archetype, EntityTemplate.GetSharedFragmentValues(), Indices.Num(), BatchHandles);
+
+        EntityManager.BatchCreateEntities(Archetype, Shared, Indices.Num(), BatchHandles);
 
         // 逐实体初始化 Fragment 数据（创建后必须初始化，无法批量跳过）
-        const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(FirstData.BuildingClass);
         for (int32 j = 0; j < BatchHandles.Num(); ++j)
         {
             const FMassEntityHandle EntityHandle = BatchHandles[j];
@@ -920,83 +916,6 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
     UE_LOG(LogTemp, Log, TEXT("BatchSpawnBuildings: Created %d / %d building entities"), SuccessCount, SpawnDataList.Num());
 
     return CreatedEntities;
-}
-
-FMassEntityHandle UMassDspManager::CreateBuildingEntityInternal(FMassEntityManager& EntityManager, const FBuildingSpawnData& SpawnData)
-{
-    TryGetGameMode();
-    if (!GameMode.IsValid())
-    {
-        UE_LOG(LogTemp, Error, TEXT("CreateBuildingEntityInternal: GameMode is null!"));
-        return FMassEntityHandle();
-    }
-    if (!SpawnData.BuildingClass)
-    {
-        UE_LOG(LogTemp, Error, TEXT("CreateBuildingEntityInternal: BuildingClass is null!"));
-        return FMassEntityHandle();
-    }
-
-    // 从CDO获取Building配置
-    const AMassDspBuilding* BuildingCDO = GetDefault<AMassDspBuilding>(SpawnData.BuildingClass);
-    if (!BuildingCDO)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("CreateBuildingEntityInternal: Failed to get CDO for class %s"), *SpawnData.BuildingClass->GetName());
-        return FMassEntityHandle();
-    }
-
-    auto ItemConfig = GameMode->BeltItemConfigAsset;
-
-    const FMassEntityTemplate& EntityTemplate = ItemConfig->GetConfig().GetOrCreateEntityTemplate(*GetWorld());
-
-    // 使用缓存的 Archetype（避免每次重建 Composition + CreateArchetype）
-    FMassArchetypeHandle CustomArchetype;
-    if (FMassArchetypeHandle* Cached = CachedBuildingArchetypes.Find(SpawnData.BuildingType))
-    {
-        CustomArchetype = *Cached;
-    }
-    else
-    {
-        FMassArchetypeCompositionDescriptor Composition = EntityTemplate.GetCompositionDescriptor();
-        for (const UScriptStruct* FragmentType : BuildingCDO->GetStaticStructs())
-        {
-            Composition.GetContainer<FMassFragment>().Add(*FragmentType);
-        }
-        CustomArchetype = EntityManager.CreateArchetype(Composition);
-        CachedBuildingArchetypes.Add(SpawnData.BuildingType, CustomArchetype);
-    }
-
-    auto EntityHandle = EntityManager.CreateEntity(CustomArchetype, EntityTemplate.GetSharedFragmentValues());
-    EntityManager.SetEntityFragmentValues(EntityHandle, EntityTemplate.GetInitialFragmentValues());
-
-    // 初始化Building特定Fragment数据（从CDO读取配置）
-    BuildingCDO->InitFragmentForEntity(EntityManager, EntityHandle, SpawnData.WorldTransform);
-
-    // 设置Transform
-    if (FTransformFragment* TransformFrag = EntityManager.GetFragmentDataPtr<FTransformFragment>(EntityHandle))
-    {
-        TransformFrag->SetTransform(SpawnData.WorldTransform);
-    }
-
-    // 设置Representation（ISM渲染）
-    if (FMassRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassRepresentationFragment>(EntityHandle))
-    {
-        if (auto Cached = CachedBuildingMeshDesc.Find(SpawnData.BuildingType))
-        {
-            RepFrag->StaticMeshDescHandle = *Cached;
-        }
-        else if (const FBuildingTypeConfig* BuildingConfig = GameMode->GameConfig->GetBuildingConfig(SpawnData.BuildingType))
-        {
-            RepFrag->StaticMeshDescHandle = BuildingConfig->GetOrCreateMeshHandle(GetWorld());
-            CachedBuildingMeshDesc.Add(SpawnData.BuildingType, RepFrag->StaticMeshDescHandle);
-        }
-    }
-
-    ++BuildingEntityCount;
-    SpawnedBuildingEntities.Add(EntityHandle);
-    BuildingEntityTypeRegistry.Add(EntityHandle, SpawnData.BuildingType);
-    RegisterBuildingInGrid(EntityHandle, SpawnData.WorldTransform.GetLocation());
-
-    return EntityHandle;
 }
 
 void UMassDspManager::FlushBeltMesh()

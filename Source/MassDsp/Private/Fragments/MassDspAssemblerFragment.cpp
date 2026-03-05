@@ -2,88 +2,100 @@
 
 EItemType FMassDspAssemblerFragment::TryProvideItemToSlot(int SlotIdx)
 {
-    if (auto& Entry = OutputBuffers[SlotIdx]; Entry.ItemType != EItemType::None && Entry.Amount > 0)
+    auto& Entry = OutputBuffers[SlotIdx];
+    if (Entry.ItemType != EItemType::None && Entry.Amount > 0)
     {
+        const EItemType Provided = Entry.ItemType;
         --Entry.Amount;
-        return Entry.ItemType;
+        if (Entry.Amount == 0)
+        {
+            Entry.ItemType = EItemType::None;
+        }
+        return Provided;
     }
     return EItemType::None;
 }
 
-bool FMassDspAssemblerFragment::TryConsumeItemFromSlot(EItemType ItemType)
+bool FMassDspAssemblerFragment::TryConsumeItemFromSlot(EItemType ItemType, const FRecipeDataForFragment& Recipe)
 {
-    for (int i = 0; i < FGameConst::SlotMaxCount - 1; ++i)
+    for (int i = 0; i < Recipe.InputsCount; ++i)
     {
-        if (auto& Entry = InputBuffers[i]; CurrentRecipe.Inputs[i].ItemType == ItemType && Entry.Amount < InputBufferCapacity)
+        if (Recipe.Inputs[i].ItemType == ItemType && InputBuffers[i].Amount < InputBufferCapacity)
         {
-            ++Entry.Amount;
+            ++InputBuffers[i].Amount;
+
+            // 检查是否所有输入槽都已达到配方需求量，更新缓存标记
+            // 循环体最多 4 次，仅在入库时触发一次，不在每帧 TickExecute 里重复
+            bool bAllMet = true;
+            for (int j = 0; j < Recipe.InputsCount; ++j)
+            {
+                if (InputBuffers[j].Amount < Recipe.Inputs[j].Amount)
+                {
+                    bAllMet = false;
+                    break;
+                }
+            }
+            bInputSatisfied = bAllMet;
             return true;
         }
     }
     return false;
 }
 
-void FMassDspAssemblerFragment::TickExecute(float DeltaTime)
+void FMassDspAssemblerFragment::TickExecute(float WorldTime, const FRecipeDataForFragment& Recipe)
 {
-    if (CurrentRecipe.RecipeType == ERecipeType::None) return;
+    // 输入未满足：一个 bool 判断立即返回，零额外开销
+    if (!bInputSatisfied) return;
 
-    // 检查输入是否满足配方要求才加进度条
+    if (WorldTime < NextCraftWorldTime) return;
 
-    for (int i = 0; i < CurrentRecipe.InputsCount; ++i)
+    const float Interval = Recipe.CraftingTime / FMath::Max(CraftingSpeedMultiplier, KINDA_SMALL_NUMBER);
+
+    // 首次就绪时初始化计时器
+    if (NextCraftWorldTime <= 0.f)
     {
-        if (InputBuffers[i].Amount < CurrentRecipe.Inputs[i].Amount)
-        {
-            return;
-        }
+        NextCraftWorldTime = WorldTime + Interval;
+        return;
     }
 
-    CraftingProgress += DeltaTime * CraftingSpeedMultiplier / CurrentRecipe.CraftingTime;
+    // 计算本帧应批量生产多少次（追帧补产）
+    int32 BatchCount = FMath::FloorToInt((WorldTime - NextCraftWorldTime) / Interval) + 1;
 
-    if (auto ProductCount = FMath::FloorToInt(CraftingProgress); ProductCount > 0)
+    // 受输入量约束
+    for (int i = 0; i < Recipe.InputsCount; ++i)
+        BatchCount = FMath::Min(BatchCount, InputBuffers[i].Amount / Recipe.Inputs[i].Amount);
+
+    // 受输出缓冲容量约束
+    for (int i = 0; i < Recipe.OutputsCount; ++i)
     {
-        // 取最小可能值, 遍历每种输入, 计算实际能生成的数量
-        for (int i = 0; i < CurrentRecipe.InputsCount; ++i)
+        auto& Out = OutputBuffers[i];
+        if (Out.ItemType != EItemType::None && Out.ItemType != Recipe.Outputs[i].ItemType)
         {
-            auto PossibleCount = InputBuffers[i].Amount / CurrentRecipe.Inputs[i].Amount;
-            ProductCount = FMath::Min(ProductCount, PossibleCount);
+            BatchCount = 0;
+            break;
+        }
+        BatchCount = FMath::Min(BatchCount, (OutputBufferCapacity - Out.Amount) / Recipe.Outputs[i].Amount);
+    }
+
+    if (BatchCount > 0)
+    {
+        for (int i = 0; i < Recipe.InputsCount; ++i)
+            InputBuffers[i].Amount -= BatchCount * Recipe.Inputs[i].Amount;
+
+        for (int i = 0; i < Recipe.OutputsCount; ++i)
+        {
+            if (OutputBuffers[i].ItemType == EItemType::None)
+                OutputBuffers[i].ItemType = Recipe.Outputs[i].ItemType;
+            OutputBuffers[i].Amount += BatchCount * Recipe.Outputs[i].Amount;
         }
 
-        // 再取输出缓冲区剩余容量的最小值
-        for (int i = 0; i < CurrentRecipe.OutputsCount; ++i)
-        {
-            auto& OutputEntry = OutputBuffers[i];
-            if (OutputEntry.ItemType != EItemType::None && OutputEntry.ItemType != CurrentRecipe.Outputs[i].ItemType)
-            {
-                ProductCount = 0;
-                break;
-            }
-            auto RemainingCapacity = OutputBufferCapacity - OutputEntry.Amount;
-            ProductCount = FMath::Min(ProductCount, RemainingCapacity / CurrentRecipe.Outputs[i].Amount);
-        }
-
-        if (ProductCount > 0)
-        {
-            // 消耗输入
-            for (int i = 0; i < CurrentRecipe.InputsCount; ++i)
-            {
-                InputBuffers[i].Amount -= ProductCount * CurrentRecipe.Inputs[i].Amount;
-            }
-
-            // 生产输出
-            for (int i = 0; i < CurrentRecipe.OutputsCount; ++i)
-            {
-                auto& OutputEntry = OutputBuffers[i];
-                if (OutputEntry.ItemType == EItemType::None)
-                {
-                    OutputEntry.ItemType = CurrentRecipe.Outputs[i].ItemType;
-                }
-                OutputEntry.Amount += ProductCount * CurrentRecipe.Outputs[i].Amount;
-            }
-
-            CraftingProgress -= ProductCount;
-            return;
-        }
-
-        CraftingProgress = 1.0f;
+        // 输入已消耗，清除满足标记并重置计时器，等待下次补充
+        bInputSatisfied = false;
+        NextCraftWorldTime = 0.f;
+    }
+    else
+    {
+        // 输出满导致阻塞：推进计时器避免下帧空转
+        NextCraftWorldTime = WorldTime + Interval;
     }
 }

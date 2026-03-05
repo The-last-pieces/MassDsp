@@ -538,10 +538,10 @@ public:
     }
 };
 
+// TickExecute 签名因类型而异（矿机传 WorldTime，合成台传 DeltaTime+Recipe），
+// 不再列入 Concept，由 Processor 内部 if constexpr 分发。
 template <typename T>
-concept IsDspBuildFragment = requires(T TT, int SlotIdx, EItemType ItemType, float DeltaTime)
+concept IsDspBuildFragment = requires(T TT, int SlotIdx)
 {
     { TT.TryProvideItemToSlot(SlotIdx) } -> std::convertible_to<EItemType>;
-    { TT.TryConsumeItemFromSlot(ItemType) } -> std::convertible_to<bool>;
-    { TT.TickExecute(DeltaTime) } -> std::convertible_to<void>;
 };

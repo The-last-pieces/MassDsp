@@ -44,8 +44,10 @@ private:
     TWeakObjectPtr<UMassDspManager> DspManager;
 
     template <class TT> requires IsDspBuildFragment<TT>
-    void ProcessBuilding(FMassEntityQuery& Query, FMassExecutionContext& Context) const;
+    void ProcessBuilding(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime) const;
 
+    // InRecipe 仅 Assembler 路径传入非 nullptr
     template <class TT> requires IsDspBuildFragment<TT>
-    void ProcessSlots(FMassDspBuildingSlotsFragment& SlotsData, const FMassExecutionContext& Context, TT& Fragment) const;
+    void ProcessSlots(FMassDspBuildingSlotsFragment& SlotsData, const FMassExecutionContext& Context, TT& Fragment, float WorldTime,
+                      const FRecipeDataForFragment* InRecipe = nullptr) const;
 };

@@ -58,15 +58,10 @@ void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager,
 {
     Super::InitFragmentForEntity(EntityManager, EntityHandle, WorldTransform);
 
-    auto GameMode = Cast<AMassDspGameMode>(EntityManager.GetWorld()->GetAuthGameMode());
-    if (!GameMode) return;
-
-    auto RecipeConfig = GameMode->GameConfig->GetRecipeConfig(RecipeType);
-    if (!RecipeConfig) return;
-
     FMassDspAssemblerFragment& AssemblerFragment = EntityManager.GetFragmentDataChecked<FMassDspAssemblerFragment>(EntityHandle);
 
-    AssemblerFragment.CurrentRecipe = RecipeConfig->ToFragment(RecipeType);
+    // 配方数据已通过 FMassDspRecipeSharedFragment 在 CreateBuildingEntityInternal 中注入 Archetype，
+    // 此处只需设置实体独有的运行时数值。
     AssemblerFragment.CraftingSpeedMultiplier = CraftingSpeedMultiplier;
     AssemblerFragment.InputBufferCapacity = InputBufferCapacity;
     AssemblerFragment.OutputBufferCapacity = OutputBufferCapacity;
