@@ -220,23 +220,37 @@ bool UMassDspLogisticsSubsystem::CancelRequest(const FGuid& RequestId)
     FLogisticsRequest* Req = AllRequests.Find(RequestId);
     if (!Req) return false;
 
-    // 如果已被配对进任务，也取消对应任务
+    // 如果已被配对进活跃任务，也取消对应任务并重置设备
     for (auto& [TaskId, Task] : AllTasks)
     {
-        if (Task.SupplyRequestId == RequestId || Task.DemandRequestId == RequestId)
+        if (Task.SupplyRequestId != RequestId && Task.DemandRequestId != RequestId) continue;
+
+        // 跳过终态任务（历史记录，不再操作设备）
+        if (Task.State == ELogisticsTaskState::Completed ||
+            Task.State == ELogisticsTaskState::Failed    ||
+            Task.State == ELogisticsTaskState::Cancelled)
+            continue;
+
+        // 跳过仍在飞行中的活跃任务：请求超时不代表本次运输无效。
+        // 超时清理只针对从未被派遣的挂起请求；飞行中的任务让无人机
+        // OnDroneArrivedAtDelivery 自然完成，它会重置 RequestTime 再入队。
+        if (Task.State == ELogisticsTaskState::InTransit_Pickup ||
+            Task.State == ELogisticsTaskState::InTransit_Deliver)
+            continue;
+
+        Task.State = ELogisticsTaskState::Cancelled;
+        if (Task.DeviceType == ELogisticsDeviceType::Drone && DronePool.IsValidIndex(Task.DevicePoolIndex))
         {
-            Task.State = ELogisticsTaskState::Cancelled;
-            // 重置对应设备
-            if (Task.DeviceType == ELogisticsDeviceType::Drone && DronePool.IsValidIndex(Task.DevicePoolIndex))
+            FDroneData& Drone = DronePool[Task.DevicePoolIndex];
+            if (Drone.CurrentTaskId == TaskId)
             {
-                FDroneData& Drone = DronePool[Task.DevicePoolIndex];
                 Drone.State = ELogisticsDeviceState::Idle;
                 Drone.CurrentTaskId = FGuid();
                 IdleDroneIndices.AddUnique(Task.DevicePoolIndex);
             }
-            // TODO[VEHICLE]: 重置小车
-            // TODO[TRAIN]:   重置火车
         }
+        // TODO[VEHICLE]: 重置小车
+        // TODO[TRAIN]:   重置火车
     }
 
     // 从塔运行时数据中移除
@@ -839,10 +853,13 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
 
         // 任务完成后把 Supply/Demand 请求重新加回协调塔的 PendingRequestIds，
         // 确保冷却结束时 MatchPendingRequests 有内容可匹配（不等 Processor 下次扫描）
+        const float NowTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
         auto RequeueRequest = [&](const FGuid& ReqId)
         {
-            const FLogisticsRequest* Req = AllRequests.Find(ReqId);
+            FLogisticsRequest* Req = AllRequests.Find(ReqId);
             if (!Req) return;
+            // 刷新时间戳：持续运转的请求应永不因超时被 CancelRequest 误停
+            Req->RequestTime = NowTime;
             const FMassEntityHandle CoordTower = Req->PreferredTowerEntity;
             if (!CoordTower.IsValid()) return;
             FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(CoordTower);
@@ -973,6 +990,20 @@ void UMassDspLogisticsSubsystem::CleanExpiredRequests()
 
     for (const FGuid& Id : ToRemove)
         CancelRequest(Id);
+
+    // 清理 AllTasks 中的终态条目，防止历史记录无限增长。
+    // 若不清理，CancelRequest 每次都要遍历全量历史任务，且旧条目的
+    // DevicePoolIndex 会误命中当前无人机的安全检查（即使有双重确认也是浪费）。
+    TArray<FGuid> TasksToRemove;
+    for (auto& [TaskId, Task] : AllTasks)
+    {
+        if (Task.State == ELogisticsTaskState::Completed ||
+            Task.State == ELogisticsTaskState::Failed    ||
+            Task.State == ELogisticsTaskState::Cancelled)
+            TasksToRemove.Add(TaskId);
+    }
+    for (const FGuid& Id : TasksToRemove)
+        AllTasks.Remove(Id);
 }
 
 UMassDspManager* UMassDspLogisticsSubsystem::GetDspManager()

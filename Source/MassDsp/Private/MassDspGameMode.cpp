@@ -256,8 +256,8 @@ void AMassDspGameMode::TestCase2()
         for (int32 Col = 0; Col < GroupCols; ++Col)
         {
             constexpr float IntraSpacing = 1500.f;
-            constexpr float GroupSpacingY = 8000.f;
-            constexpr float GroupSpacingX = 8000.f;
+            constexpr float GroupSpacingX = 4000.f;
+            constexpr float GroupSpacingY = 2000.f;
             const FVector GroupOrigin = FVector(
                 (Col - GroupCols * 0.5f) * GroupSpacingX,
                 (Row - GroupRows * 0.5f) * GroupSpacingY,
