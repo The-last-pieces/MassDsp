@@ -71,10 +71,11 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             if (TowerFrag.TowerMode == ELogisticsTowerMode::Supply)
             {
                 // Supply 模式：库存超过阈值 → 提交供货请求
-                // 以塔自身为取货源，PreferredTower 也指向自身，全局匹配逻辑会跟同类型 Demand 匹配
-                if (InventoryCount > Threshold)
+                // 扣除「已被派遣但尚未到达取货点」的在途量，防止重复提交过多数量
+                const int32 InTransitFrom = Logistics->ComputeInTransitFromEntity(TowerEntity);
+                const int32 SendQty = InventoryCount - Threshold - InTransitFrom;
+                if (SendQty > 0)
                 {
-                    const int32 SendQty = InventoryCount - Threshold;
                     Logistics->SubmitSupplyRequest(
                         TowerEntity,
                         TowerFrag.ItemType,
@@ -86,9 +87,11 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             else if (TowerFrag.TowerMode == ELogisticsTowerMode::Demand)
             {
                 // Demand 模式：库存低于阈值 → 提交补货请求
-                if (InventoryCount < Threshold)
+                // 扣除「已在途飞向本塔」的在途量，防止需求塔重复过量申请
+                const int32 InTransitTo = Logistics->ComputeInTransitToEntity(TowerEntity);
+                const int32 WantQty = Threshold - InventoryCount - InTransitTo;
+                if (WantQty > 0)
                 {
-                    const int32 WantQty = Threshold - InventoryCount;
                     Logistics->SubmitDemandRequest(
                         TowerEntity,
                         TowerFrag.ItemType,

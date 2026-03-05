@@ -281,12 +281,12 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
         switch (DronePool[Handle.Index].State)
         {
         case ELogisticsDeviceState::Idle:
-        case ELogisticsDeviceState::Cooldown:
-        case ELogisticsDeviceState::ReturningHome: // 返航中视为休息（未承接物流任务）
-            ++Result.OwnedResting;
+            ++Result.OwnedResting; // 已返家盘旋等待：展示为休息
             break;
+        case ELogisticsDeviceState::Cooldown:    // 刷交货后等待返航，尚在别处
+        case ELogisticsDeviceState::ReturningHome: // 返航中，尚未到家
         default:
-            ++Result.OwnedDeployed;
+            ++Result.OwnedDeployed; // 上述均视为外派
             break;
         }
     }
@@ -363,6 +363,8 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
     Data.HomeLocation = InitialLocation; // 归属塔悬停位置，用于 ReturningHome 飞行目标
 
     const int32 Idx = DronePool.Add(Data);
+    // 黄金角（≈137.5°）分布：保证同一塔的多架无人机均匀散布在螺旋轨道上
+    DronePool[Idx].IdlePhaseOffset = static_cast<float>(Idx) * 2.399963f;
 
     // ISM 实例直接放在 InitialLocation，无需后续手动同步
     DronePool[Idx].ISMInstanceIndex = AllocateDroneISMInstance(InitialLocation);
@@ -779,7 +781,52 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
         switch (Drone.State)
         {
         case ELogisticsDeviceState::Idle:
-            break; // 空闲，无需更新
+            {
+                // 空闲：绕归属塔做螺旋盘旋动画（高度正弦振荡，无跳变）
+                if (Drone.ISMInstanceIndex < 0 || !DroneISM) break;
+                if (Drone.ISMInstanceIndex >= DroneISM->GetInstanceCount()) break;
+
+                Drone.ElapsedTime += DeltaTime;
+
+                // ── 螺旋参数（可在此集中调整）───────────────────────────────
+                constexpr float SpiralRadius     = 300.f;  // 盘旋半径 (cm)
+                constexpr float AngularSpeed     = 0.8f;   // 水平角速度 (rad/s)，≈ 7.9s 转一圈
+                constexpr float BaseHeight       = 300.f;  // 高度振荡中心 (cm)
+                constexpr float HeightAmplitude  = 250.f;  // 高度振幅 (cm)，上下各 250cm
+                constexpr float HeightFrequency  = 0.3f;   // 高度振荡角频率 (rad/s)，≈ 21s 上下一次
+                // ─────────────────────────────────────────────────────────────
+
+                // 水平圆弧角度（黄金角相位让同塔各无人机均匀错开起始方向）
+                const float Angle = Drone.IdlePhaseOffset + Drone.ElapsedTime * AngularSpeed;
+
+                // 高度：正弦振荡，相位由 IdlePhaseOffset 决定，无跳变
+                const float HeightPhase = Drone.ElapsedTime * HeightFrequency + Drone.IdlePhaseOffset;
+                const float Height      = BaseHeight + HeightAmplitude * FMath::Sin(HeightPhase);
+
+                const FVector Pos = Drone.HomeLocation + FVector(
+                    FMath::Cos(Angle) * SpiralRadius,
+                    FMath::Sin(Angle) * SpiralRadius,
+                    Height);
+
+                // 朝向：螺旋切线 = 水平圆弧切线 + 垂直振荡速度分量
+                //   dX/dt = -R·ω·sin θ
+                //   dY/dt =  R·ω·cos θ
+                //   dZ/dt =  A·ωh·cos(ωh·t + phase)
+                const float dZ  = HeightAmplitude * HeightFrequency * FMath::Cos(HeightPhase);
+                const FVector Tangent(
+                    -FMath::Sin(Angle) * SpiralRadius * AngularSpeed,
+                     FMath::Cos(Angle) * SpiralRadius * AngularSpeed,
+                     dZ);
+                const FVector Fwd = Tangent.GetSafeNormal();
+                const FQuat Rot = Fwd.IsNearlyZero() ? FQuat::Identity
+                                                      : FRotationMatrix::MakeFromX(Fwd).ToQuat();
+
+                DroneISM->UpdateInstanceTransform(
+                    Drone.ISMInstanceIndex,
+                    FTransform(Rot, Pos, FVector::OneVector),
+                    /*bWorldSpace=*/true, /*bMarkRenderStateDirty=*/false);
+            }
+            break;
 
         case ELogisticsDeviceState::Cooldown:
             Drone.CooldownRemaining -= DeltaTime;
@@ -847,6 +894,7 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
                 {
                     // 已在家或无归属塔，直接 Idle
                     Drone.State = ELogisticsDeviceState::Idle;
+                    Drone.ElapsedTime = 0.f; // 重置，使螺旋动画从初始相位平滑开始
                     IdleDroneIndices.Add(DroneIdx);
                     IdleDroneIndexSet.Add(DroneIdx);
                     // 置脏让 MatchPendingRequests 下一帧处理
@@ -872,6 +920,7 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
                 {
                     // 到家：进入 Idle，加入空闲池，通知塔立即匹配
                     Drone.State = ELogisticsDeviceState::Idle;
+                    Drone.ElapsedTime = 0.f; // 重置，使螺旋动画从初始相位平滑开始
                     IdleDroneIndices.Add(DroneIdx);
                     IdleDroneIndexSet.Add(DroneIdx);
                     if (Drone.AffiliatedTowerEntity.IsValid())

@@ -54,6 +54,8 @@ struct MASSDSP_API FDroneData
     FMassEntityHandle AffiliatedTowerEntity;
     /** 归属塔的世界坐标（创建时记录，用于 ReturningHome 贝塞尔目标点） */
     FVector           HomeLocation = FVector::ZeroVector;
+    /** Idle 状态盘旋时的初始相位（黄金角分布，防止多架无人机完全重叠） */
+    float             IdlePhaseOffset = 0.f;
 
     //  ISM 渲染索引（-1 = 尚未分配实例） 
     int32 ISMInstanceIndex = -1;
