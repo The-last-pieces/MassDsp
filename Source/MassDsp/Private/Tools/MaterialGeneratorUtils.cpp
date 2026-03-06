@@ -54,7 +54,7 @@
 #include "Components/Button.h"
 #include "Components/Border.h"
 
-void UMaterialGeneratorUtils::CreateAllProceduralAssets()
+void FUMaterialGeneratorUtils::CreateAllProceduralAssets()
 {
     CreateConveyorMaterial();
     CreateBuildingWidgets();
@@ -351,7 +351,7 @@ static UObject* ImpBuildConveyorMaterial(UPackage* Package, const FString& Asset
     return Material;
 }
 
-void UMaterialGeneratorUtils::CreateConveyorMaterial()
+void FUMaterialGeneratorUtils::CreateConveyorMaterial()
 {
     FProceduralAssetBuilder::GenerateAsset(TEXT("/Game/Assets/M_Belt"), TEXT("v1"), &ImpBuildConveyorMaterial);
 }
@@ -870,7 +870,7 @@ static UObject* ImpBuildLogisticsTowerWidget(UPackage* Package, const FString& A
     return WBP;
 }
 
-void UMaterialGeneratorUtils::CreateBuildingWidgets()
+void FUMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
@@ -1068,7 +1068,7 @@ static UObject* ImpCreateDroneMaterial(UPackage* Package, const FString& AssetNa
     return Mat;
 }
 
-void UMaterialGeneratorUtils::CreateDroneMaterial()
+void FUMaterialGeneratorUtils::CreateDroneMaterial()
 {
     FProceduralAssetBuilder::GenerateAsset(TEXT("/Game/Assets/M_Drone"), TEXT("v1"), &ImpCreateDroneMaterial);
 }

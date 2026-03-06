@@ -2,17 +2,11 @@
 
 #if WITH_EDITOR
 
-#include "CoreMinimal.h"
-#include "MaterialGeneratorUtils.generated.h"
-
-UCLASS()
-class MASSDSP_API UMaterialGeneratorUtils : public UObject
+class MASSDSP_API FUMaterialGeneratorUtils
 {
-    GENERATED_BODY()
-
 public:
     static void CreateAllProceduralAssets();
-    
+
     /** 
      * 自动生成传送带材质
      * 包含源码MD5检测，避免重复生成

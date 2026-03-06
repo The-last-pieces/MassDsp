@@ -36,7 +36,7 @@ void FMassDspModule::RegisterMenus()
         FText::FromString(TEXT("生成传送带/无人机材质+建筑UI蓝图")),
         FText::FromString(TEXT("生成传送带/无人机材质+建筑UI蓝图")),
         FSlateIcon(),
-        FUIAction(FExecuteAction::CreateStatic(&UMaterialGeneratorUtils::CreateAllProceduralAssets))
+        FUIAction(FExecuteAction::CreateStatic(&FUMaterialGeneratorUtils::CreateAllProceduralAssets))
     );
 
     UE_LOG(LogTemp, Log, TEXT("Menus Registered."));
