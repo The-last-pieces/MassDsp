@@ -20,8 +20,8 @@ struct MASSDSP_API FVehicleData
     int32 Generation = 0;
 
     //  状态机 
-    ELogisticsDeviceState State        = ELogisticsDeviceState::Idle;
-    FGuid                 CurrentTaskId;
+    ELogisticsDeviceState State          = ELogisticsDeviceState::Idle;
+    int32                 CurrentTaskId  = -1; ///< TSparseArray<FLogisticsTask> 下标，-1 = 无任务（与无人机保持一致）
 
     //  当前位置与目标段 
     FVector CurrentLocation  = FVector::ZeroVector;

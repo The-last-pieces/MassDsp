@@ -57,6 +57,13 @@ struct MASSDSP_API FDroneData
     /** Idle 状态盘旋时的初始相位（黄金角分布，防止多架无人机完全重叠） */
     float             IdlePhaseOffset = 0.f;
 
+    /** 任务派发时的世界时间（秒），用于 GPU WPO 材质计算相对飞行进度 t.
+     *  由 FDroneDispatchStrategy::InitDeviceForTask 写入，每段航程重置一次。
+     *  比 (GameTime - ElapsedTime) 的写法稳定：DispatchTime 全帧不变，shader 用
+     *  (currentGameTime - DispatchTime) 就能得到正确的累积飞行时长。
+     */
+    float DispatchTime = 0.f;
+
     //  ISM 渲染索引（-1 = 尚未分配实例） 
     int32 ISMInstanceIndex = -1;
 

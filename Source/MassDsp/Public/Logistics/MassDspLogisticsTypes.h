@@ -157,6 +157,10 @@ struct FLogisticsTask
     FMassEntityHandle DeliveryEntity; ///< 送货建筑
     int32 TransferQuantity = 0;
     float CreatedTime = 0.f;
+    /** 供货请求所属协调塔（缓存自 AllRequests[SupplyRequestId].PreferredTowerEntity，防止请求被删后找不到塔） */
+    FMassEntityHandle SupplyTowerEntity;
+    /** 需货请求所属协调塔（同上） */
+    FMassEntityHandle DemandTowerEntity;
 };
 
 /**

@@ -21,8 +21,8 @@ struct MASSDSP_API FTrainData
     int32 Generation = 0;
 
     //  状态机 
-    ELogisticsDeviceState State        = ELogisticsDeviceState::Idle;
-    FGuid                 CurrentTaskId;
+    ELogisticsDeviceState State          = ELogisticsDeviceState::Idle;
+    int32                 CurrentTaskId  = -1; ///< TSparseArray<FLogisticsTask> 下标，-1 = 无任务（与无人机保持一致）
 
     //  轨道运动 
     /** 归属轨道段 Index（对应 TrainTracks[TrackSegmentIndex] 轨迹数据），-1 = 未上轨 */

@@ -242,8 +242,12 @@ bool UMassDspLogisticsSubsystem::CancelRequest(int32 RequestId)
             {
                 Drone.State         = ELogisticsDeviceState::Idle;
                 Drone.CurrentTaskId = -1;
-                IdleDroneIndices.Add(Task.DevicePoolIndex);
-                IdleDroneIndexSet.Add(Task.DevicePoolIndex);
+                // Bug #10 修复：使用 Set 去重，防止重复入队导致重复派遣
+                if (!IdleDroneIndexSet.Contains(Task.DevicePoolIndex))
+                {
+                    IdleDroneIndices.Add(Task.DevicePoolIndex);
+                    IdleDroneIndexSet.Add(Task.DevicePoolIndex);
+                }
             }
         }
     }
@@ -391,8 +395,11 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
     }
 
     // 加入空闲池
-    IdleDroneIndices.Add(Idx);
-    IdleDroneIndexSet.Add(Idx);
+    if (!IdleDroneIndexSet.Contains(Idx))
+    {
+        IdleDroneIndices.Add(Idx);
+        IdleDroneIndexSet.Add(Idx);
+    }
 
     // 同步扩展 VehiclePaths / TrainTrackLUTs 对齐（无人机不需要，但保持数组长度一致性）
     return FDroneHandle{Idx, DronePool[Idx].Generation};
@@ -690,6 +697,10 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             Task.DeliveryLocation = DeliveryLoc;
             Task.TransferQuantity = BatchQty;
             Task.DeviceType       = ELogisticsDeviceType::Drone;
+            // Bug #2/8 修复：缓存塔实体，使 RemoveActiveFromTower 和 CleanExpiredRequests
+            // 不再依赖 AllRequests（后者可能因 CancelRequest 提前删除而失效）
+            Task.SupplyTowerEntity = Supply->PreferredTowerEntity;
+            Task.DemandTowerEntity = Demand->PreferredTowerEntity;
 
             // 先分配稳定 TaskId，再传入 TryDispatchTask，确保 InitDeviceForTask
             // 写入 Drone->CurrentTaskId 时拿到的是真实 ID 而非默认 -1
@@ -818,16 +829,25 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
         case ELogisticsDeviceState::ReturningHome:
         case ELogisticsDeviceState::MovingToPickup:
         case ELogisticsDeviceState::MovingToDeliver:
+        {
+            // Bug #1 核心修复：每当 ElapsedTime 首次越过 TotalFlightTime 时投递到达事件。
+            // Phase C 在同帧内处理事件并切换状态，下一帧 Phase A 不再进入此分支，不会重复投递。
+            const ELogisticsDeviceState ArrivedFromState = Drone.State;
             if (Drone.TotalFlightTime <= SMALL_NUMBER)
             {
                 FScopeLock Lock(&ArrivalLock);
-                ArrivalEvents.Add({DroneIdx, Drone.State});
+                ArrivalEvents.Add({DroneIdx, ArrivedFromState});
                 break;
             }
             Drone.ElapsedTime += DeltaTime;
             if (Drone.ElapsedTime >= Drone.TotalFlightTime)
-                Drone.ElapsedTime = Drone.TotalFlightTime; // 钳制，Phase B 检测
+            {
+                Drone.ElapsedTime = Drone.TotalFlightTime; // 钳制
+                FScopeLock Lock(&ArrivalLock);
+                ArrivalEvents.Add({DroneIdx, ArrivedFromState}); // ← 关键修复：到达时投递事件
+            }
             break;
+        }
 
         default: break;
         }
@@ -918,6 +938,7 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
     FDroneData& Drone = DronePool[DronePoolIndex];
 
     // 从取货建筑搬走物品
+    bool bPickupSuccess = false;
     if (UWorld* World = GetWorld())
     {
         FMassEntityManager* EMPtr = GetEntityManagerSafe(World);
@@ -939,9 +960,31 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
                     {
                         Drone.CarriedItemType = ItemType;
                         Drone.CarriedQuantity = Taken;
+                        // Bug #6 修复：同步实际取货量回任务，确保 ComputeInTransitToEntity 准确
+                        if (AllTasks.IsValidIndex(Drone.CurrentTaskId))
+                            AllTasks[Drone.CurrentTaskId].TransferQuantity = Taken;
+                        bPickupSuccess = true;
                     }
                 }
             }
+    }
+
+    // Bug #7 修复：取货失败（Supply 端库存为空）时中止任务，不再空飞到交货点
+    if (!bPickupSuccess)
+    {
+        const int32 FailedTaskId = Drone.CurrentTaskId;
+        // 将无人机标记为失败态（置 Idle），此后冷却流程会自动恢复
+        OnDroneTaskFailed(DronePoolIndex);
+        // 从两个协调塔的 ActiveTaskIds 中清除（OnDroneTaskFailed 未处理 ActiveTaskIds）
+        if (AllTasks.IsValidIndex(FailedTaskId))
+        {
+            const FLogisticsTask& FailedTask = AllTasks[FailedTaskId];
+            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(FailedTask.SupplyTowerEntity))
+                RTD->ActiveTaskIds.Remove(FailedTaskId);
+            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(FailedTask.DemandTowerEntity))
+                RTD->ActiveTaskIds.Remove(FailedTaskId);
+        }
+        return;
     }
 
     // 切换到飞往交货点，同步更新任务状态
@@ -1067,16 +1110,15 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
         RequeueRequest(Task->DemandRequestId);
 
         // 仅从涉及的两个塔中移除 ActiveTaskIds，避免 O(NumAllTowers) 全量遍历
-        auto RemoveActiveFromTower = [&](int32 ReqId)
+        // Bug #2/8 修复：直接使用 Task 中缓存的塔实体，不再依赖可能已被 CancelRequest 删除的 AllRequests
+        auto RemoveActiveFromTower = [&](FMassEntityHandle TowerEntity)
         {
-            if (!AllRequests.IsValidIndex(ReqId)) return;
-            const FLogisticsRequest& Req = AllRequests[ReqId];
-            if (!Req.PreferredTowerEntity.IsValid()) return;
-            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(Req.PreferredTowerEntity))
+            if (!TowerEntity.IsValid()) return;
+            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(TowerEntity))
                 RTD->ActiveTaskIds.Remove(CompletedTaskId);
         };
-        RemoveActiveFromTower(Task->SupplyRequestId);
-        RemoveActiveFromTower(Task->DemandRequestId);
+        RemoveActiveFromTower(Task->SupplyTowerEntity);
+        RemoveActiveFromTower(Task->DemandTowerEntity);
     }
 }
 
@@ -1088,8 +1130,12 @@ void UMassDspLogisticsSubsystem::OnDroneTaskFailed(int32 DronePoolIndex)
     const int32 OldTaskId = Drone.CurrentTaskId;
     Drone.CurrentTaskId   = -1;
     Drone.State           = ELogisticsDeviceState::Idle;
-    IdleDroneIndices.Add(DronePoolIndex);
-    IdleDroneIndexSet.Add(DronePoolIndex);
+    // Bug #10 修复：使用 Set 去重，防止 TArray 中出现重复索引导致同一无人机被派遣两次
+    if (!IdleDroneIndexSet.Contains(DronePoolIndex))
+    {
+        IdleDroneIndices.Add(DronePoolIndex);
+        IdleDroneIndexSet.Add(DronePoolIndex);
+    }
 
     if (AllTasks.IsValidIndex(OldTaskId))
         AllTasks[OldTaskId].State = ELogisticsTaskState::Failed;
@@ -1150,8 +1196,25 @@ int32 UMassDspLogisticsSubsystem::AllocateTrainISMInstance(const FVector& Initia
 
 void UMassDspLogisticsSubsystem::FreeDroneISMInstance(int32 InstanceIndex)
 {
-    if (DroneISM && InstanceIndex >= 0)
-        DroneISM->RemoveInstance(InstanceIndex);
+    if (!DroneISM || InstanceIndex < 0) return;
+
+    // Bug 渲染 #3 修复：RemoveInstance 会把最后一个实例 swap 到 InstanceIndex 位置，
+    // 必须先更新对应无人机的 ISMInstanceIndex，否则其 Custom Data 写入会错位。
+    const int32 LastISMIndex = DroneISM->GetInstanceCount() - 1;
+    if (LastISMIndex > InstanceIndex)
+    {
+        // 找出 ISMInstanceIndex == LastISMIndex 的无人机，将其更新为 InstanceIndex（swap 目标）
+        for (auto It = DronePool.CreateIterator(); It; ++It)
+        {
+            if (It->ISMInstanceIndex == LastISMIndex)
+            {
+                It->ISMInstanceIndex = InstanceIndex;
+                break;
+            }
+        }
+    }
+
+    DroneISM->RemoveInstance(InstanceIndex);
 }
 
 void UMassDspLogisticsSubsystem::FreeVehicleISMInstance(int32 InstanceIndex)
@@ -1201,7 +1264,16 @@ void UMassDspLogisticsSubsystem::CleanExpiredRequests()
             TasksToRemove.Add(i);
     }
     for (int32 Id : TasksToRemove)
+    {
+        // Bug #3 修复：删除任务前先清理两端协调塔的 ActiveTaskIds，防止残留无效 ID
+        // 导致 ComputeInTransitToEntity 统计错误 + TSparseArray 槽复用时读到旧任务数据
+        const FLogisticsTask& DeadTask = AllTasks[Id];
+        if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(DeadTask.SupplyTowerEntity))
+            RTD->ActiveTaskIds.Remove(Id);
+        if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(DeadTask.DemandTowerEntity))
+            RTD->ActiveTaskIds.Remove(Id);
         AllTasks.RemoveAt(Id);
+    }
 }
 
 UMassDspManager* UMassDspLogisticsSubsystem::GetDspManager()
@@ -1280,7 +1352,11 @@ void UMassDspLogisticsSubsystem::WriteDroneCustomData(const FDroneData& Drone, f
     const int32 Idx  = Drone.ISMInstanceIndex;
     const bool bIdle = (Drone.State == ELogisticsDeviceState::Idle);
 
-    DroneISM->SetCustomDataValue(Idx, 0,  bIdle ? 0.f : (GameTime - Drone.ElapsedTime)); // TimeAtDispatch
+    // Bug #11 修复：错峰起飞时 ElapsedTime 为负（stagger 延迟），用 max(0,ElapsedTime) 参与计算，
+    // 确保 GPU 端 t = (currentGameTime - TimeAtDispatch) / TotalFlightTime >= 0，避免贝塞尔外推。
+    // 当 ElapsedTime < 0 时无人机在 GPU 上停在 P0 位置，stagger 倒计时结束后再起飞。
+    const float ClampedElapsed = FMath::Max(0.f, Drone.ElapsedTime);
+    DroneISM->SetCustomDataValue(Idx, 0,  bIdle ? 0.f : (GameTime - ClampedElapsed)); // TimeAtDispatch
     DroneISM->SetCustomDataValue(Idx, 1,  bIdle ? 0.f : Drone.TotalFlightTime);           // TotalFlightTime
     DroneISM->SetCustomDataValue(Idx, 2,  Drone.P0.X);
     DroneISM->SetCustomDataValue(Idx, 3,  Drone.P0.Y);
@@ -1401,8 +1477,12 @@ void UMassDspLogisticsSubsystem::HandleDroneArrivedHome(int32 DroneIdx)
     Drone.State       = ELogisticsDeviceState::Idle;
     Drone.ElapsedTime = 0.f; // 重置，使螺旋动画从初始相位平滑开始
 
-    IdleDroneIndices.Add(DroneIdx);
-    IdleDroneIndexSet.Add(DroneIdx);
+    // Bug #10 修复：使用 Set 去重，防止 TArray 中出现重复索引导致同一无人机被派遣两次
+    if (!IdleDroneIndexSet.Contains(DroneIdx))
+    {
+        IdleDroneIndices.Add(DroneIdx);
+        IdleDroneIndexSet.Add(DroneIdx);
+    }
 
     // 置脏让 MatchPendingRequests 下一帧处理
     if (Drone.AffiliatedTowerEntity.IsValid())
