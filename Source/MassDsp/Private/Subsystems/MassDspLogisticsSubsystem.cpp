@@ -64,10 +64,20 @@ void UMassDspLogisticsSubsystem::SetupISMComponents(
     VehicleISM = InVehicleISM;
     TrainISM   = InTrainISM;
 
-    // 16 floats per instance: [0]=TimeAtDispatch, [1]=TotalFlightTime,
-    // [2-4]=P0, [5-7]=P1, [8-10]=P2, [11-13]=HomeLocation, [14]=IdlePhaseOffset, [15]=padding
+    // 18 floats per instance:
+    // [0]=TimeAtDispatch  [1]=TotalFlightTime
+    // [2-4]=P0  [5-7]=P1  [8-10]=P2
+    // [11-13]=HomeLocation (永久)  [14]=IdlePhaseOffset
+    // [15-17]=P3飞行终点 (仅飞行时有意义)
     if (DroneISM)
-        DroneISM->NumCustomDataFloats = 16;
+    {
+        DroneISM->NumCustomDataFloats = 18;
+        // WPO 会把顶点从 HomeLocation 移到飞行轨迹，静态 bounds 不够宽导致被剥稽
+        // BoundsScale 起外层安全幇作用（主要靠材质的 MaxWPODisplacement）
+        DroneISM->BoundsScale = 100.f;
+        // 禁用距离剥稽，配送任务范围可能超出默认导欠剥稽距离
+        DroneISM->SetCullDistance(0.f);
+    }
 }
 
 // 
@@ -814,57 +824,17 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  Phase B: 主线程 ISM 位置写入 —— 飞行中无人机每帧插值
+    //  Phase B: GPU WPO 路径 —— 仅更新 Custom Data，实例 transform 永驻 HomeLocation
+    //  （CPU 螺旋/贝塞尔 UpdateInstanceTransform 已移除，由 WPO shader 全权驱动）
     // ═══════════════════════════════════════════════════════════════════════════
-    for (auto It = DronePool.CreateIterator(); It; ++It)
     {
-        FDroneData& Drone = *It;
-        const int32 DroneIdx = It.GetIndex();
-
-        switch (Drone.State)
+        const float GameTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+        for (auto It = DronePool.CreateIterator(); It; ++It)
         {
-        case ELogisticsDeviceState::Idle:
-            {
-                // 螺旋盘旋动画（CPU 路径；GPU WPO 路径启用后可移除）
-                if (Drone.ISMInstanceIndex < 0 || !DroneISM) break;
-                if (Drone.ISMInstanceIndex >= DroneISM->GetInstanceCount()) break;
-
-                constexpr float SpiralRadius    = 300.f;
-                constexpr float AngularSpeed    = 0.8f;
-                constexpr float BaseHeight      = 300.f;
-                constexpr float HeightAmplitude = 250.f;
-                constexpr float HeightFrequency = 0.3f;
-
-                const float Angle       = Drone.IdlePhaseOffset + Drone.ElapsedTime * AngularSpeed;
-                const float HeightPhase = Drone.ElapsedTime * HeightFrequency + Drone.IdlePhaseOffset;
-                const float Height      = BaseHeight + HeightAmplitude * FMath::Sin(HeightPhase);
-
-                const FVector Pos = Drone.HomeLocation + FVector(
-                    FMath::Cos(Angle) * SpiralRadius,
-                    FMath::Sin(Angle) * SpiralRadius,
-                    Height);
-
-                const float dZ = HeightAmplitude * HeightFrequency * FMath::Cos(HeightPhase);
-                const FVector Tangent(
-                    -FMath::Sin(Angle) * SpiralRadius * AngularSpeed,
-                     FMath::Cos(Angle) * SpiralRadius * AngularSpeed,
-                     dZ);
-                const FVector Fwd = Tangent.GetSafeNormal();
-                const FQuat Rot   = Fwd.IsNearlyZero() ? FQuat::Identity
-                                                        : FRotationMatrix::MakeFromX(Fwd).ToQuat();
-
-                DroneISM->UpdateInstanceTransform(Drone.ISMInstanceIndex,
-                    FTransform(Rot, Pos, FVector::OneVector), true, false);
-            }
-            break;
-
-        case ELogisticsDeviceState::ReturningHome:
-        case ELogisticsDeviceState::MovingToPickup:
-        case ELogisticsDeviceState::MovingToDeliver:
-            UpdateDroneISMInstance(Drone);
-            break;
-
-        default: break;
+            FDroneData& Drone = *It;
+            if (Drone.ISMInstanceIndex < 0 || !DroneISM) continue;
+            if (Drone.ISMInstanceIndex >= DroneISM->GetInstanceCount()) continue;
+            WriteDroneCustomData(Drone, GameTime);
         }
     }
 
@@ -1296,7 +1266,7 @@ void UMassDspLogisticsSubsystem::WriteDroneCustomData(const FDroneData& Drone, f
     // NOTE: 本函数预留给 GPU WPO 阶段（Phase 5）使用。
     // 待 BuildDroneMaterial() 完成后将开朗下方注释块。
     if (!DroneISM || Drone.ISMInstanceIndex < 0) return;
-    if (DroneISM->NumCustomDataFloats < 15) return; // 材质尚未设置 16 个自定义数据浮点
+    if (DroneISM->NumCustomDataFloats < 18) return; // Custom Data floats 尚未就绪
 
     const int32 Idx  = Drone.ISMInstanceIndex;
     const bool bIdle = (Drone.State == ELogisticsDeviceState::Idle);
@@ -1312,11 +1282,16 @@ void UMassDspLogisticsSubsystem::WriteDroneCustomData(const FDroneData& Drone, f
     DroneISM->SetCustomDataValue(Idx, 8,  Drone.P2.X);
     DroneISM->SetCustomDataValue(Idx, 9,  Drone.P2.Y);
     DroneISM->SetCustomDataValue(Idx, 10, Drone.P2.Z);
+    // [11-13]: 永远是 HomeLocation（Idle 螺旋圆心）
     DroneISM->SetCustomDataValue(Idx, 11, Drone.HomeLocation.X);
     DroneISM->SetCustomDataValue(Idx, 12, Drone.HomeLocation.Y);
     DroneISM->SetCustomDataValue(Idx, 13, Drone.HomeLocation.Z);
     DroneISM->SetCustomDataValue(Idx, 14, Drone.IdlePhaseOffset);
-    DroneISM->SetCustomDataValue(Idx, 15, 0.f); // padding
+    // [15-17]: 飞行终点 P3（仅飞行时有意义，Idle 时写 0）
+    const FVector P3Val = bIdle ? FVector::ZeroVector : Drone.P3;
+    DroneISM->SetCustomDataValue(Idx, 15, P3Val.X);
+    DroneISM->SetCustomDataValue(Idx, 16, P3Val.Y);
+    DroneISM->SetCustomDataValue(Idx, 17, P3Val.Z);
 }
 
 // 

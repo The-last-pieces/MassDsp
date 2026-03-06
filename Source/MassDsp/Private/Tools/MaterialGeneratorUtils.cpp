@@ -938,6 +938,9 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
 
     UMaterial* Mat = NewObject<UMaterial>(Package, *AssetName, RF_Public | RF_Standalone);
     Mat->bUsedWithInstancedStaticMeshes = true;
+    // WPO 最大敢位距离：告知引擎每个 ISM 实例的剥稽 bounds 应扩展多大（cm，10km）
+    // 避免无人机飞出静态 HomeLoc bounds 后被考実倦打掉
+    Mat->MaxWorldPositionOffsetDisplacement = 2000000.f;
 
     // ── 加载默认无人机贴图 ────────────────────────────────────────────────────
     UTexture2D* DefaultDroneTex = Cast<UTexture2D>(StaticLoadObject(
@@ -968,8 +971,9 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
     //  列 1：P0.xyz  [2-4]
     //  列 2：P1.xyz  [5-7]
     //  列 3：P2.xyz  [8-10]
-    //  列 4：HomeLocation.xyz [11-13]
+    //  列 4：HomeLocation.xyz [11-13]（永久 = 螺旋圆心）
     //  列 5：IdlePhaseOffset [14]
+    //  列 6：P3.xyz 飞行终点 [15-17]
     const int32 ColW = 140, RowH = 40;
     auto* N_TimeAtDispatch = MakeCustomData(0, 0.f, -2000, 0 * RowH);
     auto* N_TotalFlightTime = MakeCustomData(1, 0.f, -2000, 1 * RowH);
@@ -982,10 +986,13 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
     auto* N_P2X = MakeCustomData(8, 0.f, -2000 + 3 * ColW, 0 * RowH);
     auto* N_P2Y = MakeCustomData(9, 0.f, -2000 + 3 * ColW, 1 * RowH);
     auto* N_P2Z = MakeCustomData(10, 0.f, -2000 + 3 * ColW, 2 * RowH);
-    auto* N_HX = MakeCustomData(11, 0.f, -2000 + 4 * ColW, 0 * RowH);
-    auto* N_HY = MakeCustomData(12, 0.f, -2000 + 4 * ColW, 1 * RowH);
-    auto* N_HZ = MakeCustomData(13, 0.f, -2000 + 4 * ColW, 2 * RowH);
+    auto* N_HX = MakeCustomData(11, 0.f, -2000 + 4 * ColW, 0 * RowH); // HomeLocation.X
+    auto* N_HY = MakeCustomData(12, 0.f, -2000 + 4 * ColW, 1 * RowH); // HomeLocation.Y
+    auto* N_HZ = MakeCustomData(13, 0.f, -2000 + 4 * ColW, 2 * RowH); // HomeLocation.Z
     auto* N_Phase = MakeCustomData(14, 0.f, -2000 + 5 * ColW, 0 * RowH);
+    auto* N_P3X = MakeCustomData(15, 0.f, -2000 + 6 * ColW, 0 * RowH); // P3 飞行终点.X
+    auto* N_P3Y = MakeCustomData(16, 0.f, -2000 + 6 * ColW, 1 * RowH); // P3 飞行终点.Y
+    auto* N_P3Z = MakeCustomData(17, 0.f, -2000 + 6 * ColW, 2 * RowH); // P3 飞行终点.Z
 
     // ── Time 节点 ─────────────────────────────────────────────────────
     auto* N_Time = NewObject<UMaterialExpressionTime>(Mat);
@@ -1008,18 +1015,17 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
     // ── 核心 WPO CustomExpression 节点 ────────────────────────────────
     // 内联 HLSL：贝塞尔飞行 / Idle 正弦资旋，输出 float3 WPO
     const FString WpoHLSL = TEXT(
-        // 重建贝塞尔控制点
-        "float3 P0 = float3(P0X, P0Y, P0Z);\n"
-        "float3 P1 = float3(P1X, P1Y, P1Z);\n"
-        "float3 P2 = float3(P2X, P2Y, P2Z);\n"
-        "float3 P3 = ObjectWorldPos;\n" // 实例 pivot = P3
+        "float3 P0   = float3(P0X, P0Y, P0Z);\n"
+        "float3 P1   = float3(P1X, P1Y, P1Z);\n"
+        "float3 P2   = float3(P2X, P2Y, P2Z);\n"
+        "float3 P3   = float3(P3X, P3Y, P3Z);\n" // 飞行终点（[15-17]）
+        // [11-13] 永远是 HomeLocation，用作 Idle 螺旋圆心
+        // 实例 transform 永驻于 HomeLocation，所以 VertexWorldPos - Home = 模型局部坐标
         "float3 Home = float3(HX, HY, HZ);\n"
-        // 局部顶点偏移（用于旋转后基于 pivot 的偏移）
-        "float3 LocalVtx = VertexWorldPos - P3;\n"
-        // 目标中心与前进方向
+        "float3 LocalVtx = VertexWorldPos - Home;\n"
         "float3 TargetCenter;\n"
         "float3 ForwardDir;\n"
-        // ---- Idle 模式 ------------------------------------------------
+        // ---- Idle 螺旋环绕 Home（= HomeLocation） ---------------------
         "if (TotalFlightTime < 0.001f) {\n"
         "    const float R = 300.0f;\n"
         "    const float AW = 0.8f;\n"
@@ -1027,30 +1033,30 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
         "    const float Ha = 250.0f;\n"
         "    const float Hw = 0.3f;\n"
         "    float Angle = IdlePhaseOffset + Time * AW;\n"
-        "    float Hp = Time * Hw + IdlePhaseOffset;\n"
-        "    float H = Hb + Ha * sin(Hp);\n"
+        "    float Hp    = Time * Hw + IdlePhaseOffset;\n"
+        "    float H     = Hb + Ha * sin(Hp);\n"
         "    TargetCenter = Home + float3(cos(Angle)*R, sin(Angle)*R, H);\n"
         "    float dZ = Ha * Hw * cos(Hp);\n"
         "    float3 Tang = float3(-sin(Angle)*R*AW, cos(Angle)*R*AW, dZ);\n"
         "    ForwardDir = length(Tang) > 0.001f ? normalize(Tang) : float3(1,0,0);\n"
-        // ---- 飞行模式 ------------------------------------------------
+        // ---- 贝塞尔飞行（P0→P1→P2→P3）--------------------------------
         "} else {\n"
         "    float t = clamp((Time - TimeAtDispatch) / TotalFlightTime, 0.0f, 1.0f);\n"
         "    float s = 1.0f - t;\n"
         "    TargetCenter = s*s*s*P0 + 3.0f*s*s*t*P1 + 3.0f*s*t*t*P2 + t*t*t*P3;\n"
-        "    float3 dBdt = 3.0f*s*s*(P1-P0) + 6.0f*s*t*(P2-P1) + 3.0f*t*t*(P3-P2);\n"
-        "    ForwardDir = length(dBdt) > 0.001f ? normalize(dBdt) : float3(1,0,0);\n"
+        "    float3 dBdt  = 3.0f*s*s*(P1-P0) + 6.0f*s*t*(P2-P1) + 3.0f*t*t*(P3-P2);\n"
+        "    ForwardDir   = length(dBdt) > 0.001f ? normalize(dBdt) : float3(1,0,0);\n"
         "}\n"
-        // ---- 局部旋转：使无人机柠头朝向前进方向 ----------------------
-        "float3 WorldUp = float3(0,0,1);\n"
-        "if (abs(dot(ForwardDir, WorldUp)) > 0.99f) WorldUp = float3(1,0,0);\n"
-        "float3 RightDir = normalize(cross(WorldUp, ForwardDir));\n"
-        "float3 UpDir    = cross(ForwardDir, RightDir);\n"
-        // 旋转后局部偏移： 假定无人机模型建模时 +X = 前，+Y = 右，+Z = 上
-        "float3 RotatedLocal = RightDir * LocalVtx.x\n"
-        "                    + UpDir    * LocalVtx.y\n"
-        "                    + ForwardDir * LocalVtx.z;\n"
-        // WPO = 新世界位置 - 当前世界位置
+        // ---- 纯 Yaw 旋转：ForwardDir 投影到 XY 平面，消除横滚/俯仰 ---
+        "float3 FwdXY   = float3(ForwardDir.x, ForwardDir.y, 0.0f);\n"
+        "float  FwdLen  = length(FwdXY);\n"
+        "FwdXY          = FwdLen > 0.001f ? FwdXY / FwdLen : float3(1,0,0);\n"
+        "float3 RightDir = float3(-FwdXY.y, FwdXY.x, 0.0f);\n"
+        "float3 UpDir    = float3(0, 0, 1);\n"
+        // 模型约定：+X = 前，+Y = 右，+Z = 上
+        "float3 RotatedLocal = FwdXY   * LocalVtx.x\n"
+        "                    + RightDir * LocalVtx.y\n"
+        "                    + UpDir    * LocalVtx.z;\n"
         "return TargetCenter + RotatedLocal - VertexWorldPos;\n"
     );
 
@@ -1074,11 +1080,13 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
         {TEXT("P0X"), N_P0X, 0}, {TEXT("P0Y"), N_P0Y, 0}, {TEXT("P0Z"), N_P0Z, 0},
         {TEXT("P1X"), N_P1X, 0}, {TEXT("P1Y"), N_P1Y, 0}, {TEXT("P1Z"), N_P1Z, 0},
         {TEXT("P2X"), N_P2X, 0}, {TEXT("P2Y"), N_P2Y, 0}, {TEXT("P2Z"), N_P2Z, 0},
+        // [11-13] = HomeLocation (永久), [15-17] = P3 飞行终点
         {TEXT("HX"), N_HX, 0}, {TEXT("HY"), N_HY, 0}, {TEXT("HZ"), N_HZ, 0},
         {TEXT("IdlePhaseOffset"), N_Phase, 0},
         {TEXT("Time"), N_Time, 0},
         {TEXT("VertexWorldPos"), N_VertexPos, 0},
         {TEXT("ObjectWorldPos"), N_ObjPos, 0},
+        {TEXT("P3X"), N_P3X, 0}, {TEXT("P3Y"), N_P3Y, 0}, {TEXT("P3Z"), N_P3Z, 0},
     };
     N_WPO->Inputs.Reset();
     for (const FWPOInputSpec& Spec : InputSpecs)
