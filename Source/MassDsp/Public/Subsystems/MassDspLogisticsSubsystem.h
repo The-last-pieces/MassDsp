@@ -323,12 +323,16 @@ private:
     /**
      * 对匹配到的供应塔列表与需求请求列表批量派遣无人机。
      * SupplyTowers：同一 ItemType 下有足量库存的供应塔实体列表。
-     * DemandIds  ：同一 ItemType 下的需求请求 ID 列表。
+     * DemandIds  : 同一 ItemType 下的需求请求 ID 列表。
      * 供应塔不再使用请求系统，直接从塔实体读取实时状态。
+     * InTransitFromCache / InTransitToCache: 由 MatchPendingRequests 预构建的单帧缓存，
+     *   O(1) 查表替代每次派遣循环中拓展 ActiveTaskIds（O(Towers x ActiveTasks) to O(1)）。
      */
     void DispatchMatchedPairs(
         TArray<FMassEntityHandle>& SupplyTowers,
-        TArray<int32>& DemandIds);
+        TArray<int32>& DemandIds,
+        TMap<FMassEntityHandle, int32>& InTransitFromCache,
+        TMap<FMassEntityHandle, int32>& InTransitToCache);
 
     /** 尝试从候选无人机列表中为 Task 分配一架无人机。 */
     bool TryDispatchTask(FLogisticsTask& Task, const TArray<int32>& CandidateIndices);

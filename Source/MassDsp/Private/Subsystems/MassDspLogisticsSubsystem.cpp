@@ -118,7 +118,7 @@ void UMassDspLogisticsSubsystem::Tick(float DeltaTime)
     // ── 一致性自愈 + 调试统计：降至每 60 帧执行一次（与 CleanExpiredRequests 共用计数器）──
     // 原来：自愈循环 O(30k) 每帧 + 调试统计 O(30k) 每秒，是 Input 100ms 刺尖根因。
     // 现在：与清理同帧批量执行，每 60 帧 (~1s) 一次，热路径完全消除。
-    if (CleanupFrameCounter == 0)  // CleanupFrameCounter 刚被清零时执行
+    if (CleanupFrameCounter == 0) // CleanupFrameCounter 刚被清零时执行
     {
         // 自愈扫描（Debug 版本保留 Warning，Shipping 版本由编译器优化掉 Log 调用）
         for (auto It = DronePool.CreateIterator(); It; ++It)
@@ -599,6 +599,33 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
     if (!EntityManagerPtr) return;
     FMassEntityManager& EntityManager = *EntityManagerPtr;
 
+    // ── P2 优化：预构建单帧在途量缓存 ──────────────────────────────────────────
+    // 原来：ComputeInTransitFromEntity/To 在塔扫描循环和派遣循环中被嵌套调用，
+    //   每次都完整遍历 ActiveTaskIds → O(Towers × ActiveTasks)。
+    // 现在：单次 O(AllTasks) 扫描构建每塔的累计承诺量 → 后续 O(1) 查表。
+    // 派遣后直接增量更新缓存，无需重新扫描。
+    TMap<FMassEntityHandle, int32> InTransitFromCache; // 供应实体 → 已承诺但未取货的在途量
+    TMap<FMassEntityHandle, int32> InTransitToCache; // 需求实体 → 已承诺送达的在途量
+    InTransitFromCache.Reserve(TowerRuntimeData.Num());
+    InTransitToCache.Reserve(TowerRuntimeData.Num());
+    for (int32 i = 0; i < AllTasks.GetMaxIndex(); ++i)
+    {
+        if (!AllTasks.IsValidIndex(i)) continue;
+        const FLogisticsTask& T = AllTasks[i];
+        if (T.State == ELogisticsTaskState::Dispatched ||
+            T.State == ELogisticsTaskState::InTransit_Pickup)
+        {
+            InTransitFromCache.FindOrAdd(T.PickupEntity) += T.TransferQuantity;
+        }
+        if (T.State == ELogisticsTaskState::Dispatched ||
+            T.State == ELogisticsTaskState::InTransit_Pickup ||
+            T.State == ELogisticsTaskState::InTransit_Deliver)
+        {
+            InTransitToCache.FindOrAdd(T.DeliveryEntity) += T.TransferQuantity;
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // ── Step 1：按 ItemType 分桶 ──────────────────────────────────────────────
     // 调度语义：只有需求塔会发送请求，供应塔被动等待调度系统查询。
     //   供应侧：直接扫描全部注册塔，供应模式且有超出 RequestThreshold 的可发货量
@@ -623,7 +650,8 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
         if (TFrag->TowerMode == ELogisticsTowerMode::Supply)
         {
             // 供应塔：实时检查可发货量是否满足至少一整架次
-            const int32 InTransitFrom = ComputeInTransitFromEntity(TowerEntity);
+            // P2 优化：O(1) 缓存查表替代 O(N) ActiveTaskIds 遍历
+            const int32 InTransitFrom = InTransitFromCache.FindRef(TowerEntity);
             const int32 SupplyAvailable = FMath::Max(0,
                                                      SFrag->InventoryCount - TFrag->RequestThreshold - InTransitFrom);
             if (SupplyAvailable >= FMath::Max(1, TFrag->DroneCargoCount))
@@ -666,7 +694,7 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
         TArray<int32>* DemandIds = DemandByType.Find(ItemType);
         if (!DemandIds || DemandIds->IsEmpty()) continue;
 
-        DispatchMatchedPairs(SupplyTowers, *DemandIds);
+        DispatchMatchedPairs(SupplyTowers, *DemandIds, InTransitFromCache, InTransitToCache);
     }
 
     // ── Step 3：清除脏标记 ───────────────────────────────────────────────────
@@ -685,7 +713,9 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
 
 void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
     TArray<FMassEntityHandle>& SupplyTowers,
-    TArray<int32>& DemandIds)
+    TArray<int32>& DemandIds,
+    TMap<FMassEntityHandle, int32>& InTransitFromCache,
+    TMap<FMassEntityHandle, int32>& InTransitToCache)
 {
     UWorld* World = GetWorld();
     FMassEntityManager* EntityManagerPtr = World ? GetEntityManagerSafe(World) : nullptr;
@@ -739,8 +769,8 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
 
         const int32 CargoPerDrone = FMath::Max(1, STF->DroneCargoCount);
 
-        // 供应侧实时可发货量
-        const int32 InTransitFrom = ComputeInTransitFromEntity(SupplyTowerEnt);
+        // P2 优化：O(1) 缓存查表替代 O(N) ActiveTaskIds 遍历
+        const int32 InTransitFrom = InTransitFromCache.FindRef(SupplyTowerEnt);
         int32 SupplyRemaining = FMath::Max(0,
                                            SSF->InventoryCount - STF->RequestThreshold - InTransitFrom);
 
@@ -756,7 +786,8 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
         int32 DemandRemaining = 0;
         if (DSF)
         {
-            const int32 InTransitToDemand = ComputeInTransitToEntity(Demand->SourceEntity);
+            // P2 优化：O(1) 缓存查表
+            const int32 InTransitToDemand = InTransitToCache.FindRef(Demand->SourceEntity);
             DemandRemaining = FMath::Max(0,
                                          DSF->MaxInventory - DSF->InventoryCount - InTransitToDemand);
         }
@@ -824,6 +855,10 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
 
             SupplyRemaining -= BatchQty;
             DemandRemaining -= BatchQty;
+
+            // P2 优化：派遣后增量更新缓存表，后续批次内循环中的查表仍然准确
+            InTransitFromCache.FindOrAdd(SupplyTowerEnt) += BatchQty;
+            InTransitToCache.FindOrAdd(Demand->SourceEntity) += BatchQty;
         }
 
         // 供应耗尽 → 换下一个供应塔；需求满足 → 换下一条需求请求
