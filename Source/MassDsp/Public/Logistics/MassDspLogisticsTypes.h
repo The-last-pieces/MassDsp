@@ -185,7 +185,7 @@ struct FLogisticsTowerRuntimeData
  */
 struct FTowerDroneStatus
 {
-    int32 OwnedDeployed = 0; ///< 归属本塔且正在执行任务（MovingToPickup/AtPickup/MovingToDeliver/AtDeliver）
-    int32 OwnedResting  = 0; ///< 归属本塔且空闲 / 冷却（Idle / Cooldown）
+    int32 OwnedDeployed = 0; ///< 归属本塔且正在执行任务（MovingToPickup/AtPickup/MovingToDeliver/AtDeliver/Cooldown/ReturningHome）
+    int32 OwnedResting  = 0; ///< 归属本塔且空闲（Idle）
     int32 Incoming      = 0; ///< DeliveryEntity == 本塔 且 State == InTransit_Deliver 的正在飞来无人机数
 };

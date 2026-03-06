@@ -86,18 +86,24 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             }
             else if (TowerFrag.TowerMode == ELogisticsTowerMode::Demand)
             {
-                // Demand 模式：库存低于阈值 → 提交补货请求
-                // 扣除「已在途飞向本塔」的在途量，防止需求塔重复过量申请
-                const int32 InTransitTo = Logistics->ComputeInTransitToEntity(TowerEntity);
-                const int32 WantQty = Threshold - InventoryCount - InTransitTo;
-                if (WantQty > 0)
+                // Demand 模式：
+                //   触发条件 — 库存低于 RequestThreshold（同之前保持不变）
+                //   请求数量 — 填满至 MaxInventory（而非仅补到 Threshold）
+                // 这样才能调动足够多的无人机：例如 Threshold=30, MaxInventory=100, Inventory=0
+                //   → 触发（0 < 30） + 请求 100 个 → 派遣 ceil(100/8) = 13 架无人机
+                if (InventoryCount < Threshold)
                 {
-                    Logistics->SubmitDemandRequest(
-                        TowerEntity,
-                        TowerFrag.ItemType,
-                        WantQty,
-                        ELogisticsRequestPriority::Normal,
-                        TowerEntity);
+                    const int32 InTransitTo = Logistics->ComputeInTransitToEntity(TowerEntity);
+                    const int32 WantQty = SelfStorage.MaxInventory - InventoryCount - InTransitTo;
+                    if (WantQty > 0)
+                    {
+                        Logistics->SubmitDemandRequest(
+                            TowerEntity,
+                            TowerFrag.ItemType,
+                            WantQty,
+                            ELogisticsRequestPriority::Normal,
+                            TowerEntity);
+                    }
                 }
             }
         }

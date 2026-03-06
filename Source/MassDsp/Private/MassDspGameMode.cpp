@@ -372,7 +372,7 @@ void AMassDspGameMode::TestCase2()
                 SF->TowerMode = ELogisticsTowerMode::Supply;
                 SF->ItemType = ItemType;
                 SF->RequestThreshold = 0;
-                SF->DroneCargoCount = 5;
+                SF->DroneCargoCount = FGameConst::DroneCarryCapacity; // 8
                 SF->ScanInterval = 0.5f;
             }
         }
@@ -393,7 +393,7 @@ void AMassDspGameMode::TestCase2()
                 DF->TowerMode = ELogisticsTowerMode::Demand;
                 DF->ItemType = ItemType;
                 DF->RequestThreshold = 500;
-                DF->DroneCargoCount = 5;
+                DF->DroneCargoCount = FGameConst::DroneCarryCapacity; // 8
                 DF->ScanInterval = 0.5f;
             }
         }

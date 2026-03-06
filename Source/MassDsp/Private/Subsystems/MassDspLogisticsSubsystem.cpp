@@ -86,33 +86,82 @@ void UMassDspLogisticsSubsystem::SetupISMComponents(
 
 void UMassDspLogisticsSubsystem::Tick(float DeltaTime)
 {
-    // Step 1：推进所有设备状态机 + 批量同步 ISM
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 渲染层 Bug 修复：执行顺序必须是「先派遣，再写 CustomData」
+    //
+    // 原顺序（错误）：UpdateDrones(Phase B 写 CustomData) → MatchPendingRequests(派遣)
+    //   结果：新派遣的无人机 State 还是 Idle，Phase B 写入 bIdle=true (TotalFlightTime=0)，
+    //         GPU 端 shader 执行悬停螺旋动画，直到下一帧才切飞行。
+    //         表现为：统计显示「外派」，视觉上在塔旁盘旋。
+    //
+    // 正确顺序：MatchPendingRequests(派遣) → UpdateDrones(Phase B 写 CustomData)
+    //   派遣完成后 Drone.State 已是 MovingToPickup，Phase B 写入 bIdle=false + 飞行贝塞尔，
+    //   GPU 当帧就能收到正确的飞行 CustomData，无人机立即开始飞行动画。
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // Step 1：处理脏塔的请求匹配与任务派发（先于 CustomData 写入）
+    MatchPendingRequests();
+
+    // Step 2：推进所有设备状态机 + 批量同步 ISM CustomData（派遣后状态已正确）
     UpdateDrones(DeltaTime);
     UpdateVehicles(DeltaTime);
     UpdateTrains(DeltaTime);
 
-    // Step 2：处理脏塔的请求匹配与任务派发
-    MatchPendingRequests();
-
     // Step 3：清理超时请求
     CleanExpiredRequests();
 
-    // 调试：每秒输出一次控制台状态
+    // ── 一致性自愈：State=Idle 但不在空闲池（IdleDroneIndices / Set 去同步）───────
+    // 成因：任何路径调用了 Drone.State=Idle 却未同步更新池（或 TSparseArray slot 复用边界）。
+    // 自愈策略：发现即补录，并打 Warning 供排查；不影响已正确在列的 Idle 无人机。
+    for (auto It = DronePool.CreateIterator(); It; ++It)
+    {
+        const int32 Idx = It.GetIndex();
+        FDroneData& D = *It;
+        if (D.State == ELogisticsDeviceState::Idle && !IdleDroneIndexSet.Contains(Idx))
+        {
+            UE_LOG(LogTemp, Warning,
+                   TEXT("[Logistics] HEAL: drone poolIdx=%d State=Idle but NOT in IdlePool! Re-adding. CurrentTaskId=%d"),
+                   Idx, D.CurrentTaskId);
+            IdleDroneIndices.Add(Idx);
+            IdleDroneIndexSet.Add(Idx);
+            // 顺便把归属塔标脏，让下一帧 MatchPendingRequests 立即派遣
+            if (D.AffiliatedTowerEntity.IsValid())
+                EnqueueDirtyTower(D.AffiliatedTowerEntity);
+        }
+    }
+
+    // 调试：每秒输出一次各状态无人机分布，帮助定位「1个闲置」根因
     static float DbgAccum = 0.f;
     DbgAccum += DeltaTime;
     if (DbgAccum >= 1.f)
     {
         DbgAccum = 0.f;
+
+        int32 CntIdle=0, CntCooldown=0, CntPickup=0, CntDeliver=0, CntReturning=0, CntStagger=0;
+        for (auto It = DronePool.CreateConstIterator(); It; ++It)
+        {
+            const FDroneData& D = *It;
+            if (D.ElapsedTime < -SMALL_NUMBER && D.State != ELogisticsDeviceState::Idle)
+                ++CntStagger;           // 错峰等待（已派遣但倒计时中）
+            else switch (D.State)
+            {
+            case ELogisticsDeviceState::Idle:          ++CntIdle;      break;
+            case ELogisticsDeviceState::Cooldown:      ++CntCooldown;  break;
+            case ELogisticsDeviceState::MovingToPickup: ++CntPickup;   break;
+            case ELogisticsDeviceState::MovingToDeliver:++CntDeliver;  break;
+            case ELogisticsDeviceState::ReturningHome: ++CntReturning; break;
+            default: break;
+            }
+        }
         UE_LOG(LogTemp, Log,
-               TEXT("[Logistics Tick] Drones=%d Idle=%d Requests=%d Tasks=%d TowerRTD=%d"),
-               DronePool.Num(), IdleDroneIndices.Num(),
-               AllRequests.Num(), AllTasks.Num(), TowerRuntimeData.Num());
+               TEXT("[Drones] Total=%d | Idle=%d Stagger=%d Pickup=%d Deliver=%d Cooldown=%d Return=%d | IdlePool=%d Req=%d Tasks=%d"),
+               DronePool.Num(), CntIdle, CntStagger, CntPickup, CntDeliver, CntCooldown, CntReturning,
+               IdleDroneIndices.Num(), AllRequests.Num(), AllTasks.Num());
         if (GEngine)
         {
             GEngine->AddOnScreenDebugMessage(42, 2.f, FColor::Cyan,
-                                             FString::Printf(TEXT("[Logistics] Drones:%d Idle:%d Req:%d Tasks:%d Strategies:%d"),
-                                                             DronePool.Num(), IdleDroneIndices.Num(),
-                                                             AllRequests.Num(), AllTasks.Num(), DispatchStrategies.Num()));
+                FString::Printf(TEXT("[Logistics] Idle:%d Stagger:%d Pickup:%d Deliver:%d Cool:%d Return:%d"),
+                    CntIdle, CntStagger, CntPickup, CntDeliver, CntCooldown, CntReturning));
         }
     }
 }
@@ -296,8 +345,12 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
         case ELogisticsDeviceState::Cooldown:    // 刷交货后等待返航，尚在别处
         case ELogisticsDeviceState::ReturningHome: // 返航中，尚未到家
         default:
-            ++Result.OwnedDeployed; // 上述均视为外派
+        {
+            // 错峰起飞（ElapsedTime < 0）：无人机已被派遣、货物已锁定，
+            // 只是倒计时未归零，从用户角度属于"已外派"而非"休息"
+            ++Result.OwnedDeployed;
             break;
+        }
         }
     }
 
@@ -318,8 +371,12 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
 
 int32 UMassDspLogisticsSubsystem::ComputeInTransitToEntity(FMassEntityHandle DemandEntity) const
 {
-    // 通过归属塔的 ActiveTaskIds 迭代，只统计送往该实体的在途任务货物量。
-    // 匆不需全表扫描 AllTasks，复杂度 O(本塔活跃任务数)。
+    // 统计「最终会送达该实体」的在途货物总量：
+    //   InTransit_Pickup  — 无人机正飞往取货点，货物尚未装载，但该批次已承诺送达此目标。
+    //   InTransit_Deliver — 无人机已取货，正飞往该交货点。
+    // 两个阶段都计入，才能准确防止对同一需求塔重复派遣过量无人机。
+    // 若只计 InTransit_Deliver（旧逻辑），则 Pickup 阶段的承诺量不被扣除，
+    // 会导致 MatchPendingRequests 认为「还有空位」而额外派遣，产生多次取货竞争。
     const FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(DemandEntity);
     if (!RTD) return 0;
 
@@ -328,8 +385,13 @@ int32 UMassDspLogisticsSubsystem::ComputeInTransitToEntity(FMassEntityHandle Dem
     {
         if (!AllTasks.IsValidIndex(TaskId)) continue;
         const FLogisticsTask& Task = AllTasks[TaskId];
-        if (Task.DeliveryEntity == DemandEntity)
+        if (Task.DeliveryEntity == DemandEntity &&
+            (Task.State == ELogisticsTaskState::InTransit_Pickup ||
+             Task.State == ELogisticsTaskState::InTransit_Deliver ||
+             Task.State == ELogisticsTaskState::Dispatched))
+        {
             Total += Task.TransferQuantity;
+        }
     }
     return Total;
 }
@@ -530,8 +592,19 @@ FMassEntityHandle UMassDspLogisticsSubsystem::FindNearestEligibleTower(FMassEnti
 
 void UMassDspLogisticsSubsystem::MatchPendingRequests()
 {
-    // O(1) 早退：只有被 EnqueueDirtyTower 推入的塔才需要处理
-    if (DirtyTowerQueue.IsEmpty()) return;
+    // 早退优化：脏塔队列空时，再快速检查是否有任何塔存有悬挂请求。
+    // 注意：不能只凭 DirtyTowerQueue 判断——当供应因物资不足分批派遣时，
+    // 需求侧请求保留在 PendingRequestIds 里但塔不被标记为脏，
+    // 此时必须扫描全部有请求的塔，否则剩余无人机永远闲置。
+    bool bHasWork = !DirtyTowerQueue.IsEmpty();
+    if (!bHasWork)
+    {
+        for (auto& [Ent, RTD] : TowerRuntimeData)
+        {
+            if (!RTD.PendingRequestIds.IsEmpty()) { bHasWork = true; break; }
+        }
+    }
+    if (!bHasWork) return;
 
     UWorld* World = GetWorld();
     if (!World) return;
@@ -540,18 +613,20 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
     if (!EntityManagerPtr) return;
     FMassEntityManager& EntityManager = *EntityManagerPtr;
 
-    // ── Step 1：仅遍历脏塔，收集 Supply / Demand 请求按 ItemType 分桶 ──────
+    // ── Step 1：遍历所有有未决请求的塔（不限于脏塔），按 ItemType 分桶 ────────
+    // 仅凭脏标记会遗漏"供应不足导致需求分批履行"的塔：
+    //   第一批派 4 架后供应耗尽，需求请求保留但塔不再是脏塔；
+    //   供应补货后只有供应塔被标脏，需求侧请求就永远找不到匹配。
     TMap<EItemType, TArray<int32>> SupplyByType;
     TMap<EItemType, TArray<int32>> DemandByType;
     int32 TotalSupply = 0, TotalDemand = 0;
 
-    for (const FMassEntityHandle TowerEntity : DirtyTowerQueue)
+    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
     {
+        if (RuntimeData.PendingRequestIds.IsEmpty()) continue;
         if (!EntityManager.IsEntityValid(TowerEntity)) continue;
-        const FLogisticsTowerRuntimeData* RuntimeData = TowerRuntimeData.Find(TowerEntity);
-        if (!RuntimeData) continue;
 
-        for (const int32 ReqId : RuntimeData->PendingRequestIds)
+        for (const int32 ReqId : RuntimeData.PendingRequestIds)
         {
             if (!AllRequests.IsValidIndex(ReqId)) continue;
             const FLogisticsRequest& Req = AllRequests[ReqId];
@@ -642,31 +717,56 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
                 CargoPerDrone = FMath::Max(1, STF->DroneCargoCount);
         }
 
-        int32 SupplyRemaining = Supply->Quantity;
-        int32 DemandRemaining = Demand->Quantity;
-        bool bAnyDispatched   = false;
-        int32 StaggerIndex    = 0;
+        // ── 实时重算双侧可用量（请求 Quantity 是提交时快照，可能过时） ──────────
+        // 不能简单用 Supply->Quantity / Demand->Quantity，否则旧公式生成的请求
+        // 会错误限制实际派遣数量（例如旧公式 Threshold-Inventory=32 只派 4 架，
+        // 而实际需求 MaxInventory-Inventory=40 应派 5 架）。
+        int32 SupplyRemaining = 0;
+        int32 DemandRemaining = 0;
 
-        // ── 在途容量检查 ────────────────────────────────────────────────────
-        if (EntityManagerPtr)
+        if (!EntityManagerPtr)
         {
-            const FMassDspLogisticsTowerFragment* DTF =
-                EntityManagerPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Demand->SourceEntity);
+            SupplyIds.RemoveAt(0);
+            DemandIds.RemoveAt(0);
+            continue;
+        }
+
+        // Supply 侧实时可发货量
+        {
+            const FMassDspLogisticsTowerFragment* STF =
+                EntityManagerPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Supply->SourceEntity);
+            const FMassDspStorageFragment* SSF =
+                EntityManagerPtr->GetFragmentDataPtr<FMassDspStorageFragment>(Supply->SourceEntity);
+            if (STF && SSF)
+            {
+                const int32 InTransitFrom = ComputeInTransitFromEntity(Supply->SourceEntity);
+                SupplyRemaining = FMath::Max(0,
+                    SSF->InventoryCount - STF->RequestThreshold - InTransitFrom);
+            }
+        }
+        if (SupplyRemaining <= 0)
+        {
+            SupplyIds.RemoveAt(0);
+            DemandIds.RemoveAt(0);
+            continue;
+        }
+
+        // Demand 侧实时可接收量（填满至 MaxInventory）
+        {
             const FMassDspStorageFragment* DSF =
                 EntityManagerPtr->GetFragmentDataPtr<FMassDspStorageFragment>(Demand->SourceEntity);
-            if (DTF && DSF)
+            if (DSF)
             {
                 const int32 InTransitToDemand = ComputeInTransitToEntity(Demand->SourceEntity);
-                const int32 EffectiveNeed     = FMath::Max(0,
-                    DTF->RequestThreshold - DSF->InventoryCount - InTransitToDemand);
-                if (EffectiveNeed <= 0)
-                {
-                    SupplyIds.RemoveAt(0);
-                    DemandIds.RemoveAt(0);
-                    continue;
-                }
-                DemandRemaining = FMath::Min(DemandRemaining, EffectiveNeed);
+                DemandRemaining = FMath::Max(0,
+                    DSF->MaxInventory - DSF->InventoryCount - InTransitToDemand);
             }
+        }
+        if (DemandRemaining <= 0)
+        {
+            SupplyIds.RemoveAt(0);
+            DemandIds.RemoveAt(0);
+            continue;
         }
 
         // 前置构建归属候选列表
@@ -720,12 +820,11 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             AllTasks[TaskId].State           = Task.State;
             AllTasks[TaskId].DevicePoolIndex = Task.DevicePoolIndex;
 
-            // 错峰起飞
-            if (StaggerIndex > 0)
-            {
-                FDroneData& D = DronePool[Task.DevicePoolIndex];
-                D.ElapsedTime = -(StaggerIndex * FGameConst::DroneDispatchStaggerInterval);
-            }
+            // 注：已移除错峰起飞（stagger）延迟。
+            // stagger 本为视觉优化（避免群起群落），但会制造结构性滞后：
+            // 最后一架每轮总是晚 N×0.1s 出发，其他架交货回家再次被派遣时那架仍未完成，
+            // 造成「始终有1架在Stagger」的永久循环，需求端也因此少计1架入库。
+            // 如需视觉错峰，日后可在渲染层用相位偏移实现，与调度逻辑解耦。
 
             // 已派出的无人机从归属候选中移除
             AffiliatedCandidates.RemoveSwap(Task.DevicePoolIndex);
@@ -738,18 +837,15 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
 
             SupplyRemaining -= BatchQty;
             DemandRemaining -= BatchQty;
-            bAnyDispatched = true;
-            ++StaggerIndex;
         }
 
-        if (bAnyDispatched)
-        {
-            if (FLogisticsTowerRuntimeData* SRTD = TowerRuntimeData.Find(Supply->PreferredTowerEntity))
-                SRTD->PendingRequestIds.Remove(SupplyId);
-            if (FLogisticsTowerRuntimeData* DRTD = TowerRuntimeData.Find(Demand->PreferredTowerEntity))
-                DRTD->PendingRequestIds.Remove(DemandId);
-        }
-
+        // 无论是否派遣了无人机，都 **保留** 双方的 PendingRequestId。
+        // 原因：
+        //   - DispatchMatchedPairs 已改为实时重算 SR/DR，请求的 Quantity 快照不再决定派遣量。
+        //   - 请求若在 SR=0 时被删除，下一轮必须等 Processor ScanInterval（0.5s）重新提交，
+        //     期间归巢的无人机找不到请求而闲置，造成「4派6闲」定型循环。
+        //   - 保留请求后，MatchPendingRequests 每帧运行，SR>0 时立即派遣，彻底消除空窗期。
+        //   - 请求的自然退出路径：CleanExpiredRequests（30s无活动）或 CancelRequest（主动取消）。
         SupplyIds.RemoveAt(0);
         DemandIds.RemoveAt(0);
     }
@@ -969,15 +1065,26 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
             }
     }
 
-    // Bug #7 修复：取货失败（Supply 端库存为空）时中止任务，不再空飞到交货点
+    // Bug #7 修复：取货失败（Supply 端库存为空）时中止任务，不再空飞到交货点。
+    // 注意：失败时进入 Cooldown（而非直接 Idle），给矿机时间补充货物。
+    // 若直接 Idle，下帧立刻再次被派遣→再次取货失败，形成死循环（「1架永远在家」的根因之一）。
     if (!bPickupSuccess)
     {
         const int32 FailedTaskId = Drone.CurrentTaskId;
-        // 将无人机标记为失败态（置 Idle），此后冷却流程会自动恢复
-        OnDroneTaskFailed(DronePoolIndex);
-        // 从两个协调塔的 ActiveTaskIds 中清除（OnDroneTaskFailed 未处理 ActiveTaskIds）
+
+        // 清除无人机任务关联
+        Drone.CarriedItemType = EItemType::None;
+        Drone.CarriedQuantity = 0;
+        Drone.CurrentTaskId   = -1;
+
+        // 进入短暂 Cooldown，给矿机时间补货（0.5s 约等于矿机几个出货周期）
+        Drone.State             = ELogisticsDeviceState::Cooldown;
+        Drone.CooldownRemaining = 0.5f;
+
+        // 从两个协调塔的 ActiveTaskIds 中清除
         if (AllTasks.IsValidIndex(FailedTaskId))
         {
+            AllTasks[FailedTaskId].State = ELogisticsTaskState::Failed;
             const FLogisticsTask& FailedTask = AllTasks[FailedTaskId];
             if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(FailedTask.SupplyTowerEntity))
                 RTD->ActiveTaskIds.Remove(FailedTaskId);
@@ -1078,8 +1185,9 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
                     }
                     else
                     {
+                        // Demand 重入队：目标是填满至 MaxInventory，而非仅到 RequestThreshold
                         const int32 InTransitTo = ComputeInTransitToEntity(Req.SourceEntity);
-                        EffectiveQty = FMath::Max(0, TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
+                        EffectiveQty = FMath::Max(0, SFrag->MaxInventory - SFrag->InventoryCount - InTransitTo);
                     }
                 }
             }
@@ -1350,7 +1458,10 @@ void UMassDspLogisticsSubsystem::WriteDroneCustomData(const FDroneData& Drone, f
     if (DroneISM->NumCustomDataFloats < 18) return; // Custom Data floats 尚未就绪
 
     const int32 Idx  = Drone.ISMInstanceIndex;
-    const bool bIdle = (Drone.State == ELogisticsDeviceState::Idle);
+    // 错峰起飞修复：待命止点期间（ElapsedTime < 0）无人机尚未离塔，强制以 Idle 模式输出
+    // （GPU 在 HomeLocation 做螺旋动画，而不是冻结在 P0 = 供应塔起点）
+    const bool bStaggerWaiting = (Drone.ElapsedTime < -SMALL_NUMBER);
+    const bool bIdle = (Drone.State == ELogisticsDeviceState::Idle) || bStaggerWaiting;
 
     // Bug #11 修复：错峰起飞时 ElapsedTime 为负（stagger 延迟），用 max(0,ElapsedTime) 参与计算，
     // 确保 GPU 端 t = (currentGameTime - TimeAtDispatch) / TotalFlightTime >= 0，避免贝塞尔外推。
@@ -1428,12 +1539,17 @@ void UMassDspLogisticsSubsystem::HandleCooldownEnded(int32 DroneIdx)
                     }
                     else if (TFrag->TowerMode == ELogisticsTowerMode::Demand)
                     {
-                        const int32 InTransitTo = ComputeInTransitToEntity(TowerEnt);
-                        const int32 EffQty = FMath::Max(0,
-                            TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
-                        if (EffQty > 0)
-                            SubmitDemandRequest(TowerEnt, TFrag->ItemType, EffQty,
-                                                ELogisticsRequestPriority::Normal, TowerEnt);
+                        // Demand 模式冷却后重新请求：触发条件与 Processor 一致（库存低于阈值），
+                        // 请求数量填满至 MaxInventory
+                        if (SFrag->InventoryCount < TFrag->RequestThreshold)
+                        {
+                            const int32 InTransitTo = ComputeInTransitToEntity(TowerEnt);
+                            const int32 EffQty = FMath::Max(0,
+                                SFrag->MaxInventory - SFrag->InventoryCount - InTransitTo);
+                            if (EffQty > 0)
+                                SubmitDemandRequest(TowerEnt, TFrag->ItemType, EffQty,
+                                                    ELogisticsRequestPriority::Normal, TowerEnt);
+                        }
                     }
                 }
             }
