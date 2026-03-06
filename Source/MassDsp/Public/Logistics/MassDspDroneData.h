@@ -67,6 +67,15 @@ struct MASSDSP_API FDroneData
     //  ISM 渲染索引（-1 = 尚未分配实例） 
     int32 ISMInstanceIndex = -1;
 
+    /**
+     * GPU Custom Data 脏标记。
+     * 置 true 时 Phase B 会将本帧 18 个 float 写入 ISM（仅状态切换时触发，每帧极少次）。
+     * 写完后清零，直到下次状态切换再置位。
+     * 优化原理：P0-P3 / TimeAtDispatch / TotalFlightTime 全部在状态切换时固定，
+     *           GPU 用 GameTime 自行推进 t，CPU 无需每帧刷新 CustomData。
+     */
+    bool bCustomDataDirty = true;
+
     //  工具方法 
     bool IsIdle()        const { return State == ELogisticsDeviceState::Idle; }
     bool IsReturning()   const { return State == ELogisticsDeviceState::ReturningHome; }

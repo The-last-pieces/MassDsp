@@ -289,6 +289,12 @@ private:
 
     UMassDspManager* GetDspManager();
 
+    /**
+     * 帧计数器：CleanExpiredRequests 每 60 帧执行一次，降低每帧全量扫描开销。
+     * 请求/任务超时时长为 30s，60 帧约 1s 间隔完全覆盖及时清理需求。
+     */
+    int32 CleanupFrameCounter = 0;
+
     // 
     //  私有调度方法
     // 
