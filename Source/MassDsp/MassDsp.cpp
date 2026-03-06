@@ -40,6 +40,14 @@ void FMassDspModule::RegisterMenus()
     );
 
     NewSection.AddMenuEntry(
+        "CreateDroneMaterial",
+        FText::FromString(TEXT("生成无人机材质")),
+        FText::FromString(TEXT("自动生成无人机材质")),
+        FSlateIcon(),
+        FUIAction(FExecuteAction::CreateStatic(&UMaterialGeneratorUtils::BuildDroneMaterial))
+    );
+
+    NewSection.AddMenuEntry(
         "CreateBuildingWidgets",
         FText::FromString(TEXT("生成建筑 UI 蓝图")),
         FText::FromString(TEXT("程序化生成 BP_Miner / BP_Maker / BP_Storage 三个 Widget Blueprint")),

@@ -1,6 +1,7 @@
 ﻿#include "MassDspGameMode.h"
 
 #include "Subsystems/MassDspManager.h"
+#include "Tools/MaterialGeneratorUtils.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 
 #include "Actors/MassDspMiner.h"
@@ -424,6 +425,18 @@ void AMassDspGameMode::TestCase2()
         DroneISM->AttachToComponent(ISMHostRoot, FAttachmentTransformRules::KeepRelativeTransform);
         ISMHost->AddInstanceComponent(DroneISM);
         DroneISM->RegisterComponent();
+
+        // ── 无人机 WPO 材质 ────────────────────────────────────────────────────
+        if (UMaterial* DroneMat = Cast<UMaterial>(StaticLoadObject(
+            UMaterial::StaticClass(), nullptr, TEXT("/Game/Assets/M_Drone"))))
+        {
+            DroneISM->SetMaterial(0, DroneMat);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[Logistics] M_Drone 材质未找到，请在编辑器中运行一次以生成资源"));
+        }
+
         LogisticsSub->SetupISMComponents(DroneISM, nullptr, nullptr);
     }
     else

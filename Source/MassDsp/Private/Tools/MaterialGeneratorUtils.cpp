@@ -31,6 +31,12 @@
 #include "Materials/MaterialExpressionFrac.h"
 #include "Materials/MaterialExpressionVertexColor.h"
 
+#include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionPerInstanceCustomData.h"
+#include "Materials/MaterialExpressionWorldPosition.h"
+#include "Materials/MaterialExpressionObjectPositionWS.h"
+#include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+
 #include "UI/MassDspMinerWidget.h"
 #include "UI/MassDspStorageWidget.h"
 #include "UI/MassDspAssemblerWidget.h"
@@ -50,6 +56,8 @@
 #include "Components/ProgressBar.h"
 #include "Components/Button.h"
 #include "Components/Border.h"
+
+#include "UObject/SavePackage.h"
 
 // 传送带材质：两侧白边 + 中间倒V形（∧）箭头动画
 // 动画速度由 Speed 标量参数控制（UV/s），不再依赖顶点色
@@ -904,6 +912,211 @@ void UMaterialGeneratorUtils::CreateBuildingWidgets()
         E.Build(WBP);
         FinalizeWidgetBP(WBP);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BuildDroneMaterial
+//  出诚：/Game/Assets/Materials/M_Drone
+//  WPO 核心逻辑：
+//    TotalFlightTime == 0  → Idle 正弦资旋，平滑无跳变
+//    TotalFlightTime > 0   → 三次贝塞尔飞行 + 切线小车头
+// ─────────────────────────────────────────────────────────────────────────────
+void UMaterialGeneratorUtils::BuildDroneMaterial()
+{
+    const FString AssetName = TEXT("M_Drone");
+    const FString PackageName = TEXT("/Game/Assets/") + AssetName;
+
+    // 若资源已存在且尚未修改则跳过
+    if (UObject* Existing = StaticFindObject(UMaterial::StaticClass(), nullptr, *PackageName, true))
+    {
+        UE_LOG(LogTemp, Log, TEXT("[MatGen] M_Drone already exists, skipping."));
+        return;
+    }
+
+    UPackage* Package = CreatePackage(*PackageName);
+    check(Package);
+
+    UMaterial* Mat = NewObject<UMaterial>(Package, *AssetName, RF_Public | RF_Standalone);
+    Mat->bUsedWithInstancedStaticMeshes = true;
+
+    // ── 加载默认无人机贴图 ────────────────────────────────────────────────────
+    UTexture2D* DefaultDroneTex = Cast<UTexture2D>(StaticLoadObject(
+        UTexture2D::StaticClass(), nullptr, TEXT("/Game/Assets/Building/T_Drone")));
+    if (!DefaultDroneTex)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[MatGen] T_Drone 贴图未找到，DroneTexture 参数将使用空贴图"));
+    }
+
+    // ── 辅助 lambda：创建 PerInstanceCustomData 节点 ──────────────────────────
+    auto MakeCustomData = [&](int32 DataIndex, float DefaultValue = 0.f,
+                              int32 NodeX = 0, int32 NodeY = 0)
+        -> UMaterialExpressionPerInstanceCustomData*
+    {
+        auto* Node = NewObject<UMaterialExpressionPerInstanceCustomData>(Mat);
+        auto DefaultValueExpr = NewObject<UMaterialExpressionConstant>(Mat);
+        DefaultValueExpr->R = DefaultValue;
+        Node->DataIndex = DataIndex;
+        Node->DefaultValue.Expression = DefaultValueExpr;
+        Node->MaterialExpressionEditorX = NodeX;
+        Node->MaterialExpressionEditorY = NodeY;
+        Mat->GetExpressionCollection().AddExpression(Node);
+        return Node;
+    };
+
+    // ── 布局各 PerInstanceCustomData 节点 ───────────────────────────────
+    //  列 0：[0]和[1]（TimeAtDispatch, TotalFlightTime）
+    //  列 1：P0.xyz  [2-4]
+    //  列 2：P1.xyz  [5-7]
+    //  列 3：P2.xyz  [8-10]
+    //  列 4：HomeLocation.xyz [11-13]
+    //  列 5：IdlePhaseOffset [14]
+    const int32 ColW = 140, RowH = 40;
+    auto* N_TimeAtDispatch = MakeCustomData(0, 0.f, -2000, 0 * RowH);
+    auto* N_TotalFlightTime = MakeCustomData(1, 0.f, -2000, 1 * RowH);
+    auto* N_P0X = MakeCustomData(2, 0.f, -2000 + ColW, 0 * RowH);
+    auto* N_P0Y = MakeCustomData(3, 0.f, -2000 + ColW, 1 * RowH);
+    auto* N_P0Z = MakeCustomData(4, 0.f, -2000 + ColW, 2 * RowH);
+    auto* N_P1X = MakeCustomData(5, 0.f, -2000 + 2 * ColW, 0 * RowH);
+    auto* N_P1Y = MakeCustomData(6, 0.f, -2000 + 2 * ColW, 1 * RowH);
+    auto* N_P1Z = MakeCustomData(7, 0.f, -2000 + 2 * ColW, 2 * RowH);
+    auto* N_P2X = MakeCustomData(8, 0.f, -2000 + 3 * ColW, 0 * RowH);
+    auto* N_P2Y = MakeCustomData(9, 0.f, -2000 + 3 * ColW, 1 * RowH);
+    auto* N_P2Z = MakeCustomData(10, 0.f, -2000 + 3 * ColW, 2 * RowH);
+    auto* N_HX = MakeCustomData(11, 0.f, -2000 + 4 * ColW, 0 * RowH);
+    auto* N_HY = MakeCustomData(12, 0.f, -2000 + 4 * ColW, 1 * RowH);
+    auto* N_HZ = MakeCustomData(13, 0.f, -2000 + 4 * ColW, 2 * RowH);
+    auto* N_Phase = MakeCustomData(14, 0.f, -2000 + 5 * ColW, 0 * RowH);
+
+    // ── Time 节点 ─────────────────────────────────────────────────────
+    auto* N_Time = NewObject<UMaterialExpressionTime>(Mat);
+    N_Time->MaterialExpressionEditorX = -1200;
+    N_Time->MaterialExpressionEditorY = 0;
+    Mat->GetExpressionCollection().AddExpression(N_Time);
+
+    // ── VertexWorldPos (AbsoluteWorldPosition) 节点 ──────────────────────
+    auto* N_VertexPos = NewObject<UMaterialExpressionWorldPosition>(Mat);
+    N_VertexPos->MaterialExpressionEditorX = -1200;
+    N_VertexPos->MaterialExpressionEditorY = RowH;
+    Mat->GetExpressionCollection().AddExpression(N_VertexPos);
+
+    // ── ObjectPositionWS 节点 ────────────────────────────────────────
+    auto* N_ObjPos = NewObject<UMaterialExpressionObjectPositionWS>(Mat);
+    N_ObjPos->MaterialExpressionEditorX = -1200;
+    N_ObjPos->MaterialExpressionEditorY = 2 * RowH;
+    Mat->GetExpressionCollection().AddExpression(N_ObjPos);
+
+    // ── 核心 WPO CustomExpression 节点 ────────────────────────────────
+    // 内联 HLSL：贝塞尔飞行 / Idle 正弦资旋，输出 float3 WPO
+    const FString WpoHLSL = TEXT(
+        // 重建贝塞尔控制点
+        "float3 P0 = float3(P0X, P0Y, P0Z);\n"
+        "float3 P1 = float3(P1X, P1Y, P1Z);\n"
+        "float3 P2 = float3(P2X, P2Y, P2Z);\n"
+        "float3 P3 = ObjectWorldPos;\n" // 实例 pivot = P3
+        "float3 Home = float3(HX, HY, HZ);\n"
+        // 局部顶点偏移（用于旋转后基于 pivot 的偏移）
+        "float3 LocalVtx = VertexWorldPos - P3;\n"
+        // 目标中心与前进方向
+        "float3 TargetCenter;\n"
+        "float3 ForwardDir;\n"
+        // ---- Idle 模式 ------------------------------------------------
+        "if (TotalFlightTime < 0.001f) {\n"
+        "    const float R = 300.0f;\n"
+        "    const float AW = 0.8f;\n"
+        "    const float Hb = 300.0f;\n"
+        "    const float Ha = 250.0f;\n"
+        "    const float Hw = 0.3f;\n"
+        "    float Angle = IdlePhaseOffset + Time * AW;\n"
+        "    float Hp = Time * Hw + IdlePhaseOffset;\n"
+        "    float H = Hb + Ha * sin(Hp);\n"
+        "    TargetCenter = Home + float3(cos(Angle)*R, sin(Angle)*R, H);\n"
+        "    float dZ = Ha * Hw * cos(Hp);\n"
+        "    float3 Tang = float3(-sin(Angle)*R*AW, cos(Angle)*R*AW, dZ);\n"
+        "    ForwardDir = length(Tang) > 0.001f ? normalize(Tang) : float3(1,0,0);\n"
+        // ---- 飞行模式 ------------------------------------------------
+        "} else {\n"
+        "    float t = clamp((Time - TimeAtDispatch) / TotalFlightTime, 0.0f, 1.0f);\n"
+        "    float s = 1.0f - t;\n"
+        "    TargetCenter = s*s*s*P0 + 3.0f*s*s*t*P1 + 3.0f*s*t*t*P2 + t*t*t*P3;\n"
+        "    float3 dBdt = 3.0f*s*s*(P1-P0) + 6.0f*s*t*(P2-P1) + 3.0f*t*t*(P3-P2);\n"
+        "    ForwardDir = length(dBdt) > 0.001f ? normalize(dBdt) : float3(1,0,0);\n"
+        "}\n"
+        // ---- 局部旋转：使无人机柠头朝向前进方向 ----------------------
+        "float3 WorldUp = float3(0,0,1);\n"
+        "if (abs(dot(ForwardDir, WorldUp)) > 0.99f) WorldUp = float3(1,0,0);\n"
+        "float3 RightDir = normalize(cross(WorldUp, ForwardDir));\n"
+        "float3 UpDir    = cross(ForwardDir, RightDir);\n"
+        // 旋转后局部偏移： 假定无人机模型建模时 +X = 前，+Y = 右，+Z = 上
+        "float3 RotatedLocal = RightDir * LocalVtx.x\n"
+        "                    + UpDir    * LocalVtx.y\n"
+        "                    + ForwardDir * LocalVtx.z;\n"
+        // WPO = 新世界位置 - 当前世界位置
+        "return TargetCenter + RotatedLocal - VertexWorldPos;\n"
+    );
+
+    auto* N_WPO = NewObject<UMaterialExpressionCustom>(Mat);
+    N_WPO->Code = WpoHLSL;
+    N_WPO->OutputType = CMOT_Float3;
+    N_WPO->Description = TEXT("DroneFlight_WPO");
+    N_WPO->MaterialExpressionEditorX = -400;
+    N_WPO->MaterialExpressionEditorY = 0;
+
+    // ── 连接 18 个输入 ───────────────────────────────────────────────
+    struct FWPOInputSpec
+    {
+        FName Name;
+        UMaterialExpression* Expr;
+        int32 OutputIdx;
+    };
+    const TArray<FWPOInputSpec> InputSpecs = {
+        {TEXT("TimeAtDispatch"), N_TimeAtDispatch, 0},
+        {TEXT("TotalFlightTime"), N_TotalFlightTime, 0},
+        {TEXT("P0X"), N_P0X, 0}, {TEXT("P0Y"), N_P0Y, 0}, {TEXT("P0Z"), N_P0Z, 0},
+        {TEXT("P1X"), N_P1X, 0}, {TEXT("P1Y"), N_P1Y, 0}, {TEXT("P1Z"), N_P1Z, 0},
+        {TEXT("P2X"), N_P2X, 0}, {TEXT("P2Y"), N_P2Y, 0}, {TEXT("P2Z"), N_P2Z, 0},
+        {TEXT("HX"), N_HX, 0}, {TEXT("HY"), N_HY, 0}, {TEXT("HZ"), N_HZ, 0},
+        {TEXT("IdlePhaseOffset"), N_Phase, 0},
+        {TEXT("Time"), N_Time, 0},
+        {TEXT("VertexWorldPos"), N_VertexPos, 0},
+        {TEXT("ObjectWorldPos"), N_ObjPos, 0},
+    };
+    N_WPO->Inputs.Reset();
+    for (const FWPOInputSpec& Spec : InputSpecs)
+    {
+        FCustomInput In; // UE5 定义于 MaterialExpressionCustom.h
+        In.InputName = Spec.Name;
+        In.Input.Connect(Spec.OutputIdx, Spec.Expr);
+        N_WPO->Inputs.Add(In);
+    }
+    Mat->GetExpressionCollection().AddExpression(N_WPO);
+
+    // ── Texture2D 参数节点（DroneTexture，默认绑定 T_Drone）───────────────
+    auto* N_DroneTex = NewObject<UMaterialExpressionTextureSampleParameter2D>(Mat);
+    N_DroneTex->ParameterName = TEXT("DroneTexture");
+    N_DroneTex->Texture = DefaultDroneTex; // nullptr 时引擎使用灰色占位
+    N_DroneTex->MaterialExpressionEditorX = -600;
+    N_DroneTex->MaterialExpressionEditorY = -200;
+    Mat->GetExpressionCollection().AddExpression(N_DroneTex);
+
+    // ── 连接 WPO 输出到材质 ────────────────────────────────────────────
+    Mat->GetEditorOnlyData()->WorldPositionOffset.Connect(0, N_WPO);
+    Mat->GetEditorOnlyData()->BaseColor.Connect(0, N_DroneTex); // output 0 = RGBA → BaseColor 取 RGB
+
+    // ── 最终化并保存 ─────────────────────────────────────────────────
+    Mat->PreEditChange(nullptr);
+    Mat->PostEditChange();
+    Mat->MarkPackageDirty();
+    Package->SetDirtyFlag(true);
+
+    FAssetRegistryModule::AssetCreated(Mat);
+
+    const FString Filename = FPackageName::LongPackageNameToFilename(
+        PackageName, FPackageName::GetAssetPackageExtension());
+    FSavePackageArgs SaveArgs;
+    SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+    UPackage::SavePackage(Package, Mat, *Filename, SaveArgs);
+
+    UE_LOG(LogTemp, Log, TEXT("[MatGen] M_Drone saved to %s"), *Filename);
 }
 
 #endif

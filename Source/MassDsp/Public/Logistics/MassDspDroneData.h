@@ -19,7 +19,7 @@ struct MASSDSP_API FDroneData
 
     //  状态机 
     ELogisticsDeviceState State       = ELogisticsDeviceState::Idle;
-    FGuid                 CurrentTaskId; ///< 全零 = 空闲
+    int32                 CurrentTaskId = -1; ///< -1 = 空闲（TSparseArray 下标）
 
     //  贝塞尔飞行曲线（State 变化时由 InitDeviceForTask 重新生成） 
     // P0=出发点, P1=控制点1, P2=控制点2, P3=目标点

@@ -126,7 +126,7 @@ struct FTrainHandle
  */
 struct FLogisticsRequest
 {
-    FGuid RequestId;
+    int32 RequestId = -1;  ///< TSparseArray 下标（-1 = 未分配）
     ELogisticsRequestType Type = ELogisticsRequestType::Supply;
     FMassEntityHandle SourceEntity; ///< 发起请求的建筑 Mass Entity
     EItemType ItemType = EItemType::None;
@@ -144,9 +144,9 @@ struct FLogisticsRequest
  */
 struct FLogisticsTask
 {
-    FGuid TaskId;
-    FGuid SupplyRequestId;
-    FGuid DemandRequestId;
+    int32 TaskId = -1;           ///< TSparseArray 下标（-1 = 未分配）
+    int32 SupplyRequestId = -1;  ///< 关联的供货请求 ID
+    int32 DemandRequestId = -1;  ///< 关联的需货请求 ID
     ELogisticsDeviceType DeviceType = ELogisticsDeviceType::Drone;
     /** 对应设备 TSparseArray 的物理 Index */
     int32 DevicePoolIndex = -1;
@@ -166,11 +166,13 @@ struct FLogisticsTask
 struct FLogisticsTowerRuntimeData
 {
     /** 等待配对的请求 ID 列表（Supply + Demand 混存，通过 AllRequests[id].Type 区分） */
-    TArray<FGuid> PendingRequestIds;
+    TArray<int32> PendingRequestIds;
     /** 当前进行中的任务 ID 列表 */
-    TArray<FGuid> ActiveTaskIds;
+    TArray<int32> ActiveTaskIds;
     /** 归属此塔的无人机句柄列表（小车/火车走全局设备池，无需归属绑定） */
     TArray<FDroneHandle> AffiliatedDroneHandles;
+    /** O(1) 去重缓存：该塔当前活跃请求的 int32 ID；-1 = 无活跃请求 */
+    int32 CachedReqId = -1;
 };
 
 /**

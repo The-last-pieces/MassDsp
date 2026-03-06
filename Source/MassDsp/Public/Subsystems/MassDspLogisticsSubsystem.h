@@ -145,9 +145,9 @@ public:
      * @param Quantity              数量
      * @param Priority              优先级（默认 Normal）
      * @param PreferredTowerEntity  希望服务的塔；Invalid  自动路由到最近塔
-     * @return                      请求 ID（FGuid）；全零 = 提交失败（无可用塔）
+     * @return                      请求 ID（int32）；-1 = 提交失败（无可用塔）
      */
-    FGuid SubmitSupplyRequest(
+    int32 SubmitSupplyRequest(
         FMassEntityHandle SourceEntity,
         EItemType ItemType,
         int32 Quantity,
@@ -158,7 +158,7 @@ public:
      * 提交需货请求（建筑库存不足，需要补入物品）。
      * 参数同 SubmitSupplyRequest。
      */
-    FGuid SubmitDemandRequest(
+    int32 SubmitDemandRequest(
         FMassEntityHandle SourceEntity,
         EItemType ItemType,
         int32 Quantity,
@@ -169,13 +169,13 @@ public:
      * 取消请求。
      * 若请求已被配对成任务，同时取消对应任务并重置设备。
      */
-    bool CancelRequest(const FGuid& RequestId);
+    bool CancelRequest(int32 RequestId);
 
     /** 查询请求当前状态（若 ID 无效返回空指针） */
-    const FLogisticsRequest* GetRequest(const FGuid& RequestId) const;
+    const FLogisticsRequest* GetRequest(int32 RequestId) const;
 
     /** 查询任务当前状态（若 ID 无效返回空指针） */
-    const FLogisticsTask* GetTask(const FGuid& TaskId) const;
+    const FLogisticsTask* GetTask(int32 TaskId) const;
 
     /**
      * 查询物流塔的无人机状态快照，供 Widget UI 每帧刷新时调用。
@@ -268,12 +268,18 @@ public:
     // 
 
 private:
-    //  请求 / 任务池 
-    TMap<FGuid, FLogisticsRequest> AllRequests;
-    TMap<FGuid, FLogisticsTask> AllTasks;
+    //  请求 / 任务池（int32 下标 ID，替代 FGuid 哈希，内存连续、O(1) 访问） 
+    TSparseArray<FLogisticsRequest> AllRequests;
+    TSparseArray<FLogisticsTask>    AllTasks;
 
     //  塔运行时辅助数据（动态列表不在 Fragment 内） 
     TMap<FMassEntityHandle, FLogisticsTowerRuntimeData> TowerRuntimeData;
+
+    //  脂塔队列（替代每帧全量扫描，僅处理已脏塔） 
+    /** 冻塔 Set（O(1) 去重） */
+    TSet<FMassEntityHandle>    DirtyTowerSet;
+    /** 冻塔有序列表（主线程读取） */
+    TArray<FMassEntityHandle>  DirtyTowerQueue;
 
     //  策略表（每类设备一个，任务分配时做一次虚调用） 
     TMap<ELogisticsDeviceType, TUniquePtr<FLogisticsDeviceDispatchStrategy>> DispatchStrategies;
@@ -287,8 +293,8 @@ private:
     //  私有调度方法
     // 
 
-    /** 提交请求的内部实现（Supply / Demand 共用） */
-    FGuid SubmitRequestInternal(
+    /** 提交请求的内部实现（Supply / Demand 共用），返回 int32 ID；-1 = 失败 */
+    int32 SubmitRequestInternal(
         ELogisticsRequestType Type,
         FMassEntityHandle SourceEntity,
         EItemType ItemType,
@@ -302,23 +308,34 @@ private:
      */
     FMassEntityHandle FindNearestEligibleTower(FMassEntityHandle SourceEntity) const;
 
-    /** 全局跨塔匹配：收集所有塔的 Supply/Demand 请求，按 ItemType 分桶配对，Tick Step2 调用 */
+    /** 将塔加入脏队列（O(1) 去重） */
+    void EnqueueDirtyTower(FMassEntityHandle TowerEntity);
+
+    /** 全局跨塔匹配：收集脏塔的 Supply/Demand 请求，按 ItemType 分桶配对，Tick Step2 调用 */
     void MatchPendingRequests();
 
     /**
-     * 对全局匹配后的 Supply/Demand 对批量派遗无人机。
+     * 对全局匹配后的 Supply/Demand 对批量派遣无人机。
      * SupplyIds / DemandIds 是同一 ItemType 的请求列表（已分桶）。
      */
     void DispatchMatchedPairs(
-        TArray<FGuid>& SupplyIds,
-        TArray<FGuid>& DemandIds);
+        TArray<int32>& SupplyIds,
+        TArray<int32>& DemandIds);
 
-    /** 派发任务到空闲设备（调用策略表，写设备 POD 状态） */
-    /**
-     * 尝试从候选无人机列表中为 Task 分配一架无人机。
-     * @param CandidateIndices  可供选择的 DronePool 下标列表（传入归属机优先列表，或直接传 IdleDroneIndices）
-     */
+    /** 尝试从候选无人机列表中为 Task 分配一架无人机。 */
     bool TryDispatchTask(FLogisticsTask& Task, const TArray<int32>& CandidateIndices);
+
+    /**
+     * 写入无人机 ISM GPU Custom Data（16 floats）。
+     * 仅在状态切换时调用一次，就帧无需任何 CPU 工作。
+     */
+    void WriteDroneCustomData(const FDroneData& Drone, float GameTime) const;
+
+    /** 冷却结束处理：提交归属塔请求 + 开始返航或转 Idle */
+    void HandleCooldownEnded(int32 DroneIdx);
+
+    /** 返航到家：转 Idle，加入空闲池，通知塔匹配 */
+    void HandleDroneArrivedHome(int32 DroneIdx);
 
     /** 推进无人机状态机并同步 ISM（Tick 内部，无虚调用热路径） */
     void UpdateDrones(float DeltaTime);

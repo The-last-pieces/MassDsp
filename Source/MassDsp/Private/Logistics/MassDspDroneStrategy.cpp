@@ -74,7 +74,7 @@ void FDroneDispatchStrategy::InitDeviceForTask(
     Drone->ElapsedTime      = 0.f;
 
     Drone->State            = ELogisticsDeviceState::MovingToPickup;
-    Drone->CurrentTaskId    = Task.TaskId;
+    Drone->CurrentTaskId    = Task.TaskId;  // int32
 
     Drone->PickupEntity     = Task.PickupEntity;
     Drone->DeliveryEntity   = Task.DeliveryEntity;
@@ -91,7 +91,7 @@ void FDroneDispatchStrategy::ResetDevice(void* DeviceDataPtr) const
     if (!Drone) return;
 
     Drone->State           = ELogisticsDeviceState::Idle;
-    Drone->CurrentTaskId   = FGuid();
+    Drone->CurrentTaskId   = -1;  // int32 下同 id，-1 = 无任务
     Drone->CarriedItemType = EItemType::None;
     Drone->CarriedQuantity = 0;
 }

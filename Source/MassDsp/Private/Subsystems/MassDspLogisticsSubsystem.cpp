@@ -6,6 +6,8 @@
 #include "Subsystems/MassDspManager.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspLogisticsTowerFragment.h"
+#include "Async/ParallelFor.h"      // ParallelFor
+#include "Misc/ScopeLock.h"         // FScopeLock / FCriticalSection
 
 // 安全获取 FMassEntityManager 指针（启动阶段 UMassEntitySubsystem 可能尚未就绪）
 static FMassEntityManager* GetEntityManagerSafe(UWorld* World)
@@ -23,13 +25,12 @@ void UMassDspLogisticsSubsystem::Initialize(FSubsystemCollectionBase& Collection
 {
     Super::Initialize(Collection);
     // 预分配常用容器容量，减少运行时 rehash
-    AllRequests.Reserve(512);
-    AllTasks.Reserve(256);
     TowerRuntimeData.Reserve(64);
     IdleDroneIndices.Reserve(1024);
     IdleDroneIndexSet.Reserve(1024);
     IdleVehicleIndices.Reserve(128);
     IdleTrainIndices.Reserve(64);
+    DirtyTowerQueue.Reserve(256);
 }
 
 void UMassDspLogisticsSubsystem::Deinitialize()
@@ -44,6 +45,8 @@ void UMassDspLogisticsSubsystem::Deinitialize()
     TowerRuntimeData.Empty();
     DroneGridCells.Empty();
     IdleDroneIndexSet.Empty();
+    DirtyTowerSet.Reset();
+    DirtyTowerQueue.Reset();
     DispatchStrategies.Empty();
     Super::Deinitialize();
 }
@@ -57,9 +60,14 @@ void UMassDspLogisticsSubsystem::SetupISMComponents(
     UInstancedStaticMeshComponent* InVehicleISM,
     UInstancedStaticMeshComponent* InTrainISM)
 {
-    DroneISM = InDroneISM;
+    DroneISM   = InDroneISM;
     VehicleISM = InVehicleISM;
-    TrainISM = InTrainISM;
+    TrainISM   = InTrainISM;
+
+    // 16 floats per instance: [0]=TimeAtDispatch, [1]=TotalFlightTime,
+    // [2-4]=P0, [5-7]=P1, [8-10]=P2, [11-13]=HomeLocation, [14]=IdlePhaseOffset, [15]=padding
+    if (DroneISM)
+        DroneISM->NumCustomDataFloats = 16;
 }
 
 // 
@@ -103,7 +111,7 @@ void UMassDspLogisticsSubsystem::Tick(float DeltaTime)
 //  请求接口
 // 
 
-FGuid UMassDspLogisticsSubsystem::SubmitSupplyRequest(
+int32 UMassDspLogisticsSubsystem::SubmitSupplyRequest(
     FMassEntityHandle SourceEntity, EItemType ItemType, int32 Quantity,
     ELogisticsRequestPriority Priority, FMassEntityHandle PreferredTowerEntity)
 {
@@ -111,7 +119,7 @@ FGuid UMassDspLogisticsSubsystem::SubmitSupplyRequest(
                                  SourceEntity, ItemType, Quantity, Priority, PreferredTowerEntity);
 }
 
-FGuid UMassDspLogisticsSubsystem::SubmitDemandRequest(
+int32 UMassDspLogisticsSubsystem::SubmitDemandRequest(
     FMassEntityHandle SourceEntity, EItemType ItemType, int32 Quantity,
     ELogisticsRequestPriority Priority, FMassEntityHandle PreferredTowerEntity)
 {
@@ -119,81 +127,70 @@ FGuid UMassDspLogisticsSubsystem::SubmitDemandRequest(
                                  SourceEntity, ItemType, Quantity, Priority, PreferredTowerEntity);
 }
 
-FGuid UMassDspLogisticsSubsystem::SubmitRequestInternal(
+int32 UMassDspLogisticsSubsystem::SubmitRequestInternal(
     ELogisticsRequestType Type,
     FMassEntityHandle SourceEntity, EItemType ItemType, int32 Quantity,
     ELogisticsRequestPriority Priority,
     FMassEntityHandle PreferredTowerEntity)
 {
-    // 找目标塔
     FMassEntityHandle TowerEntity = PreferredTowerEntity.IsValid()
                                         ? PreferredTowerEntity
                                         : FindNearestEligibleTower(SourceEntity);
+    if (!TowerEntity.IsValid()) return -1;
 
-    if (!TowerEntity.IsValid()) return FGuid();
-
-    // 检查塔是否接受请求
     UWorld* World = GetWorld();
-    if (!World) return FGuid();
+    if (!World) return -1;
 
     FMassEntityManager* EntityManagerPtr = GetEntityManagerSafe(World);
-    if (!EntityManagerPtr) return FGuid();
+    if (!EntityManagerPtr) return -1;
     FMassEntityManager& EntityManager = *EntityManagerPtr;
-    if (!EntityManager.IsEntityValid(TowerEntity)) return FGuid();
+    if (!EntityManager.IsEntityValid(TowerEntity)) return -1;
 
     FMassDspLogisticsTowerFragment* TowerFrag =
         EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity);
-    if (!TowerFrag || !TowerFrag->bAcceptsRequests) return FGuid();
+    if (!TowerFrag || !TowerFrag->bAcceptsRequests) return -1;
 
-    // ── 去重：同一 (SourceEntity, ItemType, Type, Tower) 已有请求则更新数量而非新增 ──
+    // ── O(1) 去重：每塔缓存一个请求 ID ──────────────────────────────────────────
     FLogisticsTowerRuntimeData& RuntimeDataRef = TowerRuntimeData.FindOrAdd(TowerEntity);
-    for (auto& [ExistId, ExistReq] : AllRequests)
+    const int32 CachedId = RuntimeDataRef.CachedReqId;
+    if (CachedId >= 0 && AllRequests.IsValidIndex(CachedId))
     {
+        FLogisticsRequest& ExistReq = AllRequests[CachedId];
         if (ExistReq.Type == Type
-            && ExistReq.SourceEntity == SourceEntity
-            && ExistReq.ItemType == ItemType
-            && ExistReq.PreferredTowerEntity == TowerEntity)
+            && ExistReq.SourceEntity          == SourceEntity
+            && ExistReq.ItemType              == ItemType
+            && ExistReq.PreferredTowerEntity  == TowerEntity)
         {
-            // 更新数量和时间戳
-            ExistReq.Quantity = FMath::Max(1, Quantity);
+            ExistReq.Quantity    = FMath::Max(1, Quantity);
             ExistReq.RequestTime = World->GetTimeSeconds();
-            // 若请求已不在 Pending 中（已被派遣），直接重新加回。
-            // 不再检查 bHasActiveTask——并发在途量由 DispatchMatchedPairs 的
-            // ComputeInTransitFrom/To 防止过度派遣，此处守卫是冗余且有害的：
-            // 它会在"还有其他无人机在途"时阻塞本次 Cooldown→Idle 的重提交，
-            // 导致无人机本该立即获得新任务却等到下一轮 ScanInterval 才触发。
-            const bool bAlreadyPending = RuntimeDataRef.PendingRequestIds.Contains(ExistId);
-            if (!bAlreadyPending)
-            {
-                RuntimeDataRef.PendingRequestIds.Add(ExistId);
-                UE_LOG(LogTemp, Verbose,
-                       TEXT("[Logistics] Re-queue request %s"),
-                       *ExistId.ToString());
-            }
+            if (!RuntimeDataRef.PendingRequestIds.Contains(CachedId))
+                RuntimeDataRef.PendingRequestIds.Add(CachedId);
+            EnqueueDirtyTower(TowerEntity);
             TowerFrag->bDirty = true;
-            return ExistId;
+            return CachedId;
         }
+        RuntimeDataRef.CachedReqId = -1; // 失效缓存
     }
 
-    // 构造请求
+    // ── 新建请求 ────────────────────────────────────────────────────────────────
     FLogisticsRequest Req;
-    Req.RequestId = FGuid::NewGuid();
-    Req.Type = Type;
-    Req.SourceEntity = SourceEntity;
-    Req.ItemType = ItemType;
-    Req.Quantity = FMath::Max(1, Quantity);
-    Req.Priority = Priority;
+    Req.Type                 = Type;
+    Req.SourceEntity         = SourceEntity;
+    Req.ItemType             = ItemType;
+    Req.Quantity             = FMath::Max(1, Quantity);
+    Req.Priority             = Priority;
     Req.PreferredTowerEntity = TowerEntity;
-    Req.RequestTime = World->GetTimeSeconds();
-    Req.ExpiryDuration = 30.f;
+    Req.RequestTime          = World->GetTimeSeconds();
+    Req.ExpiryDuration       = 30.f;
 
-    AllRequests.Add(Req.RequestId, Req);
+    const int32 ReqId = AllRequests.Add(Req);
+    AllRequests[ReqId].RequestId = ReqId; // 自引用
 
-    // 挂入塔的运行时数据
     FLogisticsTowerRuntimeData& RuntimeData = TowerRuntimeData.FindOrAdd(TowerEntity);
-    RuntimeData.PendingRequestIds.Add(Req.RequestId);
+    RuntimeData.PendingRequestIds.Add(ReqId);
+    RuntimeData.CachedReqId = ReqId; // 写入 O(1) 去重缓存
 
-    // 事件推送：置脏，下一帧 Tick 优先处理
+    EnqueueDirtyTower(TowerEntity);
     TowerFrag->bDirty = true;
     UE_LOG(LogTemp, Log,
            TEXT("[Logistics] SubmitRequest OK | Type=%s Item=%d Qty=%d Tower=[%d,%d] PendingNow=%d"),
@@ -201,29 +198,29 @@ FGuid UMassDspLogisticsSubsystem::SubmitRequestInternal(
            (int32)ItemType, Req.Quantity,
            TowerEntity.Index, TowerEntity.SerialNumber,
            RuntimeData.PendingRequestIds.Num());
-    return Req.RequestId;
+    return ReqId;
 }
 
-bool UMassDspLogisticsSubsystem::CancelRequest(const FGuid& RequestId)
+bool UMassDspLogisticsSubsystem::CancelRequest(int32 RequestId)
 {
-    FLogisticsRequest* Req = AllRequests.Find(RequestId);
-    if (!Req) return false;
+    if (!AllRequests.IsValidIndex(RequestId)) return false;
+    FLogisticsRequest* Req = &AllRequests[RequestId];
 
     // 如果已被配对进活跃任务，也取消对应任务并重置设备
-    for (auto& [TaskId, Task] : AllTasks)
+    for (int32 i = 0; i < AllTasks.GetMaxIndex(); ++i)
     {
+        if (!AllTasks.IsValidIndex(i)) continue;
+        FLogisticsTask& Task = AllTasks[i];
         if (Task.SupplyRequestId != RequestId && Task.DemandRequestId != RequestId) continue;
 
-        // 跳过终态任务（历史记录，不再操作设备）
-        if (Task.State == ELogisticsTaskState::Completed ||
-            Task.State == ELogisticsTaskState::Failed ||
+        // 跳过终态任务
+        if (Task.State == ELogisticsTaskState::Completed  ||
+            Task.State == ELogisticsTaskState::Failed     ||
             Task.State == ELogisticsTaskState::Cancelled)
             continue;
 
-        // 跳过仍在飞行中的活跃任务：请求超时不代表本次运输无效。
-        // 超时清理只针对从未被派遣的挂起请求；飞行中的任务让无人机
-        // OnDroneArrivedAtDelivery 自然完成，它会重置 RequestTime 再入队。
-        if (Task.State == ELogisticsTaskState::InTransit_Pickup ||
+        // 跳过仍在飞行中的活跃任务
+        if (Task.State == ELogisticsTaskState::InTransit_Pickup  ||
             Task.State == ELogisticsTaskState::InTransit_Deliver)
             continue;
 
@@ -231,39 +228,38 @@ bool UMassDspLogisticsSubsystem::CancelRequest(const FGuid& RequestId)
         if (Task.DeviceType == ELogisticsDeviceType::Drone && DronePool.IsValidIndex(Task.DevicePoolIndex))
         {
             FDroneData& Drone = DronePool[Task.DevicePoolIndex];
-            if (Drone.CurrentTaskId == TaskId)
+            if (Drone.CurrentTaskId == i)
             {
-                Drone.State = ELogisticsDeviceState::Idle;
-                Drone.CurrentTaskId = FGuid();
+                Drone.State         = ELogisticsDeviceState::Idle;
+                Drone.CurrentTaskId = -1;
                 IdleDroneIndices.Add(Task.DevicePoolIndex);
                 IdleDroneIndexSet.Add(Task.DevicePoolIndex);
             }
         }
-        // TODO[VEHICLE]: 重置小车
-        // TODO[TRAIN]:   重置火车
     }
 
     // 从塔运行时数据中移除
     if (Req->PreferredTowerEntity.IsValid())
     {
-        if (FLogisticsTowerRuntimeData* RuntimeData = TowerRuntimeData.Find(Req->PreferredTowerEntity))
+        if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(Req->PreferredTowerEntity))
         {
-            RuntimeData->PendingRequestIds.Remove(RequestId);
+            RTD->PendingRequestIds.Remove(RequestId);
+            if (RTD->CachedReqId == RequestId) RTD->CachedReqId = -1;
         }
     }
 
-    AllRequests.Remove(RequestId);
+    AllRequests.RemoveAt(RequestId);
     return true;
 }
 
-const FLogisticsRequest* UMassDspLogisticsSubsystem::GetRequest(const FGuid& RequestId) const
+const FLogisticsRequest* UMassDspLogisticsSubsystem::GetRequest(int32 RequestId) const
 {
-    return AllRequests.Find(RequestId);
+    return AllRequests.IsValidIndex(RequestId) ? &AllRequests[RequestId] : nullptr;
 }
 
-const FLogisticsTask* UMassDspLogisticsSubsystem::GetTask(const FGuid& TaskId) const
+const FLogisticsTask* UMassDspLogisticsSubsystem::GetTask(int32 TaskId) const
 {
-    return AllTasks.Find(TaskId);
+    return AllTasks.IsValidIndex(TaskId) ? &AllTasks[TaskId] : nullptr;
 }
 
 FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityHandle TowerEntity) const
@@ -292,12 +288,12 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
     }
 
     // ── 统计正在飞来本塔的无人机（InTransit_Deliver + DeliveryEntity==本塔） ──────
-    for (const FGuid& TaskId : RTD->ActiveTaskIds)
+    for (const int32 TaskId : RTD->ActiveTaskIds)
     {
-        const FLogisticsTask* Task = AllTasks.Find(TaskId);
-        if (!Task) continue;
-        if (Task->State == ELogisticsTaskState::InTransit_Deliver &&
-            Task->DeliveryEntity == TowerEntity)
+        if (!AllTasks.IsValidIndex(TaskId)) continue;
+        const FLogisticsTask& Task = AllTasks[TaskId];
+        if (Task.State == ELogisticsTaskState::InTransit_Deliver &&
+            Task.DeliveryEntity == TowerEntity)
         {
             ++Result.Incoming;
         }
@@ -314,11 +310,12 @@ int32 UMassDspLogisticsSubsystem::ComputeInTransitToEntity(FMassEntityHandle Dem
     if (!RTD) return 0;
 
     int32 Total = 0;
-    for (const FGuid& TaskId : RTD->ActiveTaskIds)
+    for (const int32 TaskId : RTD->ActiveTaskIds)
     {
-        if (const FLogisticsTask* Task = AllTasks.Find(TaskId))
-            if (Task->DeliveryEntity == DemandEntity)
-                Total += Task->TransferQuantity;
+        if (!AllTasks.IsValidIndex(TaskId)) continue;
+        const FLogisticsTask& Task = AllTasks[TaskId];
+        if (Task.DeliveryEntity == DemandEntity)
+            Total += Task.TransferQuantity;
     }
     return Total;
 }
@@ -331,16 +328,15 @@ int32 UMassDspLogisticsSubsystem::ComputeInTransitFromEntity(FMassEntityHandle S
     if (!RTD) return 0;
 
     int32 Total = 0;
-    for (const FGuid& TaskId : RTD->ActiveTaskIds)
+    for (const int32 TaskId : RTD->ActiveTaskIds)
     {
-        if (const FLogisticsTask* Task = AllTasks.Find(TaskId))
+        if (!AllTasks.IsValidIndex(TaskId)) continue;
+        const FLogisticsTask& Task = AllTasks[TaskId];
+        if (Task.PickupEntity == SupplyEntity &&
+            (Task.State == ELogisticsTaskState::Dispatched ||
+                Task.State == ELogisticsTaskState::InTransit_Pickup))
         {
-            if (Task->PickupEntity == SupplyEntity &&
-                (Task->State == ELogisticsTaskState::Dispatched ||
-                    Task->State == ELogisticsTaskState::InTransit_Pickup))
-            {
-                Total += Task->TransferQuantity;
-            }
+            Total += Task.TransferQuantity;
         }
     }
     return Total;
@@ -369,6 +365,12 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
     // ISM 实例直接放在 InitialLocation，无需后续手动同步
     DronePool[Idx].ISMInstanceIndex = AllocateDroneISMInstance(InitialLocation);
     DronePool[Idx].Generation = 0;
+
+    // 初始 GPU Custom Data（全 Idle 模式，让 GPU WPO 知道从哪里开始螺旋）
+    {
+        const float GameTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+        WriteDroneCustomData(DronePool[Idx], GameTime);
+    }
 
     // 注册到归属塔
     if (AffiliatedTowerEntity.IsValid())
@@ -511,6 +513,9 @@ FMassEntityHandle UMassDspLogisticsSubsystem::FindNearestEligibleTower(FMassEnti
 
 void UMassDspLogisticsSubsystem::MatchPendingRequests()
 {
+    // O(1) 早退：只有被 EnqueueDirtyTower 推入的塔才需要处理
+    if (DirtyTowerQueue.IsEmpty()) return;
+
     UWorld* World = GetWorld();
     if (!World) return;
 
@@ -518,63 +523,50 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
     if (!EntityManagerPtr) return;
     FMassEntityManager& EntityManager = *EntityManagerPtr;
 
-    // ── Step 1：检查是否有任何塔是脏的 ──────────────────────────────────────
-    bool bAnyDirty = false;
-    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
-    {
-        if (!EntityManager.IsEntityValid(TowerEntity)) continue;
-        const FMassDspLogisticsTowerFragment* TF =
-            EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity);
-        if (TF && TF->bDirty)
-        {
-            bAnyDirty = true;
-            break;
-        }
-    }
-    if (!bAnyDirty) return;
-
-    // ── Step 2：收集全局 Supply / Demand 请求，按 ItemType 分桶 ───────────
-    TMap<EItemType, TArray<FGuid>> SupplyByType;
-    TMap<EItemType, TArray<FGuid>> DemandByType;
+    // ── Step 1：仅遍历脏塔，收集 Supply / Demand 请求按 ItemType 分桶 ──────
+    TMap<EItemType, TArray<int32>> SupplyByType;
+    TMap<EItemType, TArray<int32>> DemandByType;
     int32 TotalSupply = 0, TotalDemand = 0;
 
-    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
+    for (const FMassEntityHandle TowerEntity : DirtyTowerQueue)
     {
         if (!EntityManager.IsEntityValid(TowerEntity)) continue;
+        const FLogisticsTowerRuntimeData* RuntimeData = TowerRuntimeData.Find(TowerEntity);
+        if (!RuntimeData) continue;
 
-        for (const FGuid& ReqId : RuntimeData.PendingRequestIds)
+        for (const int32 ReqId : RuntimeData->PendingRequestIds)
         {
-            const FLogisticsRequest* Req = AllRequests.Find(ReqId);
-            if (!Req) continue;
+            if (!AllRequests.IsValidIndex(ReqId)) continue;
+            const FLogisticsRequest& Req = AllRequests[ReqId];
 
-            if (Req->Type == ELogisticsRequestType::Supply)
+            if (Req.Type == ELogisticsRequestType::Supply)
             {
-                SupplyByType.FindOrAdd(Req->ItemType).Add(ReqId);
+                SupplyByType.FindOrAdd(Req.ItemType).Add(ReqId);
                 ++TotalSupply;
             }
             else
             {
-                DemandByType.FindOrAdd(Req->ItemType).Add(ReqId);
+                DemandByType.FindOrAdd(Req.ItemType).Add(ReqId);
                 ++TotalDemand;
             }
         }
     }
 
     UE_LOG(LogTemp, Verbose,
-           TEXT("[Logistics] GlobalMatch: Supply=%d Demand=%d IdleDrones=%d"),
-           TotalSupply, TotalDemand, IdleDroneIndices.Num());
+           TEXT("[Logistics] GlobalMatch: Supply=%d Demand=%d IdleDrones=%d DirtyTowers=%d"),
+           TotalSupply, TotalDemand, IdleDroneIndices.Num(), DirtyTowerQueue.Num());
 
-    // ── Step 3：逐物品类型配对派遣 ──────────────────────────────────────────
+    // ── Step 2：逐物品类型配对派遣 ──────────────────────────────────────────
     for (auto& [ItemType, SupplyIds] : SupplyByType)
     {
-        TArray<FGuid>* DemandIds = DemandByType.Find(ItemType);
+        TArray<int32>* DemandIds = DemandByType.Find(ItemType);
         if (!DemandIds || DemandIds->IsEmpty()) continue;
 
         DispatchMatchedPairs(SupplyIds, *DemandIds);
     }
 
-    // ── Step 4：清除所有脏标记 ───────────────────────────────────────────────
-    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
+    // ── Step 3：清除脏标记 ───────────────────────────────────────────────────
+    for (const FMassEntityHandle TowerEntity : DirtyTowerQueue)
     {
         if (!EntityManager.IsEntityValid(TowerEntity)) continue;
         if (FMassDspLogisticsTowerFragment* TF =
@@ -583,32 +575,35 @@ void UMassDspLogisticsSubsystem::MatchPendingRequests()
             TF->bDirty = false;
         }
     }
+    DirtyTowerQueue.Reset();
+    DirtyTowerSet.Reset();
 }
 
 void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
-    TArray<FGuid>& SupplyIds,
-    TArray<FGuid>& DemandIds)
+    TArray<int32>& SupplyIds,
+    TArray<int32>& DemandIds)
 {
     UWorld* World = GetWorld();
     FMassEntityManager* EntityManagerPtr = World ? GetEntityManagerSafe(World) : nullptr;
+    const float GameTime = World ? World->GetTimeSeconds() : 0.f;
 
     while (!SupplyIds.IsEmpty() && !DemandIds.IsEmpty() && !IdleDroneIndices.IsEmpty())
     {
-        const FGuid SupplyId = SupplyIds[0];
-        const FGuid DemandId = DemandIds[0];
+        const int32 SupplyId = SupplyIds[0];
+        const int32 DemandId = DemandIds[0];
 
-        FLogisticsRequest* Supply = AllRequests.Find(SupplyId);
-        FLogisticsRequest* Demand = AllRequests.Find(DemandId);
-
-        if (!Supply || !Demand)
+        if (!AllRequests.IsValidIndex(SupplyId) || !AllRequests.IsValidIndex(DemandId))
         {
             SupplyIds.RemoveAt(0);
             DemandIds.RemoveAt(0);
             continue;
         }
 
+        FLogisticsRequest* Supply = &AllRequests[SupplyId];
+        FLogisticsRequest* Demand = &AllRequests[DemandId];
+
         // 取货/送货世界坐标
-        FVector PickupLoc = FVector::ZeroVector;
+        FVector PickupLoc   = FVector::ZeroVector;
         FVector DeliveryLoc = FVector::ZeroVector;
         if (EntityManagerPtr)
         {
@@ -632,10 +627,10 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
 
         int32 SupplyRemaining = Supply->Quantity;
         int32 DemandRemaining = Demand->Quantity;
-        bool bAnyDispatched = false;
-        int32 StaggerIndex = 0;
+        bool bAnyDispatched   = false;
+        int32 StaggerIndex    = 0;
 
-        // ── 在途容量检查：避免将已在途的货物加上将要派出的超过需求方容量────────
+        // ── 在途容量检查 ────────────────────────────────────────────────────
         if (EntityManagerPtr)
         {
             const FMassDspLogisticsTowerFragment* DTF =
@@ -645,11 +640,10 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             if (DTF && DSF)
             {
                 const int32 InTransitToDemand = ComputeInTransitToEntity(Demand->SourceEntity);
-                const int32 EffectiveNeed = FMath::Max(0,
-                                                       DTF->RequestThreshold - DSF->InventoryCount - InTransitToDemand);
+                const int32 EffectiveNeed     = FMath::Max(0,
+                    DTF->RequestThreshold - DSF->InventoryCount - InTransitToDemand);
                 if (EffectiveNeed <= 0)
                 {
-                    // 在途量已足够或库存已充，等待实际库存消耗后 Processor 再次提交需求
                     SupplyIds.RemoveAt(0);
                     DemandIds.RemoveAt(0);
                     continue;
@@ -658,7 +652,7 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             }
         }
 
-        // 归属候选列表于内层循环外构建一次，O(1) Contains 避免每次 O(N=20k) 线性扫描
+        // 前置构建归属候选列表
         TArray<int32> AffiliatedCandidates;
         {
             auto AddAffiliatedIdle = [&](FMassEntityHandle TowerEnt)
@@ -677,22 +671,23 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             const int32 BatchQty = FMath::Min3(SupplyRemaining, DemandRemaining, CargoPerDrone);
 
             FLogisticsTask Task;
-            Task.TaskId = FGuid::NewGuid();
-            Task.SupplyRequestId = SupplyId;
-            Task.DemandRequestId = DemandId;
-            Task.State = ELogisticsTaskState::Pending;
-            Task.PickupEntity = Supply->SourceEntity;
-            Task.DeliveryEntity = Demand->SourceEntity;
-            Task.PickupLocation = PickupLoc;
+            Task.SupplyRequestId  = SupplyId;
+            Task.DemandRequestId  = DemandId;
+            Task.State            = ELogisticsTaskState::Pending;
+            Task.PickupEntity     = Supply->SourceEntity;
+            Task.DeliveryEntity   = Demand->SourceEntity;
+            Task.PickupLocation   = PickupLoc;
             Task.DeliveryLocation = DeliveryLoc;
             Task.TransferQuantity = BatchQty;
-            Task.DeviceType = ELogisticsDeviceType::Drone;
+            Task.DeviceType       = ELogisticsDeviceType::Drone;
 
-            const TArray<int32>& Candidates = AffiliatedCandidates.IsEmpty() ? IdleDroneIndices : AffiliatedCandidates;
+            const TArray<int32>& Candidates =
+                AffiliatedCandidates.IsEmpty() ? IdleDroneIndices : AffiliatedCandidates;
             if (!TryDispatchTask(Task, Candidates)) break;
 
-            // 已派出的无人机从归属候选中移除（它已不再空闲）
-            AffiliatedCandidates.RemoveSwap(Task.DevicePoolIndex);
+            // 预分配到 TSparseArray，获取稳定 int32 ID
+            const int32 TaskId = AllTasks.Add(Task);
+            AllTasks[TaskId].TaskId = TaskId; // 自引用
 
             // 错峰起飞
             if (StaggerIndex > 0)
@@ -701,13 +696,14 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
                 D.ElapsedTime = -(StaggerIndex * FGameConst::DroneDispatchStaggerInterval);
             }
 
-            AllTasks.Add(Task.TaskId, Task);
+            // 已派出的无人机从归属候选中移除
+            AffiliatedCandidates.RemoveSwap(Task.DevicePoolIndex);
 
-            // 挂入 Supply / Demand 两个塔的 ActiveTaskIds（两个不同塔）
+            // 挂入两个塔的 ActiveTaskIds
             if (FLogisticsTowerRuntimeData* SRTD = TowerRuntimeData.Find(Supply->PreferredTowerEntity))
-                SRTD->ActiveTaskIds.AddUnique(Task.TaskId);
+                SRTD->ActiveTaskIds.AddUnique(TaskId);
             if (FLogisticsTowerRuntimeData* DRTD = TowerRuntimeData.Find(Demand->PreferredTowerEntity))
-                DRTD->ActiveTaskIds.AddUnique(Task.TaskId);
+                DRTD->ActiveTaskIds.AddUnique(TaskId);
 
             SupplyRemaining -= BatchQty;
             DemandRemaining -= BatchQty;
@@ -717,7 +713,6 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
 
         if (bAnyDispatched)
         {
-            // 从各自塔的 PendingRequestIds 中摘出
             if (FLogisticsTowerRuntimeData* SRTD = TowerRuntimeData.Find(Supply->PreferredTowerEntity))
                 SRTD->PendingRequestIds.Remove(SupplyId);
             if (FLogisticsTowerRuntimeData* DRTD = TowerRuntimeData.Find(Demand->PreferredTowerEntity))
@@ -769,10 +764,58 @@ bool UMassDspLogisticsSubsystem::TryDispatchTask(FLogisticsTask& Task, const TAr
 
 void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
 {
-    // 10w 无人机：TSparseArray 直接遍历，连续内存，无虚调用
-    // TODO[PERF]: 将所有 ISM 的 FTransform 先收集到 TArray<FTransform>，
-    //             最后调用一次 UInstancedStaticMeshComponent::BatchUpdateInstancesTransforms
+    if (DronePool.Num() == 0) return;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Phase A: 并行计时推进（仅修改数值，禁止 ISM / GameThread API 调用）
+    // ═══════════════════════════════════════════════════════════════════════════
+    struct FArrivalEvent { int32 DroneIdx; ELogisticsDeviceState ArrivedFrom; };
+    TArray<FArrivalEvent> ArrivalEvents;
+    FCriticalSection ArrivalLock;
+
+    ParallelFor(DronePool.GetMaxIndex(), [&](int32 DroneIdx)
+    {
+        if (!DronePool.IsValidIndex(DroneIdx)) return;
+        FDroneData& Drone = DronePool[DroneIdx];
+
+        switch (Drone.State)
+        {
+        case ELogisticsDeviceState::Idle:
+            // Idle 状态：CPU 更新计时器供螺旋动画使用，ISM 在 Phase B 中写入
+            Drone.ElapsedTime += DeltaTime;
+            break;
+
+        case ELogisticsDeviceState::Cooldown:
+            Drone.CooldownRemaining -= DeltaTime;
+            if (Drone.CooldownRemaining <= 0.f)
+            {
+                Drone.CooldownRemaining = 0.f;
+                FScopeLock Lock(&ArrivalLock);
+                ArrivalEvents.Add({DroneIdx, ELogisticsDeviceState::Cooldown});
+            }
+            break;
+
+        case ELogisticsDeviceState::ReturningHome:
+        case ELogisticsDeviceState::MovingToPickup:
+        case ELogisticsDeviceState::MovingToDeliver:
+            if (Drone.TotalFlightTime <= SMALL_NUMBER)
+            {
+                FScopeLock Lock(&ArrivalLock);
+                ArrivalEvents.Add({DroneIdx, Drone.State});
+                break;
+            }
+            Drone.ElapsedTime += DeltaTime;
+            if (Drone.ElapsedTime >= Drone.TotalFlightTime)
+                Drone.ElapsedTime = Drone.TotalFlightTime; // 钳制，Phase B 检测
+            break;
+
+        default: break;
+        }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Phase B: 主线程 ISM 位置写入 —— 飞行中无人机每帧插值
+    // ═══════════════════════════════════════════════════════════════════════════
     for (auto It = DronePool.CreateIterator(); It; ++It)
     {
         FDroneData& Drone = *It;
@@ -782,24 +825,17 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
         {
         case ELogisticsDeviceState::Idle:
             {
-                // 空闲：绕归属塔做螺旋盘旋动画（高度正弦振荡，无跳变）
+                // 螺旋盘旋动画（CPU 路径；GPU WPO 路径启用后可移除）
                 if (Drone.ISMInstanceIndex < 0 || !DroneISM) break;
                 if (Drone.ISMInstanceIndex >= DroneISM->GetInstanceCount()) break;
 
-                Drone.ElapsedTime += DeltaTime;
+                constexpr float SpiralRadius    = 300.f;
+                constexpr float AngularSpeed    = 0.8f;
+                constexpr float BaseHeight      = 300.f;
+                constexpr float HeightAmplitude = 250.f;
+                constexpr float HeightFrequency = 0.3f;
 
-                // ── 螺旋参数（可在此集中调整）───────────────────────────────
-                constexpr float SpiralRadius     = 300.f;  // 盘旋半径 (cm)
-                constexpr float AngularSpeed     = 0.8f;   // 水平角速度 (rad/s)，≈ 7.9s 转一圈
-                constexpr float BaseHeight       = 300.f;  // 高度振荡中心 (cm)
-                constexpr float HeightAmplitude  = 250.f;  // 高度振幅 (cm)，上下各 250cm
-                constexpr float HeightFrequency  = 0.3f;   // 高度振荡角频率 (rad/s)，≈ 21s 上下一次
-                // ─────────────────────────────────────────────────────────────
-
-                // 水平圆弧角度（黄金角相位让同塔各无人机均匀错开起始方向）
-                const float Angle = Drone.IdlePhaseOffset + Drone.ElapsedTime * AngularSpeed;
-
-                // 高度：正弦振荡，相位由 IdlePhaseOffset 决定，无跳变
+                const float Angle       = Drone.IdlePhaseOffset + Drone.ElapsedTime * AngularSpeed;
                 const float HeightPhase = Drone.ElapsedTime * HeightFrequency + Drone.IdlePhaseOffset;
                 const float Height      = BaseHeight + HeightAmplitude * FMath::Sin(HeightPhase);
 
@@ -808,171 +844,68 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
                     FMath::Sin(Angle) * SpiralRadius,
                     Height);
 
-                // 朝向：螺旋切线 = 水平圆弧切线 + 垂直振荡速度分量
-                //   dX/dt = -R·ω·sin θ
-                //   dY/dt =  R·ω·cos θ
-                //   dZ/dt =  A·ωh·cos(ωh·t + phase)
-                const float dZ  = HeightAmplitude * HeightFrequency * FMath::Cos(HeightPhase);
+                const float dZ = HeightAmplitude * HeightFrequency * FMath::Cos(HeightPhase);
                 const FVector Tangent(
                     -FMath::Sin(Angle) * SpiralRadius * AngularSpeed,
                      FMath::Cos(Angle) * SpiralRadius * AngularSpeed,
                      dZ);
                 const FVector Fwd = Tangent.GetSafeNormal();
-                const FQuat Rot = Fwd.IsNearlyZero() ? FQuat::Identity
-                                                      : FRotationMatrix::MakeFromX(Fwd).ToQuat();
+                const FQuat Rot   = Fwd.IsNearlyZero() ? FQuat::Identity
+                                                        : FRotationMatrix::MakeFromX(Fwd).ToQuat();
 
-                DroneISM->UpdateInstanceTransform(
-                    Drone.ISMInstanceIndex,
-                    FTransform(Rot, Pos, FVector::OneVector),
-                    /*bWorldSpace=*/true, /*bMarkRenderStateDirty=*/false);
-            }
-            break;
-
-        case ELogisticsDeviceState::Cooldown:
-            Drone.CooldownRemaining -= DeltaTime;
-            if (Drone.CooldownRemaining <= 0.f)
-            {
-                Drone.CooldownRemaining = 0.f;
-
-                // 提前提交归属塔的请求（在返航途中就让系统准备好配对），
-                // 落地变 Idle 后 bDirty 会再次触发 MatchPendingRequests 完成派遣。
-                if (Drone.AffiliatedTowerEntity.IsValid())
-                {
-                    if (UWorld* W = GetWorld())
-                    {
-                        if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
-                        {
-                            const FMassEntityHandle TowerEnt = Drone.AffiliatedTowerEntity;
-                            const FMassDspLogisticsTowerFragment* TFrag =
-                                EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEnt);
-                            const FMassDspStorageFragment* SFrag =
-                                EMPtr->GetFragmentDataPtr<FMassDspStorageFragment>(TowerEnt);
-                            if (TFrag && SFrag && TFrag->bAcceptsRequests && TFrag->ItemType != EItemType::None)
-                            {
-                                if (TFrag->TowerMode == ELogisticsTowerMode::Supply)
-                                {
-                                    const int32 InTransitFrom = ComputeInTransitFromEntity(TowerEnt);
-                                    const int32 EffQty = FMath::Max(0, SFrag->InventoryCount - TFrag->RequestThreshold - InTransitFrom);
-                                    if (EffQty > 0)
-                                        SubmitSupplyRequest(TowerEnt, TFrag->ItemType, EffQty,
-                                                             ELogisticsRequestPriority::Normal, TowerEnt);
-                                }
-                                else if (TFrag->TowerMode == ELogisticsTowerMode::Demand)
-                                {
-                                    const int32 InTransitTo = ComputeInTransitToEntity(TowerEnt);
-                                    const int32 EffQty = FMath::Max(0, TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
-                                    if (EffQty > 0)
-                                        SubmitDemandRequest(TowerEnt, TFrag->ItemType, EffQty,
-                                                             ELogisticsRequestPriority::Normal, TowerEnt);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ── 开始返回归属塔 ──────────────────────────────────────────────────
-                const FVector HomePos = Drone.HomeLocation;
-                const FVector CurPos  = Drone.P3; // 当前停留位置（上一段贝塞尔终点）
-                const float HomeDist  = FVector::Dist(CurPos, HomePos);
-
-                if (Drone.AffiliatedTowerEntity.IsValid() && HomeDist > 50.f)
-                {
-                    // 生成返航贝塞尔曲线（弧高同正常航行，无横向偏移）
-                    const float Arc    = FGameConst::DroneFlightArcHeight;
-                    const float EffArc = FMath::Min(Arc, HomeDist * 0.4f);
-
-                    Drone.P0 = CurPos;
-                    Drone.P1 = CurPos    + FVector(0.f, 0.f, EffArc);
-                    Drone.P2 = HomePos   + FVector(0.f, 0.f, EffArc);
-                    Drone.P3 = HomePos;
-                    Drone.ElapsedTime     = 0.f;
-                    Drone.TotalFlightTime = HomeDist / FMath::Max(1.f, Drone.FlightSpeed);
-                    Drone.State           = ELogisticsDeviceState::ReturningHome;
-                    // 返航中不加入 IdleDroneIndices，到家后再加
-                }
-                else
-                {
-                    // 已在家或无归属塔，直接 Idle
-                    Drone.State = ELogisticsDeviceState::Idle;
-                    Drone.ElapsedTime = 0.f; // 重置，使螺旋动画从初始相位平滑开始
-                    IdleDroneIndices.Add(DroneIdx);
-                    IdleDroneIndexSet.Add(DroneIdx);
-                    // 置脏让 MatchPendingRequests 下一帧处理
-                    if (Drone.AffiliatedTowerEntity.IsValid())
-                    {
-                        if (UWorld* W = GetWorld())
-                            if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
-                                if (FMassDspLogisticsTowerFragment* TFrag2 =
-                                    EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Drone.AffiliatedTowerEntity))
-                                    TFrag2->bDirty = true;
-                    }
-                }
+                DroneISM->UpdateInstanceTransform(Drone.ISMInstanceIndex,
+                    FTransform(Rot, Pos, FVector::OneVector), true, false);
             }
             break;
 
         case ELogisticsDeviceState::ReturningHome:
-            {
-                Drone.ElapsedTime += DeltaTime;
-                UpdateDroneISMInstance(Drone);
-                const float t = (Drone.TotalFlightTime > 0.f)
-                    ? FMath::Clamp(Drone.ElapsedTime / Drone.TotalFlightTime, 0.f, 1.f) : 1.f;
-                if (t >= 1.f)
-                {
-                    // 到家：进入 Idle，加入空闲池，通知塔立即匹配
-                    Drone.State = ELogisticsDeviceState::Idle;
-                    Drone.ElapsedTime = 0.f; // 重置，使螺旋动画从初始相位平滑开始
-                    IdleDroneIndices.Add(DroneIdx);
-                    IdleDroneIndexSet.Add(DroneIdx);
-                    if (Drone.AffiliatedTowerEntity.IsValid())
-                    {
-                        if (UWorld* W = GetWorld())
-                            if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
-                                if (FMassDspLogisticsTowerFragment* TFrag =
-                                    EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Drone.AffiliatedTowerEntity))
-                                    TFrag->bDirty = true;
-                    }
-                }
-            }
-            break;
-
         case ELogisticsDeviceState::MovingToPickup:
         case ELogisticsDeviceState::MovingToDeliver:
-            {
-                // TotalFlightTime == 0 表示取货/交货点与当前位置重合，立即触发到达回调
-                if (Drone.TotalFlightTime <= SMALL_NUMBER)
-                {
-                    if (Drone.State == ELogisticsDeviceState::MovingToPickup)
-                        OnDroneArrivedAtPickup(DroneIdx);
-                    else
-                        OnDroneArrivedAtDelivery(DroneIdx);
-                    break;
-                }
-
-                Drone.ElapsedTime += DeltaTime;
-                const float t = FMath::Clamp(Drone.ElapsedTime / Drone.TotalFlightTime, 0.f, 1.f);
-
-                // 贝塞尔插值，更新 ISM 位置
-                UpdateDroneISMInstance(Drone);
-
-                if (t >= 1.f)
-                {
-                    if (Drone.State == ELogisticsDeviceState::MovingToPickup)
-                        OnDroneArrivedAtPickup(DroneIdx);
-                    else
-                        OnDroneArrivedAtDelivery(DroneIdx);
-                }
-                break;
-            }
-
-        case ELogisticsDeviceState::AtPickup:
-        case ELogisticsDeviceState::AtDeliver:
-            // 瞬时状态，OnDroneArrived* 负责切换
+            UpdateDroneISMInstance(Drone);
             break;
+
+        default: break;
         }
     }
 
-    // 所有飞行中无人机位置写入完毕，统一触发一次 GPU 渲染状态刷新
-    // 对比逐实例 bMarkRenderStateDirty=true，此处节省 N 次 MarkRenderStateDirty 调用开销
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Phase C: 主线程到达事件处理（状态切换 + 派生 ISM 写入）
+    // ═══════════════════════════════════════════════════════════════════════════
+    for (const FArrivalEvent& Event : ArrivalEvents)
+    {
+        if (!DronePool.IsValidIndex(Event.DroneIdx)) continue;
+        FDroneData& Drone = DronePool[Event.DroneIdx];
+
+        // 仅处理真正到达（ElapsedTime 已被 Phase A 钳制到 TotalFlightTime）
+        if ((Event.ArrivedFrom == ELogisticsDeviceState::MovingToPickup  ||
+             Event.ArrivedFrom == ELogisticsDeviceState::MovingToDeliver ||
+             Event.ArrivedFrom == ELogisticsDeviceState::ReturningHome)
+            && Drone.ElapsedTime < Drone.TotalFlightTime - SMALL_NUMBER)
+            continue; // 未真正到达，下帧再判
+
+        switch (Event.ArrivedFrom)
+        {
+        case ELogisticsDeviceState::Cooldown:
+            HandleCooldownEnded(Event.DroneIdx);
+            break;
+
+        case ELogisticsDeviceState::MovingToPickup:
+            OnDroneArrivedAtPickup(Event.DroneIdx);
+            break;
+
+        case ELogisticsDeviceState::MovingToDeliver:
+            OnDroneArrivedAtDelivery(Event.DroneIdx);
+            break;
+
+        case ELogisticsDeviceState::ReturningHome:
+            HandleDroneArrivedHome(Event.DroneIdx);
+            break;
+
+        default: break;
+        }
+    }
+
+    // 统一触发渲染刷新（合并所有 UpdateInstanceTransform 为一次 GPU 上传）
     if (DroneISM)
         DroneISM->MarkRenderStateDirty();
 }
@@ -1018,8 +951,8 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
                 {
                     // 取货数量 = min(无人机容量, 任务请求量)
                     int32 WantQty = Drone.CarryCapacity;
-                    if (const FLogisticsTask* T = AllTasks.Find(Drone.CurrentTaskId))
-                        WantQty = FMath::Min(WantQty, T->TransferQuantity);
+                    if (AllTasks.IsValidIndex(Drone.CurrentTaskId))
+                        WantQty = FMath::Min(WantQty, AllTasks[Drone.CurrentTaskId].TransferQuantity);
 
                     const int32 Taken = StorageFrag->TryProvideItems(WantQty);
                     if (Taken > 0)
@@ -1034,8 +967,8 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtPickup(int32 DronePoolIndex)
     // 切换到飞往交货点，同步更新任务状态
     Drone.State = ELogisticsDeviceState::MovingToDeliver;
     Drone.ElapsedTime = 0.f;
-    if (FLogisticsTask* Task = AllTasks.Find(Drone.CurrentTaskId))
-        Task->State = ELogisticsTaskState::InTransit_Deliver;
+    if (AllTasks.IsValidIndex(Drone.CurrentTaskId))
+        AllTasks[Drone.CurrentTaskId].State = ELogisticsTaskState::InTransit_Deliver;
 
     // 重新生成贝塞尔曲线（取货点 → 交货点），向自身行进方向右偏形成回程航道
     const FVector P0 = Drone.P3; // 当前位置（上一段终点）
@@ -1079,17 +1012,18 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
     }
 
     // 先保存 TaskId，再清空无人机状态（避免提前清零导致找不到任务）
-    const FGuid CompletedTaskId = Drone.CurrentTaskId;
+    const int32 CompletedTaskId = Drone.CurrentTaskId;
 
     Drone.CarriedItemType = EItemType::None;
     Drone.CarriedQuantity = 0;
-    Drone.CurrentTaskId = FGuid();
-    Drone.State = ELogisticsDeviceState::Cooldown;
+    Drone.CurrentTaskId   = -1;
+    Drone.State           = ELogisticsDeviceState::Cooldown;
     Drone.CooldownRemaining = Drone.CooldownDuration;
 
     // O(1) 直接用 TaskId 查找并标记完成（不再全表扫描）
-    if (FLogisticsTask* Task = AllTasks.Find(CompletedTaskId))
+    if (!AllTasks.IsValidIndex(CompletedTaskId)) return;
     {
+        FLogisticsTask* Task = &AllTasks[CompletedTaskId];
         Task->State = ELogisticsTaskState::Completed;
 
         // 任务完成后把 Supply/Demand 请求重新加回协调塔的 PendingRequestIds，
@@ -1097,53 +1031,44 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
         const float NowTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
         FMassEntityManager* EMForRequeue = GetWorld() ? GetEntityManagerSafe(GetWorld()) : nullptr;
 
-        // 在途容量感知的重入队逻辑：
-        //  · 重新计算有效数量（当前库存 + 已在途量对比阈値）
-        //  · 有效数量为 0 则不重新入队（需求已被在途满足 / 库存已达阈値）——避免持续送货导致溢仓
-        auto RequeueRequest = [&](const FGuid& ReqId)
+        // 在途容量感知的重入队逻辑
+        auto RequeueRequest = [&](int32 ReqId)
         {
-            FLogisticsRequest* Req = AllRequests.Find(ReqId);
-            if (!Req) return;
-
-            Req->RequestTime = NowTime;
+            if (!AllRequests.IsValidIndex(ReqId)) return;
+            FLogisticsRequest& Req = AllRequests[ReqId];
+            Req.RequestTime = NowTime;
 
             // 优先通过 Fragment 计算实际有效数量
             int32 EffectiveQty = 0;
             if (EMForRequeue)
             {
                 const FMassDspLogisticsTowerFragment* TFrag =
-                    EMForRequeue->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Req->SourceEntity);
+                    EMForRequeue->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Req.SourceEntity);
                 const FMassDspStorageFragment* SFrag =
-                    EMForRequeue->GetFragmentDataPtr<FMassDspStorageFragment>(Req->SourceEntity);
+                    EMForRequeue->GetFragmentDataPtr<FMassDspStorageFragment>(Req.SourceEntity);
                 if (TFrag && SFrag)
                 {
-                    if (Req->Type == ELogisticsRequestType::Supply)
+                    if (Req.Type == ELogisticsRequestType::Supply)
                     {
-                        // 供应方：示数 - 阈値 - 已派出取货任务在途量
-                        const int32 InTransitFrom = ComputeInTransitFromEntity(Req->SourceEntity);
-                        EffectiveQty = FMath::Max(0,
-                                                  SFrag->InventoryCount - TFrag->RequestThreshold - InTransitFrom);
+                        const int32 InTransitFrom = ComputeInTransitFromEntity(Req.SourceEntity);
+                        EffectiveQty = FMath::Max(0, SFrag->InventoryCount - TFrag->RequestThreshold - InTransitFrom);
                     }
-                    else // Demand
+                    else
                     {
-                        // 需求方：阈値 - 示数 - 已在途将送达此地的货物量
-                        const int32 InTransitTo = ComputeInTransitToEntity(Req->SourceEntity);
-                        EffectiveQty = FMath::Max(0,
-                                                  TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
+                        const int32 InTransitTo = ComputeInTransitToEntity(Req.SourceEntity);
+                        EffectiveQty = FMath::Max(0, TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
                     }
                 }
             }
             else
             {
-                // 无法读取 Fragment，用旧数量元数据回退（算法锱 / 游戏弹出时）
-                EffectiveQty = Req->Quantity;
+                EffectiveQty = Req.Quantity;
             }
 
-            if (EffectiveQty <= 0) return; // 需求已被满足，不重入队
+            if (EffectiveQty <= 0) return;
+            Req.Quantity = EffectiveQty;
 
-            Req->Quantity = EffectiveQty;
-
-            const FMassEntityHandle CoordTower = Req->PreferredTowerEntity;
+            const FMassEntityHandle CoordTower = Req.PreferredTowerEntity;
             if (!CoordTower.IsValid()) return;
             FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(CoordTower);
             if (!RTD) return;
@@ -1153,17 +1078,21 @@ void UMassDspLogisticsSubsystem::OnDroneArrivedAtDelivery(int32 DronePoolIndex)
             if (EMForRequeue)
                 if (FMassDspLogisticsTowerFragment* TFrag2 =
                     EMForRequeue->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(CoordTower))
+                {
                     TFrag2->bDirty = true;
+                    EnqueueDirtyTower(CoordTower);
+                }
         };
         RequeueRequest(Task->SupplyRequestId);
         RequeueRequest(Task->DemandRequestId);
 
         // 仅从涉及的两个塔中移除 ActiveTaskIds，避免 O(NumAllTowers) 全量遍历
-        auto RemoveActiveFromTower = [&](const FGuid& ReqId)
+        auto RemoveActiveFromTower = [&](int32 ReqId)
         {
-            const FLogisticsRequest* Req = AllRequests.Find(ReqId);
-            if (!Req || !Req->PreferredTowerEntity.IsValid()) return;
-            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(Req->PreferredTowerEntity))
+            if (!AllRequests.IsValidIndex(ReqId)) return;
+            const FLogisticsRequest& Req = AllRequests[ReqId];
+            if (!Req.PreferredTowerEntity.IsValid()) return;
+            if (FLogisticsTowerRuntimeData* RTD = TowerRuntimeData.Find(Req.PreferredTowerEntity))
                 RTD->ActiveTaskIds.Remove(CompletedTaskId);
         };
         RemoveActiveFromTower(Task->SupplyRequestId);
@@ -1176,18 +1105,14 @@ void UMassDspLogisticsSubsystem::OnDroneTaskFailed(int32 DronePoolIndex)
     FDroneData& Drone = DronePool[DronePoolIndex];
     Drone.CarriedItemType = EItemType::None;
     Drone.CarriedQuantity = 0;
-    const FGuid OldTaskId = Drone.CurrentTaskId;
-    Drone.CurrentTaskId = FGuid();
-    Drone.State = ELogisticsDeviceState::Idle;
+    const int32 OldTaskId = Drone.CurrentTaskId;
+    Drone.CurrentTaskId   = -1;
+    Drone.State           = ELogisticsDeviceState::Idle;
     IdleDroneIndices.Add(DronePoolIndex);
     IdleDroneIndexSet.Add(DronePoolIndex);
 
-    // 将请求重新放回待匹配队列
-    if (FLogisticsTask* Task = AllTasks.Find(OldTaskId))
-    {
-        Task->State = ELogisticsTaskState::Failed;
-        // TODO: 重新提交请求（给塔一次重试机会）
-    }
+    if (AllTasks.IsValidIndex(OldTaskId))
+        AllTasks[OldTaskId].State = ELogisticsTaskState::Failed;
 }
 
 // 
@@ -1271,30 +1196,32 @@ void UMassDspLogisticsSubsystem::CleanExpiredRequests()
     if (!World) return;
 
     const float Now = World->GetTimeSeconds();
-    TArray<FGuid> ToRemove;
+    TArray<int32> ToRemove;
 
-    for (auto& [ReqId, Req] : AllRequests)
+    for (int32 i = 0; i < AllRequests.GetMaxIndex(); ++i)
     {
+        if (!AllRequests.IsValidIndex(i)) continue;
+        const FLogisticsRequest& Req = AllRequests[i];
         if (Now - Req.RequestTime > Req.ExpiryDuration)
-            ToRemove.Add(ReqId);
+            ToRemove.Add(i);
     }
 
-    for (const FGuid& Id : ToRemove)
+    for (int32 Id : ToRemove)
         CancelRequest(Id);
 
-    // 清理 AllTasks 中的终态条目，防止历史记录无限增长。
-    // 若不清理，CancelRequest 每次都要遍历全量历史任务，且旧条目的
-    // DevicePoolIndex 会误命中当前无人机的安全检查（即使有双重确认也是浪费）。
-    TArray<FGuid> TasksToRemove;
-    for (auto& [TaskId, Task] : AllTasks)
+    // 清理 AllTasks 中的终态条目，防止历史记录无限增长
+    TArray<int32> TasksToRemove;
+    for (int32 i = 0; i < AllTasks.GetMaxIndex(); ++i)
     {
-        if (Task.State == ELogisticsTaskState::Completed ||
-            Task.State == ELogisticsTaskState::Failed ||
-            Task.State == ELogisticsTaskState::Cancelled)
-            TasksToRemove.Add(TaskId);
+        if (!AllTasks.IsValidIndex(i)) continue;
+        const ELogisticsTaskState S = AllTasks[i].State;
+        if (S == ELogisticsTaskState::Completed ||
+            S == ELogisticsTaskState::Failed    ||
+            S == ELogisticsTaskState::Cancelled)
+            TasksToRemove.Add(i);
     }
-    for (const FGuid& Id : TasksToRemove)
-        AllTasks.Remove(Id);
+    for (int32 Id : TasksToRemove)
+        AllTasks.RemoveAt(Id);
 }
 
 UMassDspManager* UMassDspLogisticsSubsystem::GetDspManager()
@@ -1358,4 +1285,155 @@ bool UMassDspLogisticsSubsystem::ExecuteItemTransfer(
     }
 
     return true;
+}
+
+// 
+//  新增：无人机 ISM GPU Custom Data 写入（为 GPU WPO 材质预留）
+// 
+
+void UMassDspLogisticsSubsystem::WriteDroneCustomData(const FDroneData& Drone, float GameTime) const
+{
+    // NOTE: 本函数预留给 GPU WPO 阶段（Phase 5）使用。
+    // 待 BuildDroneMaterial() 完成后将开朗下方注释块。
+    if (!DroneISM || Drone.ISMInstanceIndex < 0) return;
+    if (DroneISM->NumCustomDataFloats < 15) return; // 材质尚未设置 16 个自定义数据浮点
+
+    const int32 Idx  = Drone.ISMInstanceIndex;
+    const bool bIdle = (Drone.State == ELogisticsDeviceState::Idle);
+
+    DroneISM->SetCustomDataValue(Idx, 0,  bIdle ? 0.f : (GameTime - Drone.ElapsedTime)); // TimeAtDispatch
+    DroneISM->SetCustomDataValue(Idx, 1,  bIdle ? 0.f : Drone.TotalFlightTime);           // TotalFlightTime
+    DroneISM->SetCustomDataValue(Idx, 2,  Drone.P0.X);
+    DroneISM->SetCustomDataValue(Idx, 3,  Drone.P0.Y);
+    DroneISM->SetCustomDataValue(Idx, 4,  Drone.P0.Z);
+    DroneISM->SetCustomDataValue(Idx, 5,  Drone.P1.X);
+    DroneISM->SetCustomDataValue(Idx, 6,  Drone.P1.Y);
+    DroneISM->SetCustomDataValue(Idx, 7,  Drone.P1.Z);
+    DroneISM->SetCustomDataValue(Idx, 8,  Drone.P2.X);
+    DroneISM->SetCustomDataValue(Idx, 9,  Drone.P2.Y);
+    DroneISM->SetCustomDataValue(Idx, 10, Drone.P2.Z);
+    DroneISM->SetCustomDataValue(Idx, 11, Drone.HomeLocation.X);
+    DroneISM->SetCustomDataValue(Idx, 12, Drone.HomeLocation.Y);
+    DroneISM->SetCustomDataValue(Idx, 13, Drone.HomeLocation.Z);
+    DroneISM->SetCustomDataValue(Idx, 14, Drone.IdlePhaseOffset);
+    DroneISM->SetCustomDataValue(Idx, 15, 0.f); // padding
+}
+
+// 
+//  新增：脏塔入队（O(1) TSet 去重 + TArray 保序）
+// 
+
+void UMassDspLogisticsSubsystem::EnqueueDirtyTower(FMassEntityHandle TowerEntity)
+{
+    if (!TowerEntity.IsValid()) return;
+    if (!DirtyTowerSet.Contains(TowerEntity))
+    {
+        DirtyTowerSet.Add(TowerEntity);
+        DirtyTowerQueue.Add(TowerEntity);
+    }
+}
+
+// 
+//  新增：CoolDown 结束处理（从 UpdateDrones Phase C 中提取）
+// 
+
+void UMassDspLogisticsSubsystem::HandleCooldownEnded(int32 DroneIdx)
+{
+    if (!DronePool.IsValidIndex(DroneIdx)) return;
+    FDroneData& Drone = DronePool[DroneIdx];
+
+    // 提前提交归属塔的请求（在返航途中就让系统准备好配对），
+    // 落地变 Idle 后 bDirty 会再次触发 MatchPendingRequests 完成派遣。
+    if (Drone.AffiliatedTowerEntity.IsValid())
+    {
+        if (UWorld* W = GetWorld())
+        {
+            if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
+            {
+                const FMassEntityHandle TowerEnt = Drone.AffiliatedTowerEntity;
+                const FMassDspLogisticsTowerFragment* TFrag =
+                    EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEnt);
+                const FMassDspStorageFragment* SFrag =
+                    EMPtr->GetFragmentDataPtr<FMassDspStorageFragment>(TowerEnt);
+                if (TFrag && SFrag && TFrag->bAcceptsRequests && TFrag->ItemType != EItemType::None)
+                {
+                    if (TFrag->TowerMode == ELogisticsTowerMode::Supply)
+                    {
+                        const int32 InTransitFrom = ComputeInTransitFromEntity(TowerEnt);
+                        const int32 EffQty = FMath::Max(0,
+                            SFrag->InventoryCount - TFrag->RequestThreshold - InTransitFrom);
+                        if (EffQty > 0)
+                            SubmitSupplyRequest(TowerEnt, TFrag->ItemType, EffQty,
+                                                ELogisticsRequestPriority::Normal, TowerEnt);
+                    }
+                    else if (TFrag->TowerMode == ELogisticsTowerMode::Demand)
+                    {
+                        const int32 InTransitTo = ComputeInTransitToEntity(TowerEnt);
+                        const int32 EffQty = FMath::Max(0,
+                            TFrag->RequestThreshold - SFrag->InventoryCount - InTransitTo);
+                        if (EffQty > 0)
+                            SubmitDemandRequest(TowerEnt, TFrag->ItemType, EffQty,
+                                                ELogisticsRequestPriority::Normal, TowerEnt);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 开始返回归属塔 ──────────────────────────────────────────────────────────
+    const FVector HomePos = Drone.HomeLocation;
+    const FVector CurPos  = Drone.P3; // 当前停留位置（上一段贝塞尔终点）
+    const float HomeDist  = FVector::Dist(CurPos, HomePos);
+
+    if (Drone.AffiliatedTowerEntity.IsValid() && HomeDist > 50.f)
+    {
+        const float Arc    = FGameConst::DroneFlightArcHeight;
+        const float EffArc = FMath::Min(Arc, HomeDist * 0.4f);
+
+        Drone.P0 = CurPos;
+        Drone.P1 = CurPos  + FVector(0.f, 0.f, EffArc);
+        Drone.P2 = HomePos + FVector(0.f, 0.f, EffArc);
+        Drone.P3 = HomePos;
+        Drone.ElapsedTime     = 0.f;
+        Drone.TotalFlightTime = HomeDist / FMath::Max(1.f, Drone.FlightSpeed);
+        Drone.State           = ELogisticsDeviceState::ReturningHome;
+    }
+    else
+    {
+        // 已在家或无归属塔，直接 Idle
+        HandleDroneArrivedHome(DroneIdx);
+    }
+}
+
+// 
+//  新增：无人机到家处理（ReturningHome 到达 + Cooldown 已在家时共用）
+// 
+
+void UMassDspLogisticsSubsystem::HandleDroneArrivedHome(int32 DroneIdx)
+{
+    if (!DronePool.IsValidIndex(DroneIdx)) return;
+    FDroneData& Drone = DronePool[DroneIdx];
+
+    Drone.State       = ELogisticsDeviceState::Idle;
+    Drone.ElapsedTime = 0.f; // 重置，使螺旋动画从初始相位平滑开始
+
+    IdleDroneIndices.Add(DroneIdx);
+    IdleDroneIndexSet.Add(DroneIdx);
+
+    // 置脏让 MatchPendingRequests 下一帧处理
+    if (Drone.AffiliatedTowerEntity.IsValid())
+    {
+        if (UWorld* W = GetWorld())
+        {
+            if (FMassEntityManager* EMPtr = GetEntityManagerSafe(W))
+            {
+                if (FMassDspLogisticsTowerFragment* TFrag =
+                    EMPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Drone.AffiliatedTowerEntity))
+                {
+                    TFrag->bDirty = true;
+                    EnqueueDirtyTower(Drone.AffiliatedTowerEntity);
+                }
+            }
+        }
+    }
 }
