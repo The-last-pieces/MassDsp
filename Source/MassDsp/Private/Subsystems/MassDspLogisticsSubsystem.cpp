@@ -691,13 +691,23 @@ void UMassDspLogisticsSubsystem::DispatchMatchedPairs(
             Task.TransferQuantity = BatchQty;
             Task.DeviceType       = ELogisticsDeviceType::Drone;
 
+            // 先分配稳定 TaskId，再传入 TryDispatchTask，确保 InitDeviceForTask
+            // 写入 Drone->CurrentTaskId 时拿到的是真实 ID 而非默认 -1
+            const int32 TaskId = AllTasks.Add(Task);
+            AllTasks[TaskId].TaskId = TaskId;
+            Task.TaskId = TaskId; // 同步给局部变量，供 TryDispatchTask 使用
+
             const TArray<int32>& Candidates =
                 AffiliatedCandidates.IsEmpty() ? IdleDroneIndices : AffiliatedCandidates;
-            if (!TryDispatchTask(Task, Candidates)) break;
+            if (!TryDispatchTask(Task, Candidates))
+            {
+                AllTasks.RemoveAt(TaskId); // 回滚，不泄漏 slot
+                break;
+            }
 
-            // 预分配到 TSparseArray，获取稳定 int32 ID
-            const int32 TaskId = AllTasks.Add(Task);
-            AllTasks[TaskId].TaskId = TaskId; // 自引用
+            // TryDispatchTask 修改了 Task.State / Task.DevicePoolIndex，同步回 AllTasks
+            AllTasks[TaskId].State           = Task.State;
+            AllTasks[TaskId].DevicePoolIndex = Task.DevicePoolIndex;
 
             // 错峰起飞
             if (StaggerIndex > 0)
