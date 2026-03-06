@@ -455,7 +455,9 @@ void AMassDspGameMode::TestCase2()
         const FMassEntityHandle SupplyEnt = Entities[i * 2 + 1];
         const FVector TowerPos = SpawnData[i * 2 + 1].WorldTransform.GetLocation();
         for (int32 d = 0; d < DronesPerTower; ++d)
-            LogisticsSub->CreateDrone(SupplyEnt, TowerPos);
+            LogisticsSub->CreateDrone(SupplyEnt, TowerPos,
+                                      FGameConst::DefaultDroneFlightSpeed,
+                                      FGameConst::DroneCarryCapacity);
         TotalDrones += DronesPerTower;
     }
 
@@ -466,7 +468,9 @@ void AMassDspGameMode::TestCase2()
         const FMassEntityHandle DemandEnt = Entities[DemandBase + j * 2 + 0];
         const FVector TowerPos = SpawnData[DemandBase + j * 2 + 0].WorldTransform.GetLocation();
         for (int32 d = 0; d < DronesPerTower; ++d)
-            LogisticsSub->CreateDrone(DemandEnt, TowerPos);
+            LogisticsSub->CreateDrone(DemandEnt, TowerPos,
+                                      FGameConst::DefaultDroneFlightSpeed,
+                                      FGameConst::DroneCarryCapacity);
         TotalDrones += DronesPerTower;
     }
 

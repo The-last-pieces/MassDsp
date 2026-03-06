@@ -90,7 +90,7 @@ public:
     //  空闲索引池（O(1) 查找空闲设备，无需遍历整个 Pool） 
     /** TArray 供 SelectBestDeviceIndex 顺序迭代；TSet 供 O(1) Contains 查询，两者始终同步 */
     TArray<int32> IdleDroneIndices;
-    TSet<int32>   IdleDroneIndexSet; ///< 镜像 IdleDroneIndices，专门用于 O(1) Contains 判断
+    TSet<int32> IdleDroneIndexSet; ///< 镜像 IdleDroneIndices，专门用于 O(1) Contains 判断
     TArray<int32> IdleVehicleIndices;
     TArray<int32> IdleTrainIndices;
 
@@ -198,10 +198,10 @@ public:
      * @return                       无人机句柄
      */
     FDroneHandle CreateDrone(
-        FMassEntityHandle AffiliatedTowerEntity = FMassEntityHandle(),
-        const FVector& InitialLocation = FVector::ZeroVector,
-        float FlightSpeed = FGameConst::DefaultDroneFlightSpeed,
-        int32 CarryCapacity = 20);
+        FMassEntityHandle AffiliatedTowerEntity,
+        const FVector& InitialLocation,
+        float FlightSpeed,
+        int32 CarryCapacity);
 
     /**
      * 创建并注册一辆地面小车。
@@ -270,16 +270,16 @@ public:
 private:
     //  请求 / 任务池（int32 下标 ID，替代 FGuid 哈希，内存连续、O(1) 访问） 
     TSparseArray<FLogisticsRequest> AllRequests;
-    TSparseArray<FLogisticsTask>    AllTasks;
+    TSparseArray<FLogisticsTask> AllTasks;
 
     //  塔运行时辅助数据（动态列表不在 Fragment 内） 
     TMap<FMassEntityHandle, FLogisticsTowerRuntimeData> TowerRuntimeData;
 
     //  脂塔队列（替代每帧全量扫描，僅处理已脏塔） 
     /** 冻塔 Set（O(1) 去重） */
-    TSet<FMassEntityHandle>    DirtyTowerSet;
+    TSet<FMassEntityHandle> DirtyTowerSet;
     /** 冻塔有序列表（主线程读取） */
-    TArray<FMassEntityHandle>  DirtyTowerQueue;
+    TArray<FMassEntityHandle> DirtyTowerQueue;
 
     //  策略表（每类设备一个，任务分配时做一次虚调用） 
     TMap<ELogisticsDeviceType, TUniquePtr<FLogisticsDeviceDispatchStrategy>> DispatchStrategies;
@@ -315,11 +315,13 @@ private:
     void MatchPendingRequests();
 
     /**
-     * 对全局匹配后的 Supply/Demand 对批量派遣无人机。
-     * SupplyIds / DemandIds 是同一 ItemType 的请求列表（已分桶）。
+     * 对匹配到的供应塔列表与需求请求列表批量派遣无人机。
+     * SupplyTowers：同一 ItemType 下有足量库存的供应塔实体列表。
+     * DemandIds  ：同一 ItemType 下的需求请求 ID 列表。
+     * 供应塔不再使用请求系统，直接从塔实体读取实时状态。
      */
     void DispatchMatchedPairs(
-        TArray<int32>& SupplyIds,
+        TArray<FMassEntityHandle>& SupplyTowers,
         TArray<int32>& DemandIds);
 
     /** 尝试从候选无人机列表中为 Task 分配一架无人机。 */

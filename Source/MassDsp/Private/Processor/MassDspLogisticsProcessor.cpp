@@ -68,29 +68,13 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
             const int32 InventoryCount = SelfStorage.InventoryCount;
             const int32 Threshold      = TowerFrag.RequestThreshold;
 
-            if (TowerFrag.TowerMode == ELogisticsTowerMode::Supply)
-            {
-                // Supply 模式：库存超过阈值 → 提交供货请求
-                // 扣除「已被派遣但尚未到达取货点」的在途量，防止重复提交过多数量
-                const int32 InTransitFrom = Logistics->ComputeInTransitFromEntity(TowerEntity);
-                const int32 SendQty = InventoryCount - Threshold - InTransitFrom;
-                if (SendQty > 0)
-                {
-                    Logistics->SubmitSupplyRequest(
-                        TowerEntity,
-                        TowerFrag.ItemType,
-                        SendQty,
-                        ELogisticsRequestPriority::Normal,
-                        TowerEntity);
-                }
-            }
-            else if (TowerFrag.TowerMode == ELogisticsTowerMode::Demand)
+            // 调度语义：只有需求塔主动发出请求，供应塔被动等候调度系统查询。
+            // RequestThreshold 对供应塔仅作「本地储备下限」（用户手动配置），无调度意义。
+            if (TowerFrag.TowerMode == ELogisticsTowerMode::Demand)
             {
                 // Demand 模式：
-                //   触发条件 — 库存低于 RequestThreshold（同之前保持不变）
-                //   请求数量 — 填满至 MaxInventory（而非仅补到 Threshold）
-                // 这样才能调动足够多的无人机：例如 Threshold=30, MaxInventory=100, Inventory=0
-                //   → 触发（0 < 30） + 请求 100 个 → 派遣 ceil(100/8) = 13 架无人机
+                //   触发条件 — 库存低于 RequestThreshold
+                //   请求数量 — 填满至 MaxInventory（调动足够多无人机）
                 if (InventoryCount < Threshold)
                 {
                     const int32 InTransitTo = Logistics->ComputeInTransitToEntity(TowerEntity);
