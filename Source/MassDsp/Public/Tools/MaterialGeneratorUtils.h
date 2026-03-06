@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#if WITH_EDITOR
+
 #include "CoreMinimal.h"
 #include "MaterialGeneratorUtils.generated.h"
 
@@ -9,6 +11,8 @@ class MASSDSP_API UMaterialGeneratorUtils : public UObject
     GENERATED_BODY()
 
 public:
+    static void CreateAllProceduralAssets();
+    
     /** 
      * 自动生成传送带材质
      * 包含源码MD5检测，避免重复生成
@@ -44,5 +48,7 @@ public:
      *
      * 仅 WITH_EDITOR 可用（编辑器内生成一次后保存为资源，运行时 StaticLoadObject 加载）。
      */
-    static void BuildDroneMaterial();
+    static void CreateDroneMaterial();
 };
+
+#endif

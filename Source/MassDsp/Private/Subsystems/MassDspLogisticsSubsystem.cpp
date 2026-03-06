@@ -1264,7 +1264,6 @@ bool UMassDspLogisticsSubsystem::ExecuteItemTransfer(
 void UMassDspLogisticsSubsystem::WriteDroneCustomData(const FDroneData& Drone, float GameTime) const
 {
     // NOTE: 本函数预留给 GPU WPO 阶段（Phase 5）使用。
-    // 待 BuildDroneMaterial() 完成后将开朗下方注释块。
     if (!DroneISM || Drone.ISMInstanceIndex < 0) return;
     if (DroneISM->NumCustomDataFloats < 18) return; // Custom Data floats 尚未就绪
 

@@ -4,7 +4,7 @@ using UnrealBuildTool;
 
 public class MassDsp : ModuleRules
 {
-    public MassDsp(ReadOnlyTargetRules Target) : base(Target)
+    public MassDsp(ReadOnlyTargetRules target) : base(target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
@@ -29,13 +29,14 @@ public class MassDsp : ModuleRules
             "MassSmartObjects",
             "MassSpawner",
             "ProceduralMeshComponent",
+            "Json",
         ]);
 
         PrivateDependencyModuleNames.AddRange([
             "MassMovement",
         ]);
 
-        if (Target.bBuildEditor)
+        if (target.bBuildEditor)
         {
             PrivateDependencyModuleNames.AddRange([
                 "MaterialEditor",

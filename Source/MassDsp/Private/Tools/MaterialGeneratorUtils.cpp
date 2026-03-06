@@ -1,13 +1,11 @@
-﻿#include "Tools/MaterialGeneratorUtils.h"
+﻿#if WITH_EDITOR
 
-#if WITH_EDITOR
+#include "Tools/MaterialGeneratorUtils.h"
+#include "Tools/ProceduralAssetBuilder.h"
 
 // 核心依赖
 #include "Materials/Material.h"
 #include "Factories/MaterialFactoryNew.h"
-#include "AssetRegistry/AssetRegistryModule.h"
-#include "Misc/FileHelper.h"
-#include "Misc/SecureHash.h"
 
 // 材质节点
 #include "Materials/MaterialExpressionVectorParameter.h"
@@ -21,7 +19,6 @@
 #include "Materials/MaterialExpressionComponentMask.h"
 #include "Materials/MaterialExpressionTime.h"
 #include "Materials/MaterialExpressionConstant.h"
-#include "Materials/MaterialExpressionComment.h"
 #include "Materials/MaterialExpressionDDX.h"
 #include "Materials/MaterialExpressionDDY.h"
 #include "Materials/MaterialExpressionMax.h"
@@ -57,50 +54,22 @@
 #include "Components/Button.h"
 #include "Components/Border.h"
 
-#include "UObject/SavePackage.h"
+void UMaterialGeneratorUtils::CreateAllProceduralAssets()
+{
+    CreateConveyorMaterial();
+    CreateBuildingWidgets();
+    CreateDroneMaterial();
+}
 
 // 传送带材质：两侧白边 + 中间倒V形（∧）箭头动画
 // 动画速度由 Speed 标量参数控制（UV/s），不再依赖顶点色
-void UMaterialGeneratorUtils::CreateConveyorMaterial()
+static UObject* ImpBuildConveyorMaterial(UPackage* Package, const FString& AssetName)
 {
-    const FString AssetName = TEXT("M_Belt");
-    const FString PackageName = TEXT("/Game/Assets/") + AssetName;
-    const FString SourceFilePath = FString(TEXT(__FILE__));
-    const FString HashPrefix = TEXT("[SOURCE_HASH]:");
-
-    // --- 1. 源码变更检测 (MD5) ---
-    FString FileContent;
-    FString CurrentHash;
-
-    if (FFileHelper::LoadFileToString(FileContent, *SourceFilePath))
-    {
-        CurrentHash = HashPrefix + FMD5::HashAnsiString(*FileContent);
-    }
-    else
-    {
-        CurrentHash = HashPrefix + FDateTime::Now().ToString();
-    }
-
-    if (UMaterial* ExistingMaterial = LoadObject<UMaterial>(nullptr, *PackageName))
-    {
-        for (UMaterialExpression* Expr : ExistingMaterial->GetExpressions())
-        {
-            if (UMaterialExpressionComment* CommentNode = Cast<UMaterialExpressionComment>(Expr))
-            {
-                if (CommentNode->Text.Equals(CurrentHash))
-                {
-                    return;
-                }
-            }
-        }
-    }
-
-    // --- 2. 创建资产 ---
-    UPackage* Package = CreatePackage(*PackageName);
     UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
-    UMaterial* Material = static_cast<UMaterial*>(Factory->FactoryCreateNew(UMaterial::StaticClass(), Package, *AssetName, RF_Standalone | RF_Public, nullptr, GWarn));
+    UMaterial* Material = static_cast<UMaterial*>(Factory->FactoryCreateNew(
+        UMaterial::StaticClass(), Package, *AssetName, RF_Standalone | RF_Public, nullptr, GWarn));
 
-    if (!Material) return;
+    if (!Material) return nullptr;
 
     Material->bEnableResponsiveAA = false;
 
@@ -113,14 +82,7 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
         return Node;
     };
 
-    // --- 3. 哈希注释节点（源码变更检测用）---
-    auto* HashComment = Cast<UMaterialExpressionComment>(CreateNode(UMaterialExpressionComment::StaticClass(), -1800, -500));
-    HashComment->Text = CurrentHash;
-    HashComment->CommentColor = FLinearColor::Black;
-    HashComment->SizeX = 400;
-    HashComment->SizeY = 100;
-
-    // --- 4. 动态参数（运行时可通过 DynMat->SetXxxParameterValue 修改）---
+    // --- 动态参数（运行时可通过 DynMat->SetXxxParameterValue 修改）---
     // Speed：全局速度倍率；每条传送带的实际速度已烘焙到顶点色 R 通道
     auto* SpeedParam = Cast<UMaterialExpressionScalarParameter>(CreateNode(UMaterialExpressionScalarParameter::StaticClass(), -1600, 0));
     SpeedParam->ParameterName = TEXT("Speed");
@@ -386,10 +348,12 @@ void UMaterialGeneratorUtils::CreateConveyorMaterial()
     Material->GetEditorOnlyData()->WorldPositionOffset.Expression = WpoScale;
 
     Material->PostEditChange();
-    auto _ = Material->MarkPackageDirty();
-    FAssetRegistryModule::AssetCreated(Material);
+    return Material;
+}
 
-    UE_LOG(LogTemp, Log, TEXT("Conveyor Material Updated (Chevron Style). Hash: %s"), *CurrentHash);
+void UMaterialGeneratorUtils::CreateConveyorMaterial()
+{
+    FProceduralAssetBuilder::GenerateAsset(TEXT("/Game/Assets/M_Belt"), TEXT("v1"), &ImpBuildConveyorMaterial);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -526,19 +490,9 @@ struct FWidgetBuilder
 
 // ─── 单个蓝图生成 ─────────────────────────────────────────────────────────────
 
-static UWidgetBlueprint* CreateWidgetBP(
-    const FString& PackagePath, const FString& AssetName, UClass* ParentClass)
+// 接受外部创建的 Package，封装工厂创建 + Existing Rename
+static UWidgetBlueprint* MakeWidgetBP(UPackage* Package, const FString& AssetName, UClass* ParentClass)
 {
-    const FString FullPath = PackagePath + TEXT("/") + AssetName;
-
-    // 直接获取或创建包（与材质生成逻辑相同，不删除旧资产）
-    UPackage* Package = CreatePackage(*FullPath);
-    if (!Package)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create package: %s"), *FullPath);
-        return nullptr;
-    }
-
     // 如果已有同名对象，先将其 Rename 避免工厂创建时 check 失败
     if (UObject* Existing = StaticFindObjectFast(nullptr, Package, *AssetName))
     {
@@ -558,26 +512,25 @@ static UWidgetBlueprint* CreateWidgetBP(
 
     if (!WBP)
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create Widget Blueprint: %s"), *FullPath);
+        UE_LOG(LogTemp, Error, TEXT("Failed to create Widget Blueprint: %s"), *AssetName);
         return nullptr;
     }
 
     return WBP;
 }
 
-static void FinalizeWidgetBP(UWidgetBlueprint* WBP)
+// 编译蓝图并调用 PostEditChange（AssetCreated/MarkPackageDirty 由 FProceduralAssetBuilder 统一处理）
+static void CompileWidgetBP(UWidgetBlueprint* WBP)
 {
     if (!WBP) return;
 
-    // 编译蓝图（仅更新 WidgetTree，无需完整 Kismet 图编译）
+    // 仅更新 WidgetTree，无需完整 Kismet 图编译
     FKismetEditorUtilities::CompileBlueprint(WBP,
                                              EBlueprintCompileOptions::SkipGarbageCollection |
                                              EBlueprintCompileOptions::BatchCompile);
 
     WBP->PostEditChange();
-    auto _ = WBP->MarkPackageDirty();
-    FAssetRegistryModule::AssetCreated(WBP);
-    UE_LOG(LogTemp, Log, TEXT("Widget BP generated: %s"), *WBP->GetPathName());
+    UE_LOG(LogTemp, Log, TEXT("Widget BP compiled: %s"), *WBP->GetPathName());
 }
 
 // ─── 共同区段：标题栏 + 分割线 ──────────────────────────────────────────────
@@ -881,65 +834,65 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
 //  公共入口
 // ─────────────────────────────────────────────────────────────────────────────
 
+static UObject* ImpBuildMinerWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspMinerWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildMinerLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
+static UObject* ImpBuildMakerWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspAssemblerWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildAssemblerLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
+static UObject* ImpBuildStorageWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspStorageWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildStorageLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
+static UObject* ImpBuildLogisticsTowerWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspLogisticsTowerWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildLogisticsTowerLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
 void UMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
-    // 在全部创建前强制清理一次
-    CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
-
-    struct FEntry
-    {
-        FString Name;
-        UClass* Parent;
-        void (*Build)(UWidgetBlueprint*);
-    };
-    const FEntry Entries[] = {
-        {TEXT("BP_Miner"), UMassDspMinerWidget::StaticClass(), &BuildMinerLayout},
-        {TEXT("BP_Maker"), UMassDspAssemblerWidget::StaticClass(), &BuildAssemblerLayout},
-        {TEXT("BP_Storage"), UMassDspStorageWidget::StaticClass(), &BuildStorageLayout},
-        {TEXT("BP_LogisticsTower"), UMassDspLogisticsTowerWidget::StaticClass(), &BuildLogisticsTowerLayout},
-    };
-
-    for (const FEntry& E : Entries)
-    {
-        UWidgetBlueprint* WBP = CreateWidgetBP(UIRoot, E.Name, E.Parent);
-        if (!WBP)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("Failed to create: %s"), *E.Name);
-            continue;
-        }
-        E.Build(WBP);
-        FinalizeWidgetBP(WBP);
-    }
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v1"), &ImpBuildMinerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v1"), &ImpBuildMakerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v1"), &ImpBuildStorageWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v1"), &ImpBuildLogisticsTowerWidget);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  BuildDroneMaterial
-//  出诚：/Game/Assets/Materials/M_Drone
+//  CreateDroneMaterial
+//  资产路径：/Game/Assets/M_Drone
 //  WPO 核心逻辑：
-//    TotalFlightTime == 0  → Idle 正弦资旋，平滑无跳变
+//    TotalFlightTime == 0  → Idle 正弦盘旋，平滑无跳变
 //    TotalFlightTime > 0   → 三次贝塞尔飞行 + 切线小车头
 // ─────────────────────────────────────────────────────────────────────────────
-void UMaterialGeneratorUtils::BuildDroneMaterial()
+static UObject* ImpCreateDroneMaterial(UPackage* Package, const FString& AssetName)
 {
-    const FString AssetName = TEXT("M_Drone");
-    const FString PackageName = TEXT("/Game/Assets/") + AssetName;
-
-    // 若资源已存在且尚未修改则跳过
-    if (UObject* Existing = StaticFindObject(UMaterial::StaticClass(), nullptr, *PackageName, true))
-    {
-        UE_LOG(LogTemp, Log, TEXT("[MatGen] M_Drone already exists, skipping."));
-        return;
-    }
-
-    UPackage* Package = CreatePackage(*PackageName);
-    check(Package);
-
     UMaterial* Mat = NewObject<UMaterial>(Package, *AssetName, RF_Public | RF_Standalone);
     Mat->bUsedWithInstancedStaticMeshes = true;
-    // WPO 最大敢位距离：告知引擎每个 ISM 实例的剥稽 bounds 应扩展多大（cm，10km）
-    // 避免无人机飞出静态 HomeLoc bounds 后被考実倦打掉
+    // WPO 最大偏移距离：告知引擎每个 ISM 实例的 bounds 应扩展多大（cm，10km）
+    // 避免无人机飞出静态 HomeLoc bounds 后被视锥剔除
     Mat->MaxWorldPositionOffsetDisplacement = 2000000.f;
 
     // ── 加载默认无人机贴图 ────────────────────────────────────────────────────
@@ -1013,7 +966,7 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
     Mat->GetExpressionCollection().AddExpression(N_ObjPos);
 
     // ── 核心 WPO CustomExpression 节点 ────────────────────────────────
-    // 内联 HLSL：贝塞尔飞行 / Idle 正弦资旋，输出 float3 WPO
+    // 内联 HLSL：贝塞尔飞行 / Idle 正弦盘旋，输出 float3 WPO
     const FString WpoHLSL = TEXT(
         "float3 P0   = float3(P0X, P0Y, P0Z);\n"
         "float3 P1   = float3(P1X, P1Y, P1Z);\n"
@@ -1067,7 +1020,7 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
     N_WPO->MaterialExpressionEditorX = -400;
     N_WPO->MaterialExpressionEditorY = 0;
 
-    // ── 连接 18 个输入 ───────────────────────────────────────────────
+    // ── 连接 21 个输入（含 P3 飞行终点）──────────────────────────────────
     struct FWPOInputSpec
     {
         FName Name;
@@ -1080,7 +1033,6 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
         {TEXT("P0X"), N_P0X, 0}, {TEXT("P0Y"), N_P0Y, 0}, {TEXT("P0Z"), N_P0Z, 0},
         {TEXT("P1X"), N_P1X, 0}, {TEXT("P1Y"), N_P1Y, 0}, {TEXT("P1Z"), N_P1Z, 0},
         {TEXT("P2X"), N_P2X, 0}, {TEXT("P2Y"), N_P2Y, 0}, {TEXT("P2Z"), N_P2Z, 0},
-        // [11-13] = HomeLocation (永久), [15-17] = P3 飞行终点
         {TEXT("HX"), N_HX, 0}, {TEXT("HY"), N_HY, 0}, {TEXT("HZ"), N_HZ, 0},
         {TEXT("IdlePhaseOffset"), N_Phase, 0},
         {TEXT("Time"), N_Time, 0},
@@ -1091,7 +1043,7 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
     N_WPO->Inputs.Reset();
     for (const FWPOInputSpec& Spec : InputSpecs)
     {
-        FCustomInput In; // UE5 定义于 MaterialExpressionCustom.h
+        FCustomInput In;
         In.InputName = Spec.Name;
         In.Input.Connect(Spec.OutputIdx, Spec.Expr);
         N_WPO->Inputs.Add(In);
@@ -1108,23 +1060,17 @@ void UMaterialGeneratorUtils::BuildDroneMaterial()
 
     // ── 连接 WPO 输出到材质 ────────────────────────────────────────────
     Mat->GetEditorOnlyData()->WorldPositionOffset.Connect(0, N_WPO);
-    Mat->GetEditorOnlyData()->BaseColor.Connect(0, N_DroneTex); // output 0 = RGBA → BaseColor 取 RGB
+    Mat->GetEditorOnlyData()->BaseColor.Connect(0, N_DroneTex);
 
-    // ── 最终化并保存 ─────────────────────────────────────────────────
+    // ── 材质编译（PreEditChange → PostEditChange）────────────────────────
     Mat->PreEditChange(nullptr);
     Mat->PostEditChange();
-    Mat->MarkPackageDirty();
-    Package->SetDirtyFlag(true);
+    return Mat;
+}
 
-    FAssetRegistryModule::AssetCreated(Mat);
-
-    const FString Filename = FPackageName::LongPackageNameToFilename(
-        PackageName, FPackageName::GetAssetPackageExtension());
-    FSavePackageArgs SaveArgs;
-    SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-    UPackage::SavePackage(Package, Mat, *Filename, SaveArgs);
-
-    UE_LOG(LogTemp, Log, TEXT("[MatGen] M_Drone saved to %s"), *Filename);
+void UMaterialGeneratorUtils::CreateDroneMaterial()
+{
+    FProceduralAssetBuilder::GenerateAsset(TEXT("/Game/Assets/M_Drone"), TEXT("v1"), &ImpCreateDroneMaterial);
 }
 
 #endif
