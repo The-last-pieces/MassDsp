@@ -747,14 +747,14 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
     }
 
     TryGetGameMode();
-    if (!GameMode.IsValid() || !GameMode->BeltItemConfigAsset)
+    if (!GameMode.IsValid() || !GameMode->GameConfig || !GameMode->GameConfig->BeltItemConfigAsset)
     {
-        UE_LOG(LogTemp, Error, TEXT("BatchSpawnBuildings: GameMode or BeltItemConfigAsset is null"));
+        UE_LOG(LogTemp, Error, TEXT("BatchSpawnBuildings: GameMode, GameConfig or BeltItemConfigAsset is null"));
         return CreatedEntities;
     }
 
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-    const FMassEntityTemplate& EntityTemplate = GameMode->BeltItemConfigAsset->GetConfig().GetOrCreateEntityTemplate(*GetWorld());
+    const FMassEntityTemplate& EntityTemplate = GameMode->GameConfig->BeltItemConfigAsset->GetConfig().GetOrCreateEntityTemplate(*GetWorld());
 
     // 按 BuildingType 分组，相同类型共用同一 Archetype，一次 BatchCreateEntities
     TMap<EBuildingType, TArray<int32>> TypeToIndices;
@@ -765,10 +765,12 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
 
     for (auto& [BuildingType, Indices] : TypeToIndices)
     {
-        const FBuildingSpawnData& FirstData = SpawnDataList[Indices[0]];
-        if (!FirstData.BuildingClass) continue;
+        // 从 GameConfig 动态查询该建筑类型对应的 Class
+        const FBuildingTypeConfig* BuildingTypeCfg = GameMode->GameConfig->GetBuildingConfig(BuildingType);
+        if (!BuildingTypeCfg || !BuildingTypeCfg->BuildingClass) continue;
+        TSubclassOf<AMassDspBuilding> ResolvedClass = BuildingTypeCfg->BuildingClass;
 
-        const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(FirstData.BuildingClass);
+        const AMassDspBuilding* CDO = GetDefault<AMassDspBuilding>(ResolvedClass);
         if (!CDO) continue;
 
         auto Shared = EntityTemplate.GetSharedFragmentValues();
@@ -793,7 +795,7 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
             {
                 Composition.GetContainer<FMassFragment>().Add(*FragmentType);
             }
-            if (FirstData.BuildingType == EBuildingType::Assembler)
+            if (BuildingType == EBuildingType::Assembler)
             {
                 Composition.GetContainer<FMassSharedFragment>().Add(*FMassDspRecipeSharedFragment::StaticStruct());
             }
@@ -1526,11 +1528,8 @@ FMassEntityHandle UMassDspManager::ConfirmPreviewBuilding()
 
     CancelBuildingPreview();
 
-    TSubclassOf<AMassDspBuilding> BuildingClass = GetBuildingClassForType(BuildingType);
-    if (!BuildingClass) return FMassEntityHandle();
-
     TArray<FBuildingSpawnData> SpawnList;
-    SpawnList.Add(FBuildingSpawnData(BuildingClass, FinalTransform, BuildingType));
+    SpawnList.Add(FBuildingSpawnData(FinalTransform, BuildingType));
     TArray<FMassEntityHandle> Results = BatchSpawnBuildings(SpawnList);
 
     return Results.IsEmpty() ? FMassEntityHandle() : Results[0];

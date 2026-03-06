@@ -3,11 +3,6 @@
 #include "Subsystems/MassDspManager.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 
-#include "Actors/MassDspMiner.h"
-#include "Actors/MassDspStorage.h"
-#include "Actors/MassDspAssembler.h"
-#include "Actors/MassDspLogisticsTower.h"
-
 #include "Logistics/MassDspDroneStrategy.h"
 #include "Fragments/MassDspLogisticsTowerFragment.h"
 #include "Fragments/MassDspMinerFragment.h"
@@ -144,31 +139,26 @@ void AMassDspGameMode::TestCase1() const
 
             // 3个矿机
             AllBuildingDataList.Add(FBuildingSpawnData(
-                MinerClass,
                 FTransform(FRotator(0, 90, 0), SpawnLocation + FVector(0, 0, 0)),
                 EBuildingType::Miner
             ));
             AllBuildingDataList.Add(FBuildingSpawnData(
-                MinerClass,
                 FTransform(FRotator(0, 90, 0), SpawnLocation + FVector(1000, 0, 0)),
                 EBuildingType::Miner
             ));
             AllBuildingDataList.Add(FBuildingSpawnData(
-                MinerClass,
                 FTransform(FRotator(0, 90, 0), SpawnLocation + FVector(2000, 0, 0)),
                 EBuildingType::Miner
             ));
 
             // 1个合成台
             AllBuildingDataList.Add(FBuildingSpawnData(
-                AssemblerClass,
                 FTransform(FRotator(0, 0, 0), SpawnLocation + FVector(1000, 1000, 0)),
                 EBuildingType::Assembler
             ));
 
             // 1个仓库
             AllBuildingDataList.Add(FBuildingSpawnData(
-                StorageClass,
                 FTransform(FRotator(0, 180, 0), SpawnLocation + FVector(1000, 2000, 0)),
                 EBuildingType::Storage
             ));
@@ -245,7 +235,7 @@ void AMassDspGameMode::TestCase2()
     auto World = GetWorld();
     UMassDspLogisticsSubsystem* LogisticsSub = World->GetSubsystem<UMassDspLogisticsSubsystem>();
     auto DspManager = World->GetSubsystem<UMassDspManager>();
-    if (!LogisticsSub || !LogisticsTowerClass)
+    if (!LogisticsSub || !GameConfig)
         return;
 
     FRandomStream Rand(RandSeed);
@@ -317,12 +307,10 @@ void AMassDspGameMode::TestCase2()
     {
         const FVector TowerPos(SupplyPos[i].X, SupplyPos[i].Y, 0.f);
         SpawnData.Add({
-            MinerClass,
             FTransform(FRotator(0, 90, 0), TowerPos + FVector(-IntraSpacing, 0.f, 0.f)),
             EBuildingType::Miner
         });
         SpawnData.Add({
-            LogisticsTowerClass,
             FTransform(FRotator::ZeroRotator, TowerPos),
             EBuildingType::LogisticsTower
         });
@@ -332,12 +320,10 @@ void AMassDspGameMode::TestCase2()
     {
         const FVector TowerPos(DemandPos[j].X, DemandPos[j].Y, 0.f);
         SpawnData.Add({
-            LogisticsTowerClass,
             FTransform(FRotator::ZeroRotator, TowerPos),
             EBuildingType::LogisticsTower
         });
         SpawnData.Add({
-            StorageClass,
             FTransform(FRotator(0, 180, 0), TowerPos + FVector(IntraSpacing, 0.f, 0.f)),
             EBuildingType::Storage
         });
@@ -404,7 +390,7 @@ void AMassDspGameMode::TestCase2()
     DspManager->FlushBeltMesh();
 
     // ── ISM 宿主 Actor ──────────────────────────────────────────────────────
-    if (DroneMesh)
+    if (GameConfig->DroneMesh)
     {
         FActorSpawnParameters ISMHostParams;
         ISMHostParams.Name = TEXT("DroneISMHostActor");
@@ -419,7 +405,7 @@ void AMassDspGameMode::TestCase2()
 
         UInstancedStaticMeshComponent* DroneISM =
             NewObject<UInstancedStaticMeshComponent>(ISMHost, TEXT("DroneISMComponent"));
-        DroneISM->SetStaticMesh(DroneMesh);
+        DroneISM->SetStaticMesh(GameConfig->DroneMesh);
         DroneISM->SetMobility(EComponentMobility::Movable);
         DroneISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         DroneISM->SetCastShadow(false);
@@ -428,14 +414,13 @@ void AMassDspGameMode::TestCase2()
         DroneISM->RegisterComponent();
 
         // ── 无人机 WPO 材质 ────────────────────────────────────────────────────
-        if (UMaterial* DroneMat = Cast<UMaterial>(StaticLoadObject(
-            UMaterial::StaticClass(), nullptr, TEXT("/Game/Assets/M_Drone"))))
+        if (GameConfig->DroneMaterial)
         {
-            DroneISM->SetMaterial(0, DroneMat);
+            DroneISM->SetMaterial(0, GameConfig->DroneMaterial);
         }
         else
         {
-            UE_LOG(LogTemp, Warning, TEXT("[Logistics] M_Drone 材质未找到，请在编辑器中运行一次以生成资源"));
+            UE_LOG(LogTemp, Warning, TEXT("[Logistics] GameConfig.DroneMaterial 未配置，无人机材质缺失"));
         }
 
         LogisticsSub->SetupISMComponents(DroneISM, nullptr, nullptr);

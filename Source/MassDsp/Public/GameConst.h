@@ -362,6 +362,21 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Belts", meta = (ForceInlineRow))
     TMap<EBeltType, FBeltTypeConfig> BeltTypeConfigs;
 
+    // ── 传送带渲染配置 ────────────────────────────────────────────────────────
+
+    // 传送带上的物品 Mass Entity 配置
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belts")
+    TObjectPtr<UMassEntityConfigAsset> BeltItemConfigAsset;
+
+    // ── 物流 / 无人机配置 ─────────────────────────────────────────────────────
+    // 无人机 ISM 网格（用于物流演示场景）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Logistics")
+    TObjectPtr<UStaticMesh> DroneMesh;
+
+    // 无人机材质（WPO 着色器）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Logistics")
+    TObjectPtr<UMaterialInterface> DroneMaterial;
+
     // 构造函数:自动初始化所有枚举键
     UGameConfigData()
     {

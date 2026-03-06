@@ -28,24 +28,14 @@ enum class EBuildPlaceMode : uint8
 };
 
 // Building实体生成数据
-USTRUCT(BlueprintType)
 struct FBuildingSpawnData
 {
-    GENERATED_BODY()
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    TSubclassOf<AMassDspBuilding> BuildingClass;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
     FTransform WorldTransform;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
     EBuildingType BuildingType = EBuildingType::None;
 
-    FBuildingSpawnData() = default;
-
-    FBuildingSpawnData(TSubclassOf<AMassDspBuilding> InClass, const FTransform& InTransform, EBuildingType InType)
-        : BuildingClass(InClass), WorldTransform(InTransform), BuildingType(InType)
+    FBuildingSpawnData(const FTransform& InTransform, EBuildingType InType)
+        : WorldTransform(InTransform), BuildingType(InType)
     {
     }
 };
