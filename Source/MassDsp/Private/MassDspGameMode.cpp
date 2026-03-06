@@ -128,7 +128,7 @@ void AMassDspGameMode::TestCase1() const
     UMassDspManager* DspManager = World->GetSubsystem<UMassDspManager>();
     if (!DspManager) return;
 
-    constexpr int N = 10; // TODO 300的时候内存炸了
+    constexpr int N = 100; // TODO 300的时候内存炸了
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据
@@ -225,13 +225,15 @@ void AMassDspGameMode::TestCase2()
     //  └───────────────────────────────────────────────────────────────────┘
     // ─────────────────────────────────────────────────────────────────────────
 
+    // TODO 优化物流系统
+
     // ═══════════════════════════ 可调常数 ════════════════════════════════════
-    constexpr int32 NumSupplyTowers = 15; // 供应塔数量
-    constexpr int32 NumDemandTowers = 5; // 需求塔数量（供需比 = 15:5 = 3:1）
-    constexpr int32 DronesPerTower = 30; // 每个供应塔无人机数量
-    constexpr float SpawnRange = 6000.f; // 随机散布半径（cm，±500m）
+    constexpr int32 NumSupplyTowers = 150; // 供应塔数量
+    constexpr int32 NumDemandTowers = 150; // 需求塔数量（供需比 = 15:5 = 3:1）
+    constexpr int32 DronesPerTower = 100; // 每个供应塔无人机数量
+    constexpr float SpawnRange = 30000.f; // 随机散布半径（cm，±500m）
     constexpr float MinTowerDist = 1500.f; // 两塔最小间距（cm）
-    constexpr float IntraSpacing = 600.f; // 矿机/仓库 与塔的距离（cm）
+    constexpr float IntraSpacing = 800.f; // 矿机/仓库 与塔的距离（cm）
     constexpr int32 RandSeed = 42; // 固定种子，保证每次运行位置相同
     // ═════════════════════════════════════════════════════════════════════════
 

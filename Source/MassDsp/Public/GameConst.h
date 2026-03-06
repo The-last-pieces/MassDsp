@@ -33,9 +33,9 @@ struct FGameConst
     static constexpr float DroneFlightArcHeight = 1000.f;
     /** 无人机双向航道横向偏移（cm）：始终向自身行进方向右偏，
      *  去程/回程方向相反，世界空间中自然分离到路线两侧，避免重叠 */
-    static constexpr float DroneFlightLaneOffset = 200.f;    
+    static constexpr float DroneFlightLaneOffset = 200.f;
     /** 无人机单次最大携带物品数量（与 FDroneData::CarryCapacity 默认值保持一致） */
-    static constexpr int32 DroneCarryCapacity = 8;
+    static constexpr int32 DroneCarryCapacity = 10;
     /**
      * 批量派遣时逢相邻无人机的起飞时间间隔（秒）。
      * 第 N 架无人机的 ElapsedTime 初始化为 -(N * stagger)，
@@ -104,8 +104,8 @@ enum class EBuildingType : uint8
 UENUM(BlueprintType)
 enum class ELogisticsTowerMode : uint8
 {
-    Supply  = 0 UMETA(DisplayName = "供应"),
-    Demand  = 1 UMETA(DisplayName = "需求"),
+    Supply = 0 UMETA(DisplayName = "供应"),
+    Demand = 1 UMETA(DisplayName = "需求"),
     Storage = 2 UMETA(DisplayName = "仓储"),
 };
 
