@@ -980,9 +980,9 @@ static UObject* ImpCreateDroneMaterial(UPackage* Package, const FString& AssetNa
         "float3 ForwardDir;\n"
         // ---- Idle 螺旋环绕 Home（= HomeLocation） ---------------------
         "if (TotalFlightTime < 0.001f) {\n"
-        "    const float R = 300.0f;\n"
+        "    const float R = 375.0f;\n"
         "    const float AW = 0.8f;\n"
-        "    const float Hb = 300.0f;\n"
+        "    const float Hb = 350.0f;\n"
         "    const float Ha = 250.0f;\n"
         "    const float Hw = 0.3f;\n"
         "    float Angle = IdlePhaseOffset + Time * AW;\n"
@@ -1070,7 +1070,7 @@ static UObject* ImpCreateDroneMaterial(UPackage* Package, const FString& AssetNa
 
 void FUMaterialGeneratorUtils::CreateDroneMaterial()
 {
-    FProceduralAssetBuilder::GenerateAsset(TEXT("/Game/Assets/M_Drone"), TEXT("v1"), &ImpCreateDroneMaterial);
+    FProceduralAssetBuilder::GenerateAsset(TEXT("/Game/Assets/M_Drone"), TEXT("v3"), &ImpCreateDroneMaterial);
 }
 
 #endif
