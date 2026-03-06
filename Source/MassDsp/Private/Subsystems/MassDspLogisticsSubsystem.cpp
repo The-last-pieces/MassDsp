@@ -115,65 +115,34 @@ void UMassDspLogisticsSubsystem::Tick(float DeltaTime)
         CleanExpiredRequests();
     }
 
-    // ── 一致性自愈：State=Idle 但不在空闲池（IdleDroneIndices / Set 去同步）───────
-    // 成因：任何路径调用了 Drone.State=Idle 却未同步更新池（或 TSparseArray slot 复用边界）。
-    // 自愈策略：发现即补录，并打 Warning 供排查；不影响已正确在列的 Idle 无人机。
-    for (auto It = DronePool.CreateIterator(); It; ++It)
+    // ── 一致性自愈 + 调试统计：降至每 60 帧执行一次（与 CleanExpiredRequests 共用计数器）──
+    // 原来：自愈循环 O(30k) 每帧 + 调试统计 O(30k) 每秒，是 Input 100ms 刺尖根因。
+    // 现在：与清理同帧批量执行，每 60 帧 (~1s) 一次，热路径完全消除。
+    if (CleanupFrameCounter == 0)  // CleanupFrameCounter 刚被清零时执行
     {
-        const int32 Idx = It.GetIndex();
-        FDroneData& D = *It;
-        if (D.State == ELogisticsDeviceState::Idle && !IdleDroneIndexSet.Contains(Idx))
+        // 自愈扫描（Debug 版本保留 Warning，Shipping 版本由编译器优化掉 Log 调用）
+        for (auto It = DronePool.CreateIterator(); It; ++It)
         {
-            UE_LOG(LogTemp, Warning,
-                   TEXT("[Logistics] HEAL: drone poolIdx=%d State=Idle but NOT in IdlePool! Re-adding. CurrentTaskId=%d"),
-                   Idx, D.CurrentTaskId);
-            IdleDroneIndices.Add(Idx);
-            IdleDroneIndexSet.Add(Idx);
-            // 顺便把归属塔标脏，让下一帧 MatchPendingRequests 立即派遣
-            if (D.AffiliatedTowerEntity.IsValid())
-                EnqueueDirtyTower(D.AffiliatedTowerEntity);
+            const int32 Idx = It.GetIndex();
+            FDroneData& D = *It;
+            if (D.State == ELogisticsDeviceState::Idle && !IdleDroneIndexSet.Contains(Idx))
+            {
+                UE_LOG(LogTemp, Warning,
+                       TEXT("[Logistics] HEAL: drone poolIdx=%d State=Idle but NOT in IdlePool! CurrentTaskId=%d"),
+                       Idx, D.CurrentTaskId);
+                IdleDroneIndices.Add(Idx);
+                IdleDroneIndexSet.Add(Idx);
+                if (D.AffiliatedTowerEntity.IsValid())
+                    EnqueueDirtyTower(D.AffiliatedTowerEntity);
+            }
         }
-    }
 
-    // 调试：每秒输出一次各状态无人机分布，帮助定位「1个闲置」根因
-    static float DbgAccum = 0.f;
-    DbgAccum += DeltaTime;
-    if (DbgAccum >= 1.f)
-    {
-        DbgAccum = 0.f;
-
-        int32 CntIdle = 0, CntCooldown = 0, CntPickup = 0, CntDeliver = 0, CntReturning = 0, CntStagger = 0;
-        for (auto It = DronePool.CreateConstIterator(); It; ++It)
-        {
-            const FDroneData& D = *It;
-            if (D.ElapsedTime < -SMALL_NUMBER && D.State != ELogisticsDeviceState::Idle)
-                ++CntStagger; // 错峰等待（已派遣但倒计时中）
-            else
-                switch (D.State)
-                {
-                case ELogisticsDeviceState::Idle: ++CntIdle;
-                    break;
-                case ELogisticsDeviceState::Cooldown: ++CntCooldown;
-                    break;
-                case ELogisticsDeviceState::MovingToPickup: ++CntPickup;
-                    break;
-                case ELogisticsDeviceState::MovingToDeliver: ++CntDeliver;
-                    break;
-                case ELogisticsDeviceState::ReturningHome: ++CntReturning;
-                    break;
-                default: break;
-                }
-        }
+#if !UE_BUILD_SHIPPING
+        // 调试统计（仅非 Shipping 版本，每 ~1s 输出一次，不再每帧/每秒）
         UE_LOG(LogTemp, Log,
-               TEXT("[Drones] Total=%d | Idle=%d Stagger=%d Pickup=%d Deliver=%d Cooldown=%d Return=%d | IdlePool=%d Req=%d Tasks=%d"),
-               DronePool.Num(), CntIdle, CntStagger, CntPickup, CntDeliver, CntCooldown, CntReturning,
-               IdleDroneIndices.Num(), AllRequests.Num(), AllTasks.Num());
-        if (GEngine)
-        {
-            GEngine->AddOnScreenDebugMessage(42, 2.f, FColor::Cyan,
-                                             FString::Printf(TEXT("[Logistics] Idle:%d Stagger:%d Pickup:%d Deliver:%d Cool:%d Return:%d"),
-                                                             CntIdle, CntStagger, CntPickup, CntDeliver, CntCooldown, CntReturning));
-        }
+               TEXT("[Drones] Total=%d IdlePool=%d Req=%d Tasks=%d"),
+               DronePool.Num(), IdleDroneIndices.Num(), AllRequests.Num(), AllTasks.Num());
+#endif
     }
 }
 
@@ -982,13 +951,13 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  Phase B: GPU WPO 路径 —— 仅更新 Custom Data，实例 transform 永驻 HomeLocation
-    //  （CPU 螺旋/贝塞尔 UpdateInstanceTransform 已移除，由 WPO shader 全权驱动）
     //
-    //  P0 优化：Dirty-Flag 机制大幅削减每帧写入量。
-    //  P0-P3 / TimeAtDispatch / TotalFlightTime 在状态切换时一次性写入 GPU，
-    //  飞行中无人机由 GPU 用 GameTime 自行推进 t，CPU 不再每帧刷写。
-    //  正常情况：每帧写入次数 ≈ 本帧发生状态切换的无人机数（几十~几百）而非全量 30k。
+    //  P0 优化：Dirty-Flag + 条件 MarkRenderStateDirty 双重优化：
+    //    1. 只写 bCustomDataDirty==true 的无人机（状态切换时设置）
+    //    2. bAnyCustomDataWritten 标记是否当帧有任何写入，控制末尾 MarkRenderStateDirty
+    //  无状态切换的帧（绝大多数）：bAnyCustomDataWritten=false → 完全不触碰 ISM 渲染管线
     // ═══════════════════════════════════════════════════════════════════════════
+    bool bAnyCustomDataWritten = false;
     {
         const float GameTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
         for (auto It = DronePool.CreateIterator(); It; ++It)
@@ -999,6 +968,7 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
             if (Drone.ISMInstanceIndex >= DroneISM->GetInstanceCount()) continue;
             WriteDroneCustomData(Drone, GameTime);
             Drone.bCustomDataDirty = false;
+            bAnyCustomDataWritten = true;
         }
     }
 
@@ -1039,8 +1009,10 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
         }
     }
 
-    // 统一触发渲染刷新（合并所有 UpdateInstanceTransform 为一次 GPU 上传）
-    if (DroneISM)
+    // P0 优化：只在当帧有任何 Custom Data 写入时才触发渲染刷新。
+    // 无状态切换的帧（绝大多数帧）完全跳过 MarkRenderStateDirty，
+    // 避免 ISM 每帧重新上传 30k × 18 float ≈ 2MB 的 Custom Data 缓冲到 GPU（RHIT 暴增根因）。
+    if (DroneISM && bAnyCustomDataWritten)
         DroneISM->MarkRenderStateDirty();
 }
 
