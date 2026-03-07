@@ -8,8 +8,6 @@
 
 #include "Logistics/MassDspLogisticsTypes.h"
 #include "Logistics/MassDspDroneData.h"
-#include "Logistics/MassDspVehicleData.h"
-#include "Logistics/MassDspTrainData.h"
 #include "Logistics/MassDspLogisticsDeviceStrategy.h"
 
 #include "MassDspLogisticsSubsystem.generated.h"
@@ -17,14 +15,12 @@
 class UMassDspManager;
 
 /**
- * 物流调度子系统
+ * 物流调度子系统（Demo 阶段：仅实现无人机，Vehicle/Train 暂未实现）
  *
  * 职责：
- *   1. 管理三类设备的对象池（DronePool / VehiclePool / TrainPool）
- *      - 全 POD，TSparseArray，O(1) 分配回收，对标传送带 BeltEntityRegistry
- *   2. 维护设备的 ISM 渲染（DroneISM / VehicleISM / TrainISM）
- *      - 同 UMassDspManager::ItemISMPool 完全一致的模式
- *   3. 每帧推进设备状态机并批量同步 ISM 位置（无虚调用热路径）
+ *   1. 管理无人机对象池（DronePool，TSparseArray，O(1) 分配/回收）
+ *   2. 维护无人机 ISM 渲染（DroneIdleHISM + DroneFlyingISM0-3 分桶）
+ *   3. 每帧推进无人机状态机并批量同步 ISM Custom Data（无虚调用热路径）
  *   4. 管理请求/任务生命周期（AllRequests / AllTasks）
  *   5. 为物流塔提供请求提交接口（事件推送，置塔的 bDirty）
  *   6. 通过策略表（DispatchStrategies）在任务分配时做一次虚调用，其余零虚调用
@@ -68,31 +64,11 @@ public:
 public:
     /** 无人机数据池（10w+ 量级，TSparseArray O(1) 分配/回收） */
     TSparseArray<FDroneData> DronePool;
-    /** 地面小车数据池（1k+ 量级） */
-    TSparseArray<FVehicleData> VehiclePool;
-    /** 火车数据池（1k+ 量级） */
-    TSparseArray<FTrainData> TrainPool;
 
-    /**
-     * 地面小车路径点数据（与 VehiclePool 按 Index 对齐，不在 FVehicleData 内保持 POD）
-     * VehiclePaths[vehiclePoolIndex] = 当前任务的路径航点列表
-     * TODO[VEHICLE]: NavMesh 寻路结果填入此处
-     */
-    TArray<TArray<FVector>> VehiclePaths;
-
-    /**
-     * 火车轨道 LUT（与 TrainPool 按 Index 对齐）
-     * TrainTrackLUTs[trainPoolIndex] = 预烘焙轨道采样点（复用 FBeltLUTSample 模式）
-     * TODO[TRAIN]: 轨道 Editor 工具填入；运行时区间调度在 UpdateTrains 中实现
-     */
-    TArray<TArray<FVector>> TrainTrackLUTs;
-
-    //  空闲索引池（O(1) 查找空闲设备，无需遍历整个 Pool） 
+    //  空闲索引池（O(1) 查找空闲无人机） 
     /** TArray 供 SelectBestDeviceIndex 顺序迭代；TSet 供 O(1) Contains 查询，两者始终同步 */
     TArray<int32> IdleDroneIndices;
     TSet<int32> IdleDroneIndexSet; ///< 镜像 IdleDroneIndices，专门用于 O(1) Contains 判断
-    TArray<int32> IdleVehicleIndices;
-    TArray<int32> IdleTrainIndices;
 
     //  无人机空间哈希（同 UMassDspManager::BuildingHashGrid 完全一致的实现） 
     /** Key = MakeDroneCellKey(CX,CY)，Value = DronePool 物理 Index（可能包含非空闲无人机） */
@@ -112,25 +88,13 @@ public:
     UPROPERTY()
     UInstancedStaticMeshComponent* DroneISM = nullptr;
 
-    /** 地面小车 ISM */
-    UPROPERTY()
-    UInstancedStaticMeshComponent* VehicleISM = nullptr;
-
-    /** 火车 ISM */
-    UPROPERTY()
-    UInstancedStaticMeshComponent* TrainISM = nullptr;
-
     /**
      * 初始化 ISM 组件（由蓝图或关卡初始化逻辑调用一次）
      * @param InDroneISM    无人机 ISM 组件（需提前在关卡中放置或代码创建）
-     * @param InVehicleISM  地面小车 ISM 组件
-     * @param InTrainISM    火车 ISM 组件
      */
     UFUNCTION(BlueprintCallable, Category = "MassDsp|Logistics")
     void SetupISMComponents(
-        UInstancedStaticMeshComponent* InDroneISM,
-        UInstancedStaticMeshComponent* InVehicleISM,
-        UInstancedStaticMeshComponent* InTrainISM);
+        UInstancedStaticMeshComponent* InDroneISM);
 
     // 
     //   请求接口（建筑 / Processor  子系统）
@@ -203,24 +167,8 @@ public:
         float FlightSpeed,
         int32 CarryCapacity);
 
-    /**
-     * 创建并注册一辆地面小车。
-     * @param SpawnLocation  出生世界坐标
-     */
-    FVehicleHandle CreateVehicle(const FVector& SpawnLocation, int32 CarryCapacity = 50);
-
-    /**
-     * 创建并注册一列火车。
-     * @param TrackSegmentIndex  归属轨道段 Index
-     */
-    FTrainHandle CreateTrain(int32 TrackSegmentIndex, int32 CarryCapacity = 200);
-
     /** 销毁无人机（从池中回收，释放 ISM 实例） */
     void DestroyDrone(FDroneHandle Handle);
-    /** 销毁小车 */
-    void DestroyVehicle(FVehicleHandle Handle);
-    /** 销毁火车 */
-    void DestroyTrain(FTrainHandle Handle);
 
     // 
     //   任务回调（由 Tick 内部状态机推进后调用，不对外暴露）
@@ -233,9 +181,6 @@ private:
     void OnDroneArrivedAtDelivery(int32 DronePoolIndex);
     /** 无人机任务失败，重置设备并将请求重新入队 */
     void OnDroneTaskFailed(int32 DronePoolIndex);
-
-    // TODO[VEHICLE]: OnVehicleArrivedAtPickup / OnVehicleArrivedAtDelivery
-    // TODO[TRAIN]:   OnTrainArrivedAtPickup  / OnTrainArrivedAtDelivery
 
     // 
     //   策略扩展（后续设备模块调用注册，子系统无需改动）
@@ -338,7 +283,7 @@ private:
     bool TryDispatchTask(FLogisticsTask& Task, const TArray<int32>& CandidateIndices);
 
     /**
-     * 写入无人机 ISM GPU Custom Data（16 floats）。
+     * 写入无人机 ISM GPU Custom Data（18 floats）。
      * 仅在状态切换时调用一次，就帧无需任何 CPU 工作。
      */
     void WriteDroneCustomData(const FDroneData& Drone, float GameTime) const;
@@ -352,29 +297,19 @@ private:
     /** 推进无人机状态机并同步 ISM（Tick 内部，无虚调用热路径） */
     void UpdateDrones(float DeltaTime);
 
-    /** 推进地面小车状态机并同步 ISM（占位，TODO[VEHICLE] 实现运动逻辑） */
-    void UpdateVehicles(float DeltaTime);
-
-    /** 推进火车状态机并同步 ISM（占位，TODO[TRAIN] 实现区间调度） */
-    void UpdateTrains(float DeltaTime);
-
     /** 清理超时请求 */
     void CleanExpiredRequests();
 
-    /** 将无人机 ISM 实例更新到贝塞尔插值位置 */
+    /** 将无人机 ISM 实例更新到贝塞尔插值位置（调试用，热路径不调用） */
     void UpdateDroneISMInstance(FDroneData& Drone) const;
 
     /** 在无人机空间哈希中更新单架无人机的格子归属 */
     void UpdateDroneInGrid(int32 DronePoolIndex, const FVector& OldPos, const FVector& NewPos);
 
-    /** 向 TowerRuntimeData 注册 ISM 实例 */
+    /** 在 DroneIdleHISM 中分配 Idle 实例（BucketIndex=-1 新建无人机时调用）。 */
     int32 AllocateDroneISMInstance(const FVector& InitialLocation);
-    int32 AllocateVehicleISMInstance(const FVector& InitialLocation);
-    int32 AllocateTrainISMInstance(const FVector& InitialLocation);
 
     void FreeDroneISMInstance(int32 InstanceIndex);
-    void FreeVehicleISMInstance(int32 InstanceIndex);
-    void FreeTrainISMInstance(int32 InstanceIndex);
 
     /** 执行物品转移：取货建筑.TryProvide  设备携带  交货建筑.TryConsume */
     bool ExecuteItemTransfer(FMassEntityHandle PickupEntity, FMassEntityHandle DeliveryEntity,

@@ -28,18 +28,12 @@ void UMassDspLogisticsSubsystem::Initialize(FSubsystemCollectionBase& Collection
     TowerRuntimeData.Reserve(64);
     IdleDroneIndices.Reserve(1024);
     IdleDroneIndexSet.Reserve(1024);
-    IdleVehicleIndices.Reserve(128);
-    IdleTrainIndices.Reserve(64);
     DirtyTowerQueue.Reserve(256);
 }
 
 void UMassDspLogisticsSubsystem::Deinitialize()
 {
     DronePool.Empty();
-    VehiclePool.Empty();
-    TrainPool.Empty();
-    VehiclePaths.Empty();
-    TrainTrackLUTs.Empty();
     AllRequests.Empty();
     AllTasks.Empty();
     TowerRuntimeData.Empty();
@@ -56,17 +50,13 @@ void UMassDspLogisticsSubsystem::Deinitialize()
 // 
 
 void UMassDspLogisticsSubsystem::SetupISMComponents(
-    UInstancedStaticMeshComponent* InDroneISM,
-    UInstancedStaticMeshComponent* InVehicleISM,
-    UInstancedStaticMeshComponent* InTrainISM)
+    UInstancedStaticMeshComponent* InDroneISM)
 {
     DroneISM = InDroneISM;
-    VehicleISM = InVehicleISM;
-    TrainISM = InTrainISM;
 
     // 18 floats per instance:
-    // [0]=TimeAtDispatch  [1]=TotalFlightTime
-    // [2-4]=P0  [5-7]=P1  [8-10]=P2
+    //   [0]=TimeAtDispatch  [1]=TotalFlightTime
+    //   [2-4]=P0  [5-7]=P1  [8-10]=P2
     // [11-13]=HomeLocation (永久)  [14]=IdlePhaseOffset
     // [15-17]=P3飞行终点 (仅飞行时有意义)
     if (DroneISM)
@@ -102,10 +92,8 @@ void UMassDspLogisticsSubsystem::Tick(float DeltaTime)
     // Step 1：处理脏塔的请求匹配与任务派发（先于 CustomData 写入）
     MatchPendingRequests();
 
-    // Step 2：推进所有设备状态机 + 批量同步 ISM CustomData（派遣后状态已正确）
+    // Step 2：推进无人机状态机 + 批量同步 ISM CustomData（派遣后状态已正确）
     UpdateDrones(DeltaTime);
-    UpdateVehicles(DeltaTime);
-    UpdateTrains(DeltaTime);
 
     // Step 3：清理超时请求（每 60 帧执行一次，请求超时 30s，1s 间隔完全够用）
     ++CleanupFrameCounter;
@@ -445,41 +433,7 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
         IdleDroneIndexSet.Add(Idx);
     }
 
-    // 同步扩展 VehiclePaths / TrainTrackLUTs 对齐（无人机不需要，但保持数组长度一致性）
     return FDroneHandle{Idx, DronePool[Idx].Generation};
-}
-
-FVehicleHandle UMassDspLogisticsSubsystem::CreateVehicle(const FVector& SpawnLocation, int32 CarryCapacity)
-{
-    FVehicleData Data;
-    Data.CurrentLocation = SpawnLocation;
-    Data.CarryCapacity = CarryCapacity;
-
-    const int32 Idx = VehiclePool.Add(Data);
-
-    // 扩展路径数组对齐
-    while (VehiclePaths.Num() <= Idx) VehiclePaths.AddDefaulted();
-
-    VehiclePool[Idx].ISMInstanceIndex = AllocateVehicleISMInstance(SpawnLocation);
-    IdleVehicleIndices.Add(Idx);
-
-    return FVehicleHandle{Idx, VehiclePool[Idx].Generation};
-}
-
-FTrainHandle UMassDspLogisticsSubsystem::CreateTrain(int32 TrackSegmentIndex, int32 CarryCapacity)
-{
-    FTrainData Data;
-    Data.TrackSegmentIndex = TrackSegmentIndex;
-    Data.CarryCapacity = CarryCapacity;
-
-    const int32 Idx = TrainPool.Add(Data);
-
-    while (TrainTrackLUTs.Num() <= Idx) TrainTrackLUTs.AddDefaulted();
-
-    TrainPool[Idx].ISMInstanceIndex = AllocateTrainISMInstance(FVector::ZeroVector);
-    IdleTrainIndices.Add(Idx);
-
-    return FTrainHandle{Idx, TrainPool[Idx].Generation};
 }
 
 void UMassDspLogisticsSubsystem::DestroyDrone(FDroneHandle Handle)
@@ -495,31 +449,7 @@ void UMassDspLogisticsSubsystem::DestroyDrone(FDroneHandle Handle)
     DronePool.RemoveAt(Handle.Index);
 }
 
-void UMassDspLogisticsSubsystem::DestroyVehicle(FVehicleHandle Handle)
-{
-    if (!Handle.IsValid() || !VehiclePool.IsValidIndex(Handle.Index)) return;
-    FVehicleData& Vehicle = VehiclePool[Handle.Index];
-    if (Vehicle.Generation != Handle.Generation) return;
-
-    FreeVehicleISMInstance(Vehicle.ISMInstanceIndex);
-    IdleVehicleIndices.Remove(Handle.Index);
-    Vehicle.Generation++;
-    VehiclePool.RemoveAt(Handle.Index);
-}
-
-void UMassDspLogisticsSubsystem::DestroyTrain(FTrainHandle Handle)
-{
-    if (!Handle.IsValid() || !TrainPool.IsValidIndex(Handle.Index)) return;
-    FTrainData& Train = TrainPool[Handle.Index];
-    if (Train.Generation != Handle.Generation) return;
-
-    FreeTrainISMInstance(Train.ISMInstanceIndex);
-    IdleTrainIndices.Remove(Handle.Index);
-    Train.Generation++;
-    TrainPool.RemoveAt(Handle.Index);
-}
-
-// 
+//
 //  策略注册
 // 
 
@@ -1051,25 +981,6 @@ void UMassDspLogisticsSubsystem::UpdateDrones(float DeltaTime)
         DroneISM->MarkRenderStateDirty();
 }
 
-void UMassDspLogisticsSubsystem::UpdateVehicles(float DeltaTime)
-{
-    // TODO[VEHICLE]: 地面小车状态机推进
-    // - 按 CurrentWaypointIdx 在 VehiclePaths[Idx] 中线性移动
-    // - 到达取货点  装货  前往交货点  卸货  Cooldown  Idle
-    // - 调用 VehicleISM->UpdateInstanceTransform 同步渲染位置
-    (void)DeltaTime;
-}
-
-void UMassDspLogisticsSubsystem::UpdateTrains(float DeltaTime)
-{
-    // TODO[TRAIN]: 火车状态机推进
-    // - DistanceAlongTrack += MoveSpeed * DeltaTime（考虑 bForwardDirection）
-    // - 到达轨道段端点  区间信号灯判断（闭塞区间调度）
-    // - 在 TrainTrackLUTs[Idx] 中查表插值（复用 FBeltTrajectory::GetTransformAtDistance）
-    // - 调用 TrainISM->UpdateInstanceTransform 同步渲染位置
-    (void)DeltaTime;
-}
-
 // 
 //  私有：无人机到达回调
 // 
@@ -1342,18 +1253,6 @@ int32 UMassDspLogisticsSubsystem::AllocateDroneISMInstance(const FVector& Initia
     return Idx;
 }
 
-int32 UMassDspLogisticsSubsystem::AllocateVehicleISMInstance(const FVector& InitialLocation)
-{
-    if (!VehicleISM) return -1;
-    return VehicleISM->AddInstance(FTransform(FQuat::Identity, InitialLocation, FVector::OneVector));
-}
-
-int32 UMassDspLogisticsSubsystem::AllocateTrainISMInstance(const FVector& InitialLocation)
-{
-    if (!TrainISM) return -1;
-    return TrainISM->AddInstance(FTransform(FQuat::Identity, InitialLocation, FVector::OneVector));
-}
-
 void UMassDspLogisticsSubsystem::FreeDroneISMInstance(int32 InstanceIndex)
 {
     if (!DroneISM || InstanceIndex < 0) return;
@@ -1375,18 +1274,6 @@ void UMassDspLogisticsSubsystem::FreeDroneISMInstance(int32 InstanceIndex)
     }
 
     DroneISM->RemoveInstance(InstanceIndex);
-}
-
-void UMassDspLogisticsSubsystem::FreeVehicleISMInstance(int32 InstanceIndex)
-{
-    if (VehicleISM && InstanceIndex >= 0)
-        VehicleISM->RemoveInstance(InstanceIndex);
-}
-
-void UMassDspLogisticsSubsystem::FreeTrainISMInstance(int32 InstanceIndex)
-{
-    if (TrainISM && InstanceIndex >= 0)
-        TrainISM->RemoveInstance(InstanceIndex);
 }
 
 // 

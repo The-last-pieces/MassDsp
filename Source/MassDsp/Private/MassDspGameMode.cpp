@@ -24,7 +24,7 @@ void AMassDspGameMode::BeginPlay()
         GEngine->bEnableOnScreenDebugMessages = true;
     }
 
-    // TestCase1();
+    //TestCase1();
     TestCase2();
 }
 
@@ -390,7 +390,7 @@ void AMassDspGameMode::TestCase2()
     DspManager->FlushBeltMesh();
 
     // ── ISM 宿主 Actor ──────────────────────────────────────────────────────
-    if (GameConfig->DroneMesh)
+    if (GameConfig->DroneMesh && GameConfig->DroneMaterial)
     {
         FActorSpawnParameters ISMHostParams;
         ISMHostParams.Name = TEXT("DroneISMHostActor");
@@ -423,11 +423,11 @@ void AMassDspGameMode::TestCase2()
             UE_LOG(LogTemp, Warning, TEXT("[Logistics] GameConfig.DroneMaterial 未配置，无人机材质缺失"));
         }
 
-        LogisticsSub->SetupISMComponents(DroneISM, nullptr, nullptr);
+        LogisticsSub->SetupISMComponents(DroneISM);
     }
     else
     {
-        UE_LOG(LogTemp, Warning, TEXT("[Logistics] DroneMesh 未配置，无人机不会显示"));
+        UE_LOG(LogTemp, Warning, TEXT("[Logistics] DroneMesh 或 DroneMaterial 未配置，无人机不会显示"));
     }
 
     // ── 注册无人机分派策略 ──────────────────────────────────────────────────
