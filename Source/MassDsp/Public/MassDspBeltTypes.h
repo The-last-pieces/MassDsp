@@ -261,6 +261,17 @@ struct MASSDSP_API FBeltTrajectory
      *  @param Spline 已 UpdateSpline() 的样条（调用方持有） */
     void BakeLUTForLOD(const USplineComponent* Spline, int32 LODLevel);
 
+    // ── Dubins 解析重载（不依赖 USplineComponent，初始化与 LUT 懒加载均可用）──────────
+
+    /** Dubins 解析包围球：仅用 FDubinsPathData 纯数学采样，零 USplineComponent API 调用 */
+    void ComputeBoundsOnly(const FDubinsPathData& DPath, float CoarseStep = 500.f);
+
+    /** Dubins 解析 LUT 烘焙（内部被 BakeLUTForLOD 调用，也可直接使用指定步长） */
+    void BakeLUT(const FDubinsPathData& DPath, float Step);
+
+    /** Dubins 解析版 BakeLUTForLOD，完全跳过 USplineComponent */
+    void BakeLUTForLOD(const FDubinsPathData& DPath, int32 LODLevel);
+
     bool IsValid() const;
 
     // 优先 LUT 查表插值（O(1)，线程安全）；LUT 未加载时返回 Scale=ZeroVector（ISM 不渲染）

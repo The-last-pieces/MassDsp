@@ -81,29 +81,30 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const FBeltRebuildData& RebuildDa
 {
     if (!BeltsContainerActor) return FBeltHandle();
 
-    // --- 精确长度：Dubins 用解析公式（圆弧=r*θ，直线=Euclidean，绝对精确）；Hermite 用 SharedSplineHelper（无 GC 压力）---
-    check(SharedSplineHelper != nullptr); // Initialize() 时已创建
+    // --- 精确长度计算（Dubins 解析，无需 Spline；Hermite 仍需 Spline 积分）---
+    check(SharedSplineHelper != nullptr);
     float ExactLength = 0.f;
-    SharedSplineHelper->ClearSplinePoints(false);
     if (RebuildData.RebuildType == EBeltRebuildType::Dubins)
     {
+        // Dubins: 长度纯解析计算，零 USplineComponent API 调用
         const FDubinsPathData& D = RebuildData.DubinsData;
-        ExactLength = D.TotalLength; // Dubins 主路径（B→C）：圆弧+直线解析精确値
-        if (D.bHasStartExtend) // 起点延伸段 A→B（直线）
+        ExactLength = D.TotalLength;
+        if (D.bHasStartExtend)
             ExactLength += FVector::Dist(D.StartExtendPos, FVector(D.StartPos.X, D.StartPos.Y, D.StartZ));
-        if (D.bHasEndExtend) // 终点延伸段 C→D（直线）
+        if (D.bHasEndExtend)
             ExactLength += FVector::Dist(FVector(D.EndPos.X, D.EndPos.Y, D.EndZ), D.EndExtendPos);
-        BuildBeltSplineFromDubins(SharedSplineHelper, D); // UpdateSpline() 已在函数末尾调用
     }
     else
     {
+        // Hermite: 需要样条曲线数值积分
+        SharedSplineHelper->ClearSplinePoints(false);
         BuildBeltSplineFromPoints(SharedSplineHelper, RebuildData.HermiteData.A, RebuildData.HermiteData.B,
                                   RebuildData.HermiteData.C, RebuildData.HermiteData.D);
-        ExactLength = SharedSplineHelper->GetSplineLength(); // UpdateSpline() 已在函数末尾调用
+        ExactLength = SharedSplineHelper->GetSplineLength();
     }
 
     // --- 从 BeltType 配置读取速度 ---
-    float BeltSpeed = FGameConst::ItemSpace * 2; // 默认速度（fallback）
+    float BeltSpeed = FGameConst::ItemSpace * 2;
     TryGetGameMode();
     if (GameMode.IsValid() && GameMode->GameConfig)
     {
@@ -111,31 +112,28 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const FBeltRebuildData& RebuildDa
             BeltSpeed = Config->Speed;
     }
 
-    // --- 创建轨迹（SharedSplineHelper 已就绪，ComputeBoundsOnly / BakeLUTForLOD 直接用它）---
+    // --- 创建轨迹 + ComputeBoundsOnly ---
     FBeltTrajectory NewTrajectory;
-    NewTrajectory.TotalLength = ExactLength; // Dubins 解析精确値 / Hermite Spline 积分値
+    NewTrajectory.TotalLength = ExactLength;
     NewTrajectory.Speed = BeltSpeed;
 
     int32 Index = BeltTrajectories.Add(NewTrajectory);
     FBeltTrajectory& Traj = BeltTrajectories[Index];
 
-    // 始终只计算包围球，永远不在初始化时烘焙 LUT。
-    // LUT 由 UpdateBeltLODs（~0.5Hz）按视距懒加载，而不是全量常驻内存。
-    Traj.ComputeBoundsOnly(SharedSplineHelper, 500.f);
-    // 这里不调 BakeLUTForLOD：45万条全部立即烘焙会吸尽 ~10GB
+    if (RebuildData.RebuildType == EBeltRebuildType::Dubins)
+        Traj.ComputeBoundsOnly(RebuildData.DubinsData, 500.f);
+    else
+        Traj.ComputeBoundsOnly(SharedSplineHelper, 500.f);
 
     // --- 同步存储重建数据（与 BeltTrajectories 下标一一对应）---
-    // TSparseArray::Add 返回的 Index 在两个数组中保持一致（只追加，不删除时）
-    {
-        FBeltRebuildData RD = RebuildData;
-        RD.BeltType = BeltType;
-        if (!BeltRebuildData.IsValidIndex(Index))
-            BeltRebuildData.Insert(Index, MoveTemp(RD));
-        else
-            BeltRebuildData[Index] = MoveTemp(RD);
-    }
+    FBeltRebuildData RD = RebuildData;
+    RD.BeltType = BeltType;
+    if (!BeltRebuildData.IsValidIndex(Index))
+        BeltRebuildData.Insert(Index, MoveTemp(RD));
+    else
+        BeltRebuildData[Index] = MoveTemp(RD);
 
-    // --- Handle 和 BeltData ---
+    // --- Handle 和 BeltData (TMap 插入) ---
     FBeltHandle NewHandle;
     NewHandle.Index = Index;
     NewHandle.Generation = 0;
@@ -144,7 +142,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const FBeltRebuildData& RebuildDa
     BeltData.BeltLength = Traj.TotalLength;
     BeltData.BeltSpeed = Traj.Speed;
 
-    // --- 注册到空间 Chunk（网格待 FLushBeltMesh 时生成）---
+    // --- 注册到空间 Chunk（网格待 FlushBeltMesh 时生成）---
     if (BeltType != EBeltType::None)
     {
         const FIntPoint ChunkKey = GetChunkKey(Traj.RepresentativePosition);
@@ -469,7 +467,6 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     FVector C = EndSlot->WorldLocation;
     FVector D = EndSlot->WorldLocation - EndSlot->WorldRotation * FVector(EndSlot->SlotExtend, 0, 0);
 
-    // 根据样条类型选择构建方式
     FBeltHandle BeltHandle;
     if (SplineType == EBeltSplineType::DubinsPath)
     {
@@ -681,7 +678,7 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     struct FItemEntry
     {
         EItemType Type = EItemType::None;
-        FTransform T   = FTransform::Identity;
+        FTransform T = FTransform::Identity;
     };
     TArray<FItemEntry> FlatEntries;
     FlatEntries.SetNum(TotalVisibleItems);
@@ -1027,8 +1024,25 @@ void UMassDspManager::FlushBeltMesh(const FVector& CameraPos)
 
 void UMassDspManager::TickBeltMeshFlush(const FVector& CameraPos)
 {
+    // 初始加载时队列可能很大：允许首帧多处理一些近处 Chunk，
+    // 用当前队首距离决定本帧上限：距离 <5000cm → 最多 8 个，<10000cm → 4 个，否则 ChunksPerFrame
+    int32 BudgetThisFrame = ChunksPerFrame;
+    if (PendingFlushQueue.Num() > 0)
+    {
+        if (const FBeltChunk* First = BeltChunks.Find(PendingFlushQueue[0]))
+        {
+            // 队首 Chunk 中点距离（近似）
+            const FIntPoint& K = PendingFlushQueue[0];
+            const float Dx = (static_cast<float>(K.X) + 0.5f) * SpatialGridCellSize - CameraPos.X;
+            const float Dy = (static_cast<float>(K.Y) + 0.5f) * SpatialGridCellSize - CameraPos.Y;
+            const float QFrontDist = FMath::Sqrt(Dx * Dx + Dy * Dy);
+            if (QFrontDist < 5000.f) BudgetThisFrame = 8;
+            else if (QFrontDist < 10000.f) BudgetThisFrame = 4;
+        }
+    }
+
     int32 Processed = 0;
-    while (PendingFlushQueue.Num() > 0 && Processed < ChunksPerFrame)
+    while (PendingFlushQueue.Num() > 0 && Processed < BudgetThisFrame)
     {
         const FIntPoint Key = PendingFlushQueue[0];
         PendingFlushQueue.RemoveAt(0, 1, EAllowShrinking::No);
@@ -1056,17 +1070,21 @@ void UMassDspManager::RebuildLUTForTrajectory(int32 TrajIndex, int32 LODLevel)
     FBeltTrajectory& Traj = BeltTrajectories[TrajIndex];
     const FBeltRebuildData& RD = BeltRebuildData[TrajIndex];
 
-    // 复用 SharedSplineHelper（全局单例，零 GC 压力；Build 函数末尾已调 UpdateSpline）
     check(SharedSplineHelper != nullptr);
-    SharedSplineHelper->ClearSplinePoints(false);
 
     if (RD.RebuildType == EBeltRebuildType::Dubins)
-        BuildBeltSplineFromDubins(SharedSplineHelper, RD.DubinsData);
+    {
+        // Dubins: 纯解析采样，零 USplineComponent API 调用
+        Traj.BakeLUTForLOD(RD.DubinsData, LODLevel);
+    }
     else
+    {
+        // Hermite: 仍通过 Spline 曲线积分
+        SharedSplineHelper->ClearSplinePoints(false);
         BuildBeltSplineFromPoints(SharedSplineHelper, RD.HermiteData.A, RD.HermiteData.B,
                                   RD.HermiteData.C, RD.HermiteData.D);
-
-    Traj.BakeLUTForLOD(SharedSplineHelper, LODLevel);
+        Traj.BakeLUTForLOD(SharedSplineHelper, LODLevel);
+    }
 }
 
 void UMassDspManager::UpdateBeltLODs(const FVector& CameraPos)
@@ -1098,6 +1116,15 @@ void UMassDspManager::UpdateBeltLODs(const FVector& CameraPos)
 
 void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
 {
+    // 收集视距内所有需刷新的 Chunk，按距离升序排列（最近优先），
+    // 超出卸载距离的 Chunk 绝不入队，直接归还 PMC。
+    struct FDirtyEntry
+    {
+        FIntPoint Key;
+        float Dist;
+    };
+    TArray<FDirtyEntry> NewEntries;
+
     for (auto& [ChunkKey, Chunk] : BeltChunks)
     {
         const FVector ChunkCenter(
@@ -1110,7 +1137,7 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
 
         if (Dist > LUTUnloadDistance + LUTLoadHysteresis)
         {
-            // 超出卸载距离：归还 PMC 到对象池
+            // 超出卸载距离：归还 PMC 到对象池，从待刷新队列中移除
             if (Chunk.PMC)
             {
                 Chunk.PMC->ClearAllMeshSections();
@@ -1121,15 +1148,29 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
                 Chunk.PMC = nullptr;
                 Chunk.CurrentMeshLOD = -1;
             }
+            // 移出队列（如果已入队），远距离 Chunk 不应占用刷新时间片
+            if (PendingFlushSet.Remove(ChunkKey))
+                PendingFlushQueue.Remove(ChunkKey);
         }
-        else if (!Chunk.bMeshDirty && Chunk.CurrentMeshLOD != TargetLOD)
+        else
         {
-            // LOD 等级需要变化（首次进入视距或精度切换）
-            Chunk.bMeshDirty = true;
-            // bAnyDirty = true;
+            // LOD 等级需要变化 → 标脏
+            if (!Chunk.bMeshDirty && Chunk.CurrentMeshLOD != TargetLOD)
+                Chunk.bMeshDirty = true;
+
+            // 脏且未在队列中 → 收集待入队
+            if (Chunk.bMeshDirty && !PendingFlushSet.Contains(ChunkKey))
+                NewEntries.Add({ChunkKey, Dist});
         }
     }
 
+    // 按距离升序排序后追加到队列末尾（最近的先处理）
+    NewEntries.Sort([](const FDirtyEntry& A, const FDirtyEntry& B) { return A.Dist < B.Dist; });
+    for (const FDirtyEntry& E : NewEntries)
+    {
+        PendingFlushSet.Add(E.Key);
+        PendingFlushQueue.Add(E.Key);
+    }
     // 不在此处立即 Flush：由调用方每帧调 TickBeltMeshFlush 分帧处理
 }
 

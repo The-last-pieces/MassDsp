@@ -123,7 +123,7 @@ void AMassDspGameMode::TestCase1() const
     UMassDspManager* DspManager = World->GetSubsystem<UMassDspManager>();
     if (!DspManager) return;
 
-    constexpr int N = 100; // TODO 300的时候内存炸了
+    constexpr int N = 100;
     constexpr int BuildingsPerGroup = 5; // 每组：3矿机 + 1合成台 + 1仓库
 
     // 第一步：收集所有Building生成数据
@@ -194,8 +194,6 @@ void AMassDspGameMode::TestCase1() const
         DspManager->CreateAndLinkBeltForSlot(MinerEntity3, 0, AssemblerEntity, 0, EBeltType::Normal);
         DspManager->CreateAndLinkBeltForSlot(AssemblerEntity, 0, StorageEntity, 0, EBeltType::Fast);
     }
-
-    DspManager->FlushBeltMesh();
 }
 
 void AMassDspGameMode::TestCase2() const
@@ -386,8 +384,6 @@ void AMassDspGameMode::TestCase2() const
             }
         }
     }
-
-    DspManager->FlushBeltMesh();
 
     // ── ISM 宿主 Actor ──────────────────────────────────────────────────────
     if (GameConfig->DroneMesh && GameConfig->DroneMaterial)
