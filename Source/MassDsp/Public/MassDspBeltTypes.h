@@ -113,50 +113,8 @@ struct MASSDSP_API FBeltLUTSample
     FQuat Rotation = FQuat::Identity;
 };
 
-// 传送带轨迹数据封装
-struct MASSDSP_API FBeltTrajectory
-{
-    // 我们持有 SplineComponent 的指针。
-    // 注意：在 Mass Processor 多线程中访问 UObject 需要确保该 Object 不会被主线程修改或销毁。
-    // MassDspManager 将负责管理这些 Component 的生命周期。
-    USplineComponent* SplineComponent = nullptr;
-
-    float TotalLength = 0.0f;
-
-    float Speed = 400.0f; // 传送带速度，可以根据需要调整或从配置中读取
-
-    // 预烘焙 LUT：传送带创建后调用 BakeLUT() 一次，之后不再访问 SplineComponent
-    TArray<FBeltLUTSample> LUT;
-    float LUTStep = 50.0f; // LUT 采样间距（单位：cm），50cm 误差 < 0.5cm
-
-    /** 传送带中点世界坐标（BakeLUT 时计算），用于每帧视锥剔除 */
-    FVector RepresentativePosition = FVector::ZeroVector;
-
-    /** 围绕 RepresentativePosition 的包围球半径（BakeLUT 时计算），视锥剔除用 IntersectSphere 测试整条传送带 */
-    float BoundRadius = 0.f;
-
-    /**
-     * 将 SplineComponent 预烘焙为离散采样表，之后 GetTransformAtDistance 用此表插值。
-     * 必须在 SplineComponent 完成初始化且 TotalLength 已赋值后调用一次。
-     * @param Step  采样间距（cm），越小精度越高但内存越大，50cm 通常足够
-     */
-    void BakeLUT(float Step = 50.0f);
-
-    bool IsValid() const;
-
-    FVector GetLocationAtDistance(float Distance) const;
-
-    FVector GetTangentAtDistance(float Distance) const;
-
-    void ApplyTransform(FTransformFragment& Transform, float Distance) const;
-
-    // 直接计算 FTransform，不依赖 FTransformFragment（供 ISM 批量更新使用）
-    // 优先从 LUT 查表，LUT 为空时 fallback 到 SplineComponent
-    void GetTransformAtDistance(float Distance, FTransform& OutTransform) const;
-};
-
 // ============================================================
-//  传送带样条类型
+//  传送带样条类型（提前定义，FBeltTrajectory 的重建数据字段需要 FDubinsPathData）
 // ============================================================
 
 /** 样条生成算法枚举 */
@@ -183,14 +141,14 @@ enum class EDubinsWordType : uint8
 /** Dubins 段类型 */
 enum class EDubinsSegType : uint8
 {
-    Left, ///< CCW 圆弧
+    Left,     ///< CCW 圆弧
     Straight, ///< 直线
-    Right, ///< CW  圆弧
+    Right,    ///< CW  圆弧
 };
 
 /**
- * Dubins 路径2D 计算结枚封装。
- * 存储最短賓型、三段实际长度（cm）以及重建效线所需的全部输入数据。
+ * Dubins 路径2D 计算结果封装。
+ * 存储最短路径类型、三段实际长度（cm）以及重建曲线所需的全部输入数据。
  */
 struct MASSDSP_API FDubinsPathData
 {
@@ -216,7 +174,7 @@ struct MASSDSP_API FDubinsPathData
     /** 终点朝向（rad）*/
     float EndHeading = 0.f;
 
-    /** 3D 起点 Z 坐标（用于 Z 轴线性插岜）*/
+    /** 3D 起点 Z 坐标（用于 Z 轴线性插值）*/
     float StartZ = 0.f;
     /** 3D 终点 Z 坐标 */
     float EndZ = 0.f;
@@ -236,4 +194,75 @@ struct MASSDSP_API FDubinsPathData
     FVector EndExtendPos = FVector::ZeroVector;
 
     bool IsValid() const { return WordType != EDubinsWordType::Invalid && TotalLength > 0.f; }
+};
+
+// ============================================================
+//  LUT 懒加载重建数据
+// ============================================================
+
+/** LUT 重建算法枚举（对应两种 Spline 构建方式）*/
+enum class EBeltRebuildType : uint8 { Dubins, Hermite };
+
+/** Hermite 样条重建所需的四个控制点（A-B 为起点延伸段，C-D 为终点延伸段）*/
+struct MASSDSP_API FHermiteRebuildData
+{
+    FVector A = FVector::ZeroVector;
+    FVector B = FVector::ZeroVector;
+    FVector C = FVector::ZeroVector;
+    FVector D = FVector::ZeroVector;
+};
+
+// ============================================================
+//  传送带轨迹数据封装
+// ============================================================
+
+// 传送带轨迹数据封装
+// SplineComponent 已完全移除：LUT 烘焙/包围球计算通过 Manager 持有的 SharedSplineHelper 传入，
+// FBeltTrajectory 内不持有任何 UObject，零 GC 压力。
+struct MASSDSP_API FBeltTrajectory
+{
+    float TotalLength = 0.0f;
+
+    float Speed = 400.0f; // 传送带速度，可以根据需要调整或从配置中读取
+
+    // 预烘焙 LUT：按需懒加载。BakeLUTForLOD() 烘焙，UnloadLUT() 释放。
+    TArray<FBeltLUTSample> LUT;
+    float LUTStep = 50.0f; // LUT 采样间距（单位：cm）
+
+    /** 传送带中点世界坐标（ComputeBoundsOnly/BakeLUT 时计算），用于每帧视锥剔除 */
+    FVector RepresentativePosition = FVector::ZeroVector;
+
+    /** 围绕 RepresentativePosition 的包围球半径，视锥剔除用 IntersectSphere 测试整条传送带 */
+    float BoundRadius = 0.f;
+
+    // ── LUT 懒加载状态 ──────────────────────────────────────────────────────────
+    /** 当前已烘焙的 LUT 精度等级（-1 = 未加载；0=最高精度 LOD0，3=最低精度 LOD3）*/
+    int32 CurrentLOD = -1;
+    // 注意：重建数据（DubinsPathData / HermiteRebuildData）仅存一份，在 Manager::BeltRebuildData[Index] 中。
+    // FBeltTrajectory 不再冒一份，140 bytes × 45万条 = 63 MB 内存省略。
+
+    // ── 方法 ────────────────────────────────────────────────────────────────────
+
+    /**
+     * 将 SplineComponent 预烘焙为离散采样表，之后 GetTransformAtDistance 用此表插值。
+     * 必须在 SplineComponent 完成初始化且 TotalLength 已赋值后调用一次。
+     * @param Step  采样间距（cm），越小精度越高但内存越大
+     */
+    void BakeLUT(const USplineComponent* Spline, float Step = 50.0f);
+
+    /** 仅计算 RepresentativePosition + BoundRadius，不填充 LUT（视距外初始化用）
+     *  @param Spline 已 UpdateSpline() 的样条（调用方持有，FBeltTrajectory 不存储） */
+    void ComputeBoundsOnly(const USplineComponent* Spline, float CoarseStep = 500.f);
+
+    /** 释放 LUT 数组（RepresentativePosition/BoundRadius 保留），重置 CurrentLOD = -1 */
+    void UnloadLUT();
+
+    /** 按 LOD 等级选步长烘焙 LUT（LOD0=20cm，LOD1=50cm，LOD2=150cm，LOD3=500cm）
+     *  @param Spline 已 UpdateSpline() 的样条（调用方持有） */
+    void BakeLUTForLOD(const USplineComponent* Spline, int32 LODLevel);
+
+    bool IsValid() const;
+
+    // 优先 LUT 查表插值（O(1)，线程安全）；LUT 未加载时返回 Scale=ZeroVector（ISM 不渲染）
+    void GetTransformAtDistance(float Distance, FTransform& OutTransform) const;
 };

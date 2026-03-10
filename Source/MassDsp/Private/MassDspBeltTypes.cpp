@@ -8,39 +8,50 @@ bool FBeltTrajectory::IsValid() const
     return !LUT.IsEmpty();
 }
 
-FVector FBeltTrajectory::GetLocationAtDistance(float Distance) const
+void FBeltTrajectory::ComputeBoundsOnly(const USplineComponent* Spline, float CoarseStep)
 {
-    if (SplineComponent)
+    if (!Spline || TotalLength <= 0.f) return;
+
+    const float Step = FMath::Max(CoarseStep, 1.0f);
+    const int32 NumSamples = FMath::CeilToInt(TotalLength / Step) + 1;
+
+    // 使用栈上小数组避免堆分配（粗采样点通常很少）
+    TArray<FVector> Positions;
+    Positions.SetNumUninitialized(NumSamples);
+    for (int32 i = 0; i < NumSamples; ++i)
     {
-        return SplineComponent->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
+        const float Dist = FMath::Min(static_cast<float>(i) * Step, TotalLength);
+        FVector Pos = Spline->GetLocationAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World);
+        Pos.Z += FGameConst::ZOffset;
+        Positions[i] = Pos;
     }
-    return FVector::ZeroVector;
+
+    RepresentativePosition = Positions[NumSamples / 2];
+    BoundRadius = 0.f;
+    for (const FVector& P : Positions)
+        BoundRadius = FMath::Max(BoundRadius, FVector::Dist(RepresentativePosition, P));
+    BoundRadius += 200.f;
 }
 
-FVector FBeltTrajectory::GetTangentAtDistance(float Distance) const
+void FBeltTrajectory::UnloadLUT()
 {
-    if (SplineComponent)
-    {
-        return SplineComponent->GetTangentAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-    }
-    return FVector::ForwardVector;
+    LUT.Empty(); // 释放内存（不同于 Reset，Empty 也归还容量）
+    CurrentLOD = -1;
 }
 
-void FBeltTrajectory::ApplyTransform(FTransformFragment& Transform, float Distance) const
+void FBeltTrajectory::BakeLUTForLOD(const USplineComponent* Spline, int32 LODLevel)
 {
-    FVector OutPos = GetLocationAtDistance(Distance);
-    FVector OutTangent = GetTangentAtDistance(Distance);
-
-    OutPos.Z += FGameConst::ZOffset;
-
-    FTransform& TargetTransform = Transform.GetMutableTransform();
-    TargetTransform.SetLocation(OutPos);
-    TargetTransform.SetRotation(OutTangent.Rotation().Quaternion());
+    // LOD 等级 → LUT 采样步长映射
+    // LOD0(<30m)=20cm, LOD1(<80m)=50cm, LOD2(<200m)=150cm, LOD3(>=200m)=500cm
+    static constexpr float LODSteps[] = {20.f, 50.f, 150.f, 500.f};
+    const float Step = LODSteps[FMath::Clamp(LODLevel, 0, 3)];
+    BakeLUT(Spline, Step);
+    CurrentLOD = FMath::Clamp(LODLevel, 0, 3);
 }
 
-void FBeltTrajectory::BakeLUT(float Step)
+void FBeltTrajectory::BakeLUT(const USplineComponent* Spline, float Step)
 {
-    if (!SplineComponent || TotalLength <= 0.f) return;
+    if (!Spline || TotalLength <= 0.f) return;
 
     LUTStep = FMath::Max(Step, 1.0f);
 
@@ -52,10 +63,10 @@ void FBeltTrajectory::BakeLUT(float Step)
     {
         const float Dist = FMath::Min(static_cast<float>(i) * LUTStep, TotalLength);
 
-        FVector Pos = SplineComponent->GetLocationAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World);
+        FVector Pos = Spline->GetLocationAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World);
         Pos.Z += FGameConst::ZOffset;
 
-        const FVector Tangent = SplineComponent->GetTangentAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World).GetSafeNormal();
+        const FVector Tangent = Spline->GetTangentAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World).GetSafeNormal();
 
         LUT[i].Position = Pos;
         LUT[i].Rotation = FQuat(Tangent.Rotation());
@@ -90,13 +101,8 @@ void FBeltTrajectory::GetTransformAtDistance(float Distance, FTransform& OutTran
         return;
     }
 
-    // --- 慢速 fallback（LUT 未烘焙时，保持原逻辑）---
-    FVector OutPos = GetLocationAtDistance(Distance);
-    FVector OutTangent = GetTangentAtDistance(Distance);
-
-    OutPos.Z += FGameConst::ZOffset;
-
-    OutTransform.SetLocation(OutPos);
-    OutTransform.SetRotation(OutTangent.Rotation().Quaternion());
-    OutTransform.SetScale3D(FVector(1, 1, 0.2));
+    // LUT 未加载（传送带在视距外）：Scale=0 告知 ISM 不渲染此实例
+    OutTransform.SetLocation(RepresentativePosition);
+    OutTransform.SetRotation(FQuat::Identity);
+    OutTransform.SetScale3D(FVector::ZeroVector);
 }

@@ -40,6 +40,20 @@ struct FBuildingSpawnData
     }
 };
 
+// ============================================================
+//  传送带 LUT 重建数据（存储于 Manager，供懒加载时按需重建 Spline）
+// ============================================================
+
+/** 存储重建传送带曲线所需的最小数据集，仅在创建时采集一次，持久保存；
+ *  LUT 卸载后由 UpdateBeltLODs 使用此数据重新烘焙。 */
+struct FBeltRebuildData
+{
+    EBeltRebuildType   RebuildType = EBeltRebuildType::Dubins;
+    EBeltType          BeltType    = EBeltType::None;  ///< 用于 Chunk 网格生成
+    FDubinsPathData    DubinsData;                     ///< RebuildType == Dubins 时有效
+    FHermiteRebuildData HermiteData;                   ///< RebuildType == Hermite 时有效
+};
+
 UCLASS()
 class MASSDSP_API UMassDspManager : public UWorldSubsystem
 {
@@ -53,6 +67,10 @@ public:
     TMap<FBeltHandle, FBeltData> BeltEntityRegistry;
 
     TSparseArray<FBeltTrajectory> BeltTrajectories;
+
+    // 与 BeltTrajectories 下标同步的重建数据（下标即 BeltHandle.Index）
+    // 存储 Dubins 或 Hermite 控制点，供 LUT 卸载后懒加载重建使用。
+    TSparseArray<FBeltRebuildData> BeltRebuildData;
 
     // ── SoA 热数据（供 ProcessConveyor SIMD Pass 使用）──────────────────────
     // 与 BeltEntityRegistry 元素一一对应，通过 FBeltData::TickIdx 索引。
@@ -99,54 +117,121 @@ public:
 
     // Transform 同步累计时间（~30fps）
     float SyncAccum = 0.f;
+    // LOD + Chunk 可视性更新累计时间（~1Hz）
+    float LodAccum  = 1.f;
 
     // 最大渲染距离（cm）：超过此距离的传送带即使在视锥内也不渲染
-    // 解决飞高时视锥裆盖大量传送带的问题，默认 150m
+    // 解决飞高时视锥覆盖大量传送带的问题，默认 500m
     float MaxRenderDistance = 50000.f;
+
+    // ── 传送带 LOD 分级参数 ─────────────────────────────────────────────────────
+    // LOD0: <3000cm，LOD1: 3000-8000cm，LOD2: 8000-20000cm，LOD3: >=20000cm
+    static constexpr float BeltLODDistances[4]       = {3000.f, 8000.f, 20000.f, FLT_MAX};
+    static constexpr float BeltLODAngleThresholds[4] = {3.f,    5.f,    12.f,    20.f};
+    static constexpr float BeltLODMaxSegLengths[4]   = {80.f,   150.f,  400.f,   1000.f};
+
+    /** 超过此距离（cm）的传送带卸载 LUT（释放插值查询内存）*/
+    static constexpr float LUTUnloadDistance  = 25000.f; // 250m
+    /** 防抖窗口：从 Unload 距离向内收缩此距离才重新加载，避免边界抖动 */
+    static constexpr float LUTLoadHysteresis  = 3000.f;  // 30m
+
+    /** 根据距离（cm）返回 LOD 等级（0-3）*/
+    static FORCEINLINE int32 ComputeBeltLODLevel(float DistanceCm)
+    {
+        for (int32 L = 0; L < 3; ++L)
+            if (DistanceCm < BeltLODDistances[L]) return L;
+        return 3;
+    }
 
 protected:
     UPROPERTY()
     AActor* BeltsContainerActor;
 
-    UPROPERTY()
-    UProceduralMeshComponent* BeltProceduralMesh;
-
 private:
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
 
-    FBeltHandle CreateRuntimeBelt(const TFunction<void(USplineComponent*)>& InitSpline, EBeltType BeltType);
+    // ── 传送带网格分块（Chunk）管理 ──────────────────────────────────────────────
+    // 以 SpatialGridCellSize 为格子边长将世界划分为块，每块独立 PMC。
+    // 只有视距内的块才生成 ProceduralMesh 几何，远处的块清空 Section 节省 GPU 内存。
+    struct FBeltChunk
+    {
+        // 注意：PMC 附加到 BeltsContainerActor 并 RegisterComponent，GC 由 Actor 持有。
+        UProceduralMeshComponent* PMC = nullptr;
+        TArray<int32> BeltTrajectoryIndices; ///< 属于此 chunk 的 BeltTrajectories 稀疏数组下标
+        bool  bMeshDirty   = false; ///< 标记需要重建网格
+        int32 CurrentMeshLOD = -1;  ///< 当前 PMC 已生成的 LOD 等级（-1 = 无几何）
+    };
+    TMap<FIntPoint, FBeltChunk> BeltChunks;
 
-    // 新增：合并缓存
+    // PMC 对象池：Chunk 离开视距时归还，进入视距时优先复用，上限防止池子无限膨胀
+    static constexpr int32 MaxFreePMCPoolSize = 64;
+    UPROPERTY()
+    TArray<UProceduralMeshComponent*> FreePMCPool;
+
+    // MID 按 BeltType 缓存：同种传送带所有 Chunk 共享同一个 MID，避免每次 FlushChunk 泄漏新 MID
+    UPROPERTY()
+    TMap<EBeltType, UMaterialInstanceDynamic*> BeltMIDCache;
+
+    // 全局共享样条单例：LUT 烘焙、包围球计算、Chunk 几何生成都复用它。
+    // 仅在 Initialize() 中 RegisterComponent 一次，永不销毁，零 GC 压力。
+    UPROPERTY()
+    USplineComponent* SharedSplineHelper = nullptr;
+
+    // 分帧 Chunk 刷新队列：UpdateBeltChunkVisibility 入队，TickBeltMeshFlush 每帧处理 ChunksPerFrame 个
+    TArray<FIntPoint> PendingFlushQueue;
+    TSet<FIntPoint>   PendingFlushSet;
+    static constexpr int32 ChunksPerFrame = 2; ///< 每帧最多刷新的 Chunk 数
+
+    /** 根据世界位置计算所属 Chunk 的格子坐标 */
+    static FORCEINLINE FIntPoint GetChunkKey(const FVector& Pos)
+    {
+        return FIntPoint(
+            FMath::FloorToInt(Pos.X / SpatialGridCellSize),
+            FMath::FloorToInt(Pos.Y / SpatialGridCellSize));
+    }
+
+    /** 从重建数据（Dubins 或 Hermite 控制点）重新生成临时 Spline 并烘焙 LUT */
+    void RebuildLUTForTrajectory(int32 TrajIndex, int32 LODLevel);
+
+    /** 刷新单个 Chunk 的 PMC 网格（按 LOD 等级生成或清除）*/
+    void FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FVector& CameraPos);
+
+    FBeltHandle CreateRuntimeBelt(const FBeltRebuildData& RebuildData, EBeltType BeltType,
+                                   const FVector& CameraPos = FVector::ZeroVector);
+
+    // 网格数据临时缓冲（每次 FlushChunk 局部构建，不持久化存储以节省内存）
     struct FMergedBeltMeshData
     {
-        TArray<FVector> Vertices;
-        TArray<int32> Triangles;
-        TArray<FVector> Normals;
-        TArray<FVector2D> UVs;
+        TArray<FVector>       Vertices;
+        TArray<int32>         Triangles;
+        TArray<FVector>       Normals;
+        TArray<FVector2D>     UVs;
         TArray<FProcMeshTangent> Tangents;
-        TArray<FLinearColor> Colors; // R通道存Speed
+        TArray<FLinearColor>  Colors;
     };
 
-    static constexpr float C_Width = 110.0f;
+    static constexpr float C_Width        = 110.0f;
     static constexpr float C_BeltThickness = 20.0f;
-    static constexpr float C_UVScale = 100.0f;
+    static constexpr float C_UVScale      = 100.0f;
 
     /**
-      * 静态生成传送带网格
-      * @param OutMesh
-      * @param Spline           定义路径的样条线组件
-      * @param Width            传送带宽度
-      * @param Thickness        传送带厚度
-      * @param UVScale          UV平铺比例 (通常设为 100.0，即 1米重复一次)
-      * @param AngleThreshold   自适应细分角度阈值 (建议 5.0 度)
-      */
+     * 静态生成单条传送带网格（追加模式，写入 OutMesh）
+     * @param OutMesh         目标网格数据（追加，不清空）
+     * @param Spline          定义路径的样条线组件
+     * @param Width           传送带宽度
+     * @param Thickness       传送带厚度
+     * @param UVScale         UV 平铺比例（100.0 = 1m 重复一次）
+     * @param AngleThreshold  自适应细分角度阈值（度）
+     * @param MaxSegmentLength 强制分段的最大距离（cm）
+     */
     static void GenerateConveyorMesh(
         FMergedBeltMeshData& OutMesh,
         const USplineComponent* Spline,
-        float Width = 200.0f,
-        float Thickness = 20.0f,
-        float UVScale = 100.0f,
-        float AngleThreshold = 5.0f
+        float Width           = 110.0f,
+        float Thickness       = 20.0f,
+        float UVScale         = 100.0f,
+        float AngleThreshold  = 5.0f,
+        float MaxSegmentLength = 150.0f
     );
 
 public:
@@ -156,7 +241,29 @@ public:
         EBeltType BeltType,
         EBeltSplineType SplineType = EBeltSplineType::Default);
 
-    void FlushBeltMesh();
+    /**
+     * 刷新所有脏（bMeshDirty）Chunk 的 PMC 网格；按相机距离决定 LOD 密度。
+     * @param CameraPos  当前相机世界坐标；ZeroVector 表示不做距离筛选（批量执行 LOD1）
+     */
+    void FlushBeltMesh(const FVector& CameraPos = FVector::ZeroVector);
+
+    /**
+     * 低频更新（~0.5Hz）：根据相机位置懒加载/卸载各传送带的 LUT 并切换精度等级。
+     * 应由 PlayerController / GameMode 在合适频率主动调用。
+     */
+    void UpdateBeltLODs(const FVector& CameraPos);
+
+    /**
+     * 低频更新：检测相机移动，激活视距内 Chunk 网格、停用远处 Chunk 网格，
+     * LOD 等级发生切换时标记 Chunk dirty 并加入 PendingFlushQueue（分帧处理）。
+     */
+    void UpdateBeltChunkVisibility(const FVector& CameraPos);
+
+    /**
+     * 每帧调用：从 PendingFlushQueue 取出最多 ChunksPerFrame 个 Chunk 刷新网格。
+     * 应在 GameMode/PlayerController 的 Tick 中调用。
+     */
+    void TickBeltMeshFlush(const FVector& CameraPos);
 
     /** 上游建筑将物品放入传送带入口端（Front，distance ≈ 0）。
      *  若入口无空间返回 false，不消耗 GetItemFunc。
@@ -391,10 +498,6 @@ private:
 
     // 按需懒创建指定物品类型的 ISM 组件
     UInstancedStaticMeshComponent* GetOrCreateIsmForItemType(EItemType ItemType);
-
-    TMap<EBeltType, FMergedBeltMeshData> PendingBeltMeshMap;
-
-    TSet<EBeltType> BeltMaterializedSet; // 记录已生成网格的 BeltType，避免重复生成
 
     // ──────────────────────────── 建造预览状态 ────────────────────────────
 
