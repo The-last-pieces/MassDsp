@@ -79,6 +79,11 @@ private:
     void OnKey5Pressed(); // 中速传送带
     void OnKey6Pressed(); // 高速传送带
 
+    bool bPress8, bPress9;
+
+    void OnKey8Pressed(); // TestCase1
+    void OnKey9Pressed(); // TestCase2
+
     // 鼠标左键：确认放置 / 选择槽口
     void OnLeftMouseButtonPressed();
     // 鼠标右键：取消
@@ -113,4 +118,36 @@ private:
     /** 当前已打开的建筑交互 Widget（同时只存在一个） */
     UPROPERTY()
     TObjectPtr<UMassDspBuildingWidget> CurrentBuildingWidget;
+
+    // ─── 高度自适应镜头移动速度 ──────────────────────────────────────
+
+    /** 速度系数：TargetSpeed = CameraHeight × SpeedFactor */
+    float CameraSpeedFactor = 2.0f;
+
+    /** 最低移动速度（cm/s），防止高度极低时镜头无法移动 */
+    float CameraMinSpeed = 300.f;
+
+    /** 最高移动速度上限（cm/s） */
+    float CameraMaxSpeed = 100000.f;
+
+    /** 速度平滑插值速率（越大越跟手，越小过渡越柔和） */
+    float CameraSpeedSmoothRate = 8.f;
+
+    /**
+     * true：向下射线打地面，用「离地高度」计算速度（地形起伏时更准确）；
+     * false：直接用 Pawn 的 Z 坐标。
+     */
+    bool bUseSurfaceTraceForHeight = true;
+
+    /** 当前平滑后的移动速度（运行时内部状态，不需要配置） */
+    float CurrentCameraSpeed = 500.f;
+
+    /** 每帧根据高度自适应速度驱动 WASD 镜头移动 */
+    void UpdateCameraMovement(float DeltaSeconds);
+
+    /** 获取相机离地高度（cm） */
+    float GetCameraHeight() const;
+
+    /** 根据高度计算目标移动速度（cm/s） */
+    float GetAdaptiveCameraSpeed(float Height) const;
 };

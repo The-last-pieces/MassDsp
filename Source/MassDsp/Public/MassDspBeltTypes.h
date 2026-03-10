@@ -24,10 +24,11 @@ struct MASSDSP_API FBeltItemCache
 // 传送带逻辑数据（替代 FBeltEntityArray）
 struct MASSDSP_API FBeltData
 {
+    // TODO 考虑特化数据结构,弃用Deque
     // 物品缓存：[0] = 出口端(Tail)，[Last] = 入口端(Front)
     TDeque<FBeltItemCache> ItemCache;
     float BeltLength = 0.0f;
-    float BeltSpeed  = 0.0f;
+    float BeltSpeed = 0.0f;
 
     // 全局累积偏移，每帧无条件 += BeltSpeed * DeltaTime
     float TotalMove = 0.f;
@@ -52,7 +53,7 @@ struct MASSDSP_API FBeltData
     //
     // Tick（O(1) 摊还）：
     //   检查前沿自由物品（index = BlockedCount）是否追上组尾，追上则合并。
-    int32 BlockedCount    = 0;
+    int32 BlockedCount = 0;
     float GroupFrontOffset = 0.f; // GroupFront = min(GroupFrontOffset + TotalMove, BeltLen-HalfLen)
 
     /** 组头当前位置（cm）。BlockedCount==0 时返回值无意义。 */

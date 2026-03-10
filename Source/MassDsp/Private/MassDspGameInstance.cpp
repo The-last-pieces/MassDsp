@@ -31,12 +31,24 @@ void UMassDspGameInstance::Init()
         CVarAnisotropy->Set(16, ECVF_SetByCode);
     }
 
-#if UE_BUILD_SHIPPING
-    // 在 GameInstance::Init 阶段设置窗口模式，早于地图加载，避免启动时短暂全屏
-    if (UGameUserSettings* UserSettings = GEngine->GetGameUserSettings())
+    // 帧率无上限
+    if (IConsoleVariable* CVarMaxFPS = IConsoleManager::Get().FindConsoleVariable(TEXT("t.MaxFPS")))
     {
-        UserSettings->SetFullscreenMode(EWindowMode::Fullscreen);
-        UserSettings->ApplySettings(true);
+        CVarMaxFPS->Set(0, ECVF_SetByCode);
     }
+    if (IConsoleVariable* CVarMaxFPS = IConsoleManager::Get().FindConsoleVariable(TEXT("r.VSync")))
+    {
+        CVarMaxFPS->Set(0, ECVF_SetByCode);
+    }
+
+#if UE_BUILD_SHIPPING
+    if (UGameUserSettings* Settings = GEngine->GetGameUserSettings())
+    {
+        Settings->SetFullscreenMode(EWindowMode::WindowedFullscreen);
+        Settings->SetScreenResolution(FIntPoint(0, 0)); // 可不设，关键是下面的 ApplySettings
+        Settings->ApplySettings(false);
+        Settings->SaveSettings();
+    }
+    // 在 GameInstance::Init 阶段设置窗口模式，早于地图加载，避免启动时短暂全屏
 #endif
 }

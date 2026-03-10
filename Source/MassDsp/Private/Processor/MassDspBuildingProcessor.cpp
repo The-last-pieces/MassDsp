@@ -55,15 +55,15 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
 
     // ── Pass 1: TickExecute + 输出槽（Provide）──────────────────────────────
     // 每条传送带只有 1 个 Provide 方 → 各线程写不同 FBeltData，ParallelFor 安全
-    ProcessBuildingOutputs<FMassDspMinerFragment>   (MinerQuery,     Context, WorldTime);
-    ProcessBuildingOutputs<FMassDspStorageFragment>  (StorageQuery,   Context, WorldTime);
+    ProcessBuildingOutputs<FMassDspMinerFragment>(MinerQuery, Context, WorldTime);
+    ProcessBuildingOutputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
     ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
 
     // ── Pass 2: 输入槽（Consume）────────────────────────────────────────────
     // 每条传送带只有 1 个 Consume 方 → 各线程写不同 FBeltData，ParallelFor 安全
     // Pass 1 全部线程归栅后才进入 Pass 2 → Provide/Consume 时间上不重叠，无需锁
-    ProcessBuildingInputs<FMassDspStorageFragment>   (StorageQuery,   Context, WorldTime);
-    ProcessBuildingInputs<FMassDspAssemblerFragment> (AssemblerQuery, Context, WorldTime);
+    ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
+    ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
     // 矿机无 Input Slot，不参与 Pass 2
 }
 

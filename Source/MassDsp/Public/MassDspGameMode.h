@@ -20,10 +20,10 @@ protected:
 
     void ProcessConveyor(float DeltaTime) const;
 
-private:
+public:
     void TestCase1() const;
 
-    void TestCase2();
+    void TestCase2() const;
 
 public:
     UPROPERTY(EditDefaultsOnly, Category = "DSP")

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassProcessor.h"
+#include "MassExecutionContext.h"
 
 #include "MassDspLogisticsProcessor.generated.h"
 

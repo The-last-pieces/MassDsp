@@ -1494,7 +1494,7 @@ void UMassDspLogisticsSubsystem::HandleCooldownEnded(int32 DroneIdx)
     if (Drone.AffiliatedTowerEntity.IsValid() && HomeDist > 50.f)
     {
         const float Arc = FGameConst::DroneFlightArcHeight;
-        const float EffArc = FMath::Min(Arc, HomeDist * 0.4f);
+        const float EffArc = FMath::Min(Arc, HomeDist * 0.8f);
 
         Drone.P0 = CurPos;
         Drone.P1 = CurPos + FVector(0.f, 0.f, EffArc);

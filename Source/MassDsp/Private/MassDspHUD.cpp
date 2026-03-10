@@ -41,6 +41,10 @@ void AMassDspHUD::BeginPlay()
     InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &AMassDspHUD::OnKey4Pressed);
     InputComponent->BindKey(EKeys::Five, IE_Pressed, this, &AMassDspHUD::OnKey5Pressed);
     InputComponent->BindKey(EKeys::Six, IE_Pressed, this, &AMassDspHUD::OnKey6Pressed);
+
+    InputComponent->BindKey(EKeys::Eight, IE_Pressed, this, &AMassDspHUD::OnKey8Pressed);
+    InputComponent->BindKey(EKeys::Nine, IE_Pressed, this, &AMassDspHUD::OnKey9Pressed);
+
     // 鼠标点击
     InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AMassDspHUD::OnLeftMouseButtonPressed);
     InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &AMassDspHUD::OnRightMouseButtonPressed);
@@ -55,6 +59,7 @@ void AMassDspHUD::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     UpdateBuildPreview(DeltaSeconds);
+    UpdateCameraMovement(DeltaSeconds);
 
     // 若关闭按钮在 Widget 内部触发了 CloseWidget()，RemoveFromParent 后
     // HUD 的指针并不会自动清零，这里每帧检测一次并修正。
@@ -67,6 +72,75 @@ void AMassDspHUD::Tick(float DeltaSeconds)
 // ─────────────────────────────────────────────────────────────────────────────
 //  建造预览更新（每帧）
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  高度自适应镜头移动
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AMassDspHUD::UpdateCameraMovement(float DeltaSeconds)
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return;
+    APawn* Pawn = PC->GetPawn();
+    if (!Pawn) return;
+
+    // 目标速度（按高度比例），平滑插值避免缩放时抽搐
+    const float Height = GetCameraHeight();
+    const float TargetSpeed = GetAdaptiveCameraSpeed(Height);
+    CurrentCameraSpeed = FMath::FInterpTo(CurrentCameraSpeed, TargetSpeed, DeltaSeconds, CameraSpeedSmoothRate);
+
+    // 轮询 WASD 键状态（不消耗输入事件，与其他绑定共存）
+    const bool bW = PC->IsInputKeyDown(EKeys::W);
+    const bool bS = PC->IsInputKeyDown(EKeys::S);
+    const bool bA = PC->IsInputKeyDown(EKeys::A);
+    const bool bD = PC->IsInputKeyDown(EKeys::D);
+
+    if (!bW && !bS && !bA && !bD) return;
+
+    // 取摄像机水平朝向（忽略 Pitch/Roll，保证在地面平面移动）
+    FRotator CamRot = PC->GetControlRotation();
+    CamRot.Pitch = 0.f;
+    CamRot.Roll = 0.f;
+    const FVector FwdDir = FRotationMatrix(CamRot).GetUnitAxis(EAxis::X);
+    const FVector RightDir = FRotationMatrix(CamRot).GetUnitAxis(EAxis::Y);
+
+    FVector MoveDir = FVector::ZeroVector;
+    if (bW) MoveDir += FwdDir;
+    if (bS) MoveDir -= FwdDir;
+    if (bD) MoveDir += RightDir;
+    if (bA) MoveDir -= RightDir;
+
+    if (MoveDir.IsNearlyZero()) return;
+
+    MoveDir.Z = 0.f; // 确保只在水平面移动
+    MoveDir.Normalize();
+
+    // 直接偏移 Pawn（绕过 MovementComponent，不与蓝图默认移动绑定叠加）
+    Pawn->AddActorWorldOffset(MoveDir * CurrentCameraSpeed * DeltaSeconds, false);
+}
+
+float AMassDspHUD::GetCameraHeight() const
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC || !PC->GetPawn()) return 1000.f;
+
+    const FVector PawnLoc = PC->GetPawn()->GetActorLocation();
+
+    if (bUseSurfaceTraceForHeight)
+    {
+        FHitResult Hit;
+        const FVector TraceEnd = PawnLoc - FVector(0.f, 0.f, 100000.f);
+        if (GetWorld()->LineTraceSingleByChannel(Hit, PawnLoc, TraceEnd, ECC_WorldStatic))
+            return FMath::Max(PawnLoc.Z - Hit.Location.Z, 1.f);
+    }
+
+    return FMath::Max(PawnLoc.Z, 1.f);
+}
+
+float AMassDspHUD::GetAdaptiveCameraSpeed(float Height) const
+{
+    return FMath::Clamp(Height * CameraSpeedFactor, CameraMinSpeed, CameraMaxSpeed);
+}
 
 bool AMassDspHUD::GetMouseWorldHitLocation(FVector& OutHitLocation) const
 {
@@ -199,6 +273,26 @@ void AMassDspHUD::OnKey6Pressed()
     // 高速传送带（Express）
     UMassDspManager* Manager = GetWorld()->GetSubsystem<UMassDspManager>();
     if (Manager) Manager->BeginPreviewBelt(EBeltType::Express);
+}
+
+void AMassDspHUD::OnKey8Pressed()
+{
+    if (bPress8) return;
+    bPress8 = true;
+    if (auto GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()))
+    {
+        GameMode->TestCase1();
+    }
+}
+
+void AMassDspHUD::OnKey9Pressed()
+{
+    if (bPress9) return;
+    bPress9 = true;
+    if (auto GameMode = Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()))
+    {
+        GameMode->TestCase2();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

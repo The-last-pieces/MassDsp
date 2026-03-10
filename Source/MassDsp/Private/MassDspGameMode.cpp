@@ -24,8 +24,8 @@ void AMassDspGameMode::BeginPlay()
         GEngine->bEnableOnScreenDebugMessages = true;
     }
 
-    //TestCase1();
-    TestCase2();
+    // TestCase1();
+    // TestCase2();
 }
 
 void AMassDspGameMode::Tick(float DeltaTime)
@@ -93,7 +93,7 @@ void AMassDspGameMode::ProcessConveyor(float DeltaTime) const
     // --- Step 3: ~30fps 同步视锥体内物品 Transform 到 ISM ---
     // 视野外传送带完全跳过（CPU 侧视锥剔除），GPU 上传量 = O(可见物品数)
     Manager->SyncAccum += DeltaTime;
-    if (Manager->SyncAccum >= 1.0f / 60.0f)
+    if (true || Manager->SyncAccum >= 1.0f / 60.0f)
     {
         Manager->SyncAccum = 0.f;
 
@@ -198,7 +198,7 @@ void AMassDspGameMode::TestCase1() const
     DspManager->FlushBeltMesh();
 }
 
-void AMassDspGameMode::TestCase2()
+void AMassDspGameMode::TestCase2() const
 {
     // ─────────────────────────────────────────────────────────────────────────
     // 物流演示（供应塔与需求塔在大范围内随机散布，供需比可调）
@@ -218,11 +218,11 @@ void AMassDspGameMode::TestCase2()
     // TODO 优化物流系统
 
     // ═══════════════════════════ 可调常数 ════════════════════════════════════
-    constexpr int32 NumSupplyTowers = 150; // 供应塔数量
-    constexpr int32 NumDemandTowers = 150; // 需求塔数量（供需比 = 15:5 = 3:1）
-    constexpr int32 DronesPerTower = 100; // 每个供应塔无人机数量
-    constexpr float SpawnRange = 30000.f; // 随机散布半径（cm，±500m）
-    constexpr float MinTowerDist = 1500.f; // 两塔最小间距（cm）
+    constexpr int32 NumSupplyTowers = 100; // 供应塔数量
+    constexpr int32 NumDemandTowers = 100; // 需求塔数量（供需比 = 15:5 = 3:1）
+    constexpr int32 DronesPerTower = 150; // 每个供应塔无人机数量
+    constexpr float SpawnRange = 10000.f; // 随机散布半径（cm，±500m）
+    constexpr float MinTowerDist = 1000.f; // 两塔最小间距（cm）
     constexpr float IntraSpacing = 800.f; // 矿机/仓库 与塔的距离（cm）
     constexpr int32 RandSeed = 42; // 固定种子，保证每次运行位置相同
     // ═════════════════════════════════════════════════════════════════════════
@@ -307,11 +307,11 @@ void AMassDspGameMode::TestCase2()
     {
         const FVector TowerPos(SupplyPos[i].X, SupplyPos[i].Y, 0.f);
         SpawnData.Add({
-            FTransform(FRotator(0, 90, 0), TowerPos + FVector(-IntraSpacing, 0.f, 0.f)),
+            FTransform(FRotator(0, 90, 0), TowerPos + FVector(-IntraSpacing, 0.f, 1000.f)),
             EBuildingType::Miner
         });
         SpawnData.Add({
-            FTransform(FRotator::ZeroRotator, TowerPos),
+            FTransform(FRotator::ZeroRotator, TowerPos + FVector(0, 0.f, 2000.f)),
             EBuildingType::LogisticsTower
         });
     }
@@ -320,11 +320,11 @@ void AMassDspGameMode::TestCase2()
     {
         const FVector TowerPos(DemandPos[j].X, DemandPos[j].Y, 0.f);
         SpawnData.Add({
-            FTransform(FRotator::ZeroRotator, TowerPos),
+            FTransform(FRotator::ZeroRotator, TowerPos + FVector(0, 0.f, 2000.f)),
             EBuildingType::LogisticsTower
         });
         SpawnData.Add({
-            FTransform(FRotator(0, 180, 0), TowerPos + FVector(IntraSpacing, 0.f, 0.f)),
+            FTransform(FRotator(0, 180, 0), TowerPos + FVector(IntraSpacing, 0.f, 1000.f)),
             EBuildingType::Storage
         });
     }

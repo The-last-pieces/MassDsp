@@ -30,12 +30,12 @@ struct FGameConst
     /** 无人机空间哈希格子尺寸（cm） */
     static constexpr float DroneGridCellSize = 3000.f;
     /** 无人机贝塞尔控制点高度偏移（cm，形成拱形飞行弧） */
-    static constexpr float DroneFlightArcHeight = 1000.f;
+    static constexpr float DroneFlightArcHeight = 2000.f;
     /** 无人机双向航道横向偏移（cm）：始终向自身行进方向右偏，
      *  去程/回程方向相反，世界空间中自然分离到路线两侧，避免重叠 */
     static constexpr float DroneFlightLaneOffset = 200.f;
     /** 无人机单次最大携带物品数量（与 FDroneData::CarryCapacity 默认值保持一致） */
-    static constexpr int32 DroneCarryCapacity = 10;
+    static constexpr int32 DroneCarryCapacity = 2;
     /**
      * 批量派遣时逢相邻无人机的起飞时间间隔（秒）。
      * 第 N 架无人机的 ElapsedTime 初始化为 -(N * stagger)，
