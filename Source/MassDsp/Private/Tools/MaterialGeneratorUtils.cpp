@@ -38,6 +38,7 @@
 #include "UI/MassDspStorageWidget.h"
 #include "UI/MassDspAssemblerWidget.h"
 #include "UI/MassDspLogisticsTowerWidget.h"
+#include "UI/MassDspHotbarWidget.h"
 
 // UMG Editor
 #include "WidgetBlueprint.h"
@@ -53,6 +54,11 @@
 #include "Components/ProgressBar.h"
 #include "Components/Button.h"
 #include "Components/Border.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
+#include "Components/SizeBox.h"
 
 void FUMaterialGeneratorUtils::CreateAllProceduralAssets()
 {
@@ -834,6 +840,93 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
 //  公共入口
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  BP_Hotbar （底部热键栏）
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void BuildHotbarLayout(UWidgetBlueprint* WBP)
+{
+    UWidgetTree* Tree = WBP->WidgetTree;
+    UCanvasPanel* Canvas = Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("HotbarCanvas"));
+    Tree->RootWidget = Canvas;
+
+    UHorizontalBox* HBox = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("HotbarHBox"));
+    UCanvasPanelSlot* HBoxSlot = Canvas->AddChildToCanvas(HBox);
+    HBoxSlot->SetAnchors(FAnchors(0.5f, 1.f, 0.5f, 1.f));
+    HBoxSlot->SetAlignment(FVector2D(0.5f, 1.f));
+    HBoxSlot->SetPosition(FVector2D(0.f, -UMassDspHotbarWidget::BottomMargin));
+    HBoxSlot->SetAutoSize(true);
+
+    const TArray<FString> ShortNames = {
+        TEXT("矿机"), TEXT("合成"), TEXT("仓库"), TEXT("物流"),
+        TEXT("低速"), TEXT("高速"), TEXT("极速"), TEXT("测1"), TEXT("测2")
+    };
+
+    for (int32 i = 0; i < UMassDspHotbarWidget::TotalSlots; ++i)
+    {
+        USizeBox* SizeBox = Tree->ConstructWidget<USizeBox>(
+            USizeBox::StaticClass(), *FString::Printf(TEXT("SizeBox_Slot%d"), i));
+        SizeBox->SetWidthOverride(UMassDspHotbarWidget::SlotSize);
+        SizeBox->SetHeightOverride(UMassDspHotbarWidget::SlotSize);
+
+        UBorder* Border = Tree->ConstructWidget<UBorder>(
+            UBorder::StaticClass(), *FString::Printf(TEXT("Border_Slot%d"), i));
+        FSlateBrush BrdBrush;
+        BrdBrush.TintColor = FSlateColor(FLinearColor(0.05f, 0.05f, 0.05f, 0.82f));
+        BrdBrush.DrawAs = ESlateBrushDrawType::Box;
+        Border->SetBrush(BrdBrush);
+        Border->SetPadding(FMargin(0.f));
+        SizeBox->AddChild(Border);
+
+        UButton* Btn = Tree->ConstructWidget<UButton>(
+            UButton::StaticClass(), *FString::Printf(TEXT("Button_Slot%d"), i));
+        FButtonStyle BtnStyle;
+        FSlateBrush TransBrush;
+        TransBrush.DrawAs = ESlateBrushDrawType::NoDrawType;
+        BtnStyle.SetNormal(TransBrush).SetHovered(TransBrush).SetPressed(TransBrush);
+        Btn->SetStyle(BtnStyle);
+        Border->AddChild(Btn);
+
+        UOverlay* Overlay = Tree->ConstructWidget<UOverlay>(
+            UOverlay::StaticClass(), *FString::Printf(TEXT("Overlay_Slot%d"), i));
+        Btn->AddChild(Overlay);
+
+        UTextBlock* ShortText = Tree->ConstructWidget<UTextBlock>(
+            UTextBlock::StaticClass(), *FString::Printf(TEXT("Text_Slot%d"), i));
+        ShortText->SetText(FText::FromString(ShortNames[i]));
+        ShortText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        ShortText->SetJustification(ETextJustify::Center);
+        {
+            FSlateFontInfo F = ShortText->GetFont();
+            F.Size = 14;
+            ShortText->SetFont(F);
+        }
+        UOverlaySlot* ShortSlot = Overlay->AddChildToOverlay(ShortText);
+        ShortSlot->SetHorizontalAlignment(HAlign_Center);
+        ShortSlot->SetVerticalAlignment(VAlign_Center);
+
+        UTextBlock* NumText = Tree->ConstructWidget<UTextBlock>(
+            UTextBlock::StaticClass(), *FString::Printf(TEXT("Num_Slot%d"), i));
+        NumText->SetText(FText::FromString(FString::FromInt(i + 1)));
+        NumText->SetColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f, 0.9f)));
+        {
+            FSlateFontInfo F = NumText->GetFont();
+            F.Size = 9;
+            NumText->SetFont(F);
+        }
+        UOverlaySlot* NumSlot = Overlay->AddChildToOverlay(NumText);
+        NumSlot->SetHorizontalAlignment(HAlign_Left);
+        NumSlot->SetVerticalAlignment(VAlign_Top);
+        NumSlot->SetPadding(FMargin(4.f, 2.f, 0.f, 0.f));
+
+        const bool bLast = (i == UMassDspHotbarWidget::TotalSlots - 1);
+        UHorizontalBoxSlot* HBSlot = HBox->AddChildToHorizontalBox(SizeBox);
+        HBSlot->SetPadding(FMargin(0.f, 0.f, bLast ? 0.f : UMassDspHotbarWidget::SlotGap, 0.f));
+        HBSlot->SetHorizontalAlignment(HAlign_Fill);
+        HBSlot->SetVerticalAlignment(VAlign_Fill);
+    }
+}
+
 static UObject* ImpBuildMinerWidget(UPackage* Package, const FString& AssetName)
 {
     UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspMinerWidget::StaticClass());
@@ -870,10 +963,20 @@ static UObject* ImpBuildLogisticsTowerWidget(UPackage* Package, const FString& A
     return WBP;
 }
 
+static UObject* ImpBuildHotbarWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspHotbarWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildHotbarLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
 void FUMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Hotbar"), TEXT("v2"), &ImpBuildHotbarWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v1"), &ImpBuildMinerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v1"), &ImpBuildMakerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v1"), &ImpBuildStorageWidget);

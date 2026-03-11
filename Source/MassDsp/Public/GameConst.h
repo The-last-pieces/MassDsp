@@ -10,6 +10,7 @@
 #include "GameConst.generated.h"
 
 class UMassDspBuildingWidget;
+class UMassDspHotbarWidget;
 class AMassDspBuilding;
 
 struct FGameConst
@@ -367,6 +368,10 @@ public:
     // 传送带上的物品 Mass Entity 配置
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belts")
     TObjectPtr<UMassEntityConfigAsset> BeltItemConfigAsset;
+
+    /** 底部热键栏 Widget 蓝图类（手动指定 BP_Hotbar） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
+    TSubclassOf<UMassDspHotbarWidget> HotbarWidgetClass;
 
     // ── 物流 / 无人机配置 ─────────────────────────────────────────────────────
     // 无人机 ISM 网格（用于物流演示场景）

@@ -14,10 +14,12 @@ public:
     static void CreateConveyorMaterial();
 
     /**
-     * 程序化生成三种建筑交互 UMG Widget 蓝图资源：
-     *   /Game/Assets/UI/BP_Miner    (UMassDspMinerWidget)
-     *   /Game/Assets/UI/BP_Storage  (UMassDspStorageWidget)
-     *   /Game/Assets/UI/BP_Assembler(UMassDspAssemblerWidget)
+     * 程序化生成建筑交互 + 热键栏 UMG Widget 蓝图资源：
+     *   /Game/Assets/UI/BP_Hotbar         (UMassDspHotbarWidget)   底部热键栏
+     *   /Game/Assets/UI/BP_Miner          (UMassDspMinerWidget)    矿机
+     *   /Game/Assets/UI/BP_Storage        (UMassDspStorageWidget)  仓库
+     *   /Game/Assets/UI/BP_Maker          (UMassDspAssemblerWidget)合成台
+     *   /Game/Assets/UI/BP_LogisticsTower (UMassDspLogisticsTowerWidget) 物流塔
      * 资源已存在时跳过，删除资源后重新运行可重新生成。
      */
     static void CreateBuildingWidgets();

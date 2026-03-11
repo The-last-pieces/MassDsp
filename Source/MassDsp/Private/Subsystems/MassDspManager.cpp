@@ -1783,6 +1783,7 @@ void UMassDspManager::BeginPreviewBuilding(EBuildingType BuildingType, const FTr
             }
         }
         SMC->RegisterComponent();
+        Ghost->SetActorTransform(InitialTransform);
 #if WITH_EDITOR
         Ghost->SetActorLabel(TEXT("PreviewBuilding"));
 #endif
