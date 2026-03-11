@@ -40,9 +40,6 @@ private:
     // 合成台合成逻辑Query（包含槽口处理）
     FMassEntityQuery AssemblerQuery;
 
-    // 合成台渲染逻辑Query
-    FMassEntityQuery AssemblerRenderQuery;
-
     // 缓存子系统引用
     TWeakObjectPtr<UMassDspManager> DspManager;
 

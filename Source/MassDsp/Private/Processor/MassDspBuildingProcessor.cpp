@@ -14,7 +14,6 @@ UMassDspBuildingProcessor::UMassDspBuildingProcessor()
     : MinerQuery(*this)
       , StorageQuery(*this)
       , AssemblerQuery(*this)
-      , AssemblerRenderQuery(*this)
 {
     // 设置处理器执行顺序
     ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::SyncWorldToMass;
@@ -38,14 +37,6 @@ void UMassDspBuildingProcessor::ConfigureQueries(const TSharedRef<FMassEntityMan
     AssemblerQuery.AddRequirement<FMassDspBuildingSlotsFragment>(EMassFragmentAccess::ReadWrite);
     AssemblerQuery.AddSharedRequirement<FMassDspRecipeSharedFragment>(EMassFragmentAccess::ReadOnly);
     AssemblerQuery.RegisterWithProcessor(*this);
-
-    // 配置合成台Query - 查询拥有 AssemblerFragment、SlotsFragment 和 RecipeSharedFragment 的实体
-    AssemblerRenderQuery.AddRequirement<FMassDspAssemblerFragment>(EMassFragmentAccess::ReadOnly);
-    AssemblerRenderQuery.AddRequirement<FMassRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-    AssemblerRenderQuery.AddRequirement<FMassRepresentationLODFragment>(EMassFragmentAccess::ReadOnly);
-    AssemblerRenderQuery.AddSharedRequirement<FMassDspRecipeSharedFragment>(EMassFragmentAccess::ReadOnly);
-    AssemblerRenderQuery.AddSharedRequirement<FMassRepresentationSubsystemSharedFragment>(EMassFragmentAccess::ReadWrite);
-    AssemblerRenderQuery.RegisterWithProcessor(*this);
 }
 
 struct FAssemblerToTextureData
@@ -81,37 +72,6 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
     ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
     // 矿机无 Input Slot，不参与 Pass 2
-
-    AssemblerRenderQuery.ForEachEntityChunk(Context, [this, WorldTime](FMassExecutionContext& InContext)
-    {
-        const FRecipeDataForFragment& Recipe = InContext.GetSharedFragment<FMassDspRecipeSharedFragment>().Recipe;
-        if (Recipe.RecipeType == ERecipeType::None) return;
-
-        const int32 NumEntities = InContext.GetNumEntities();
-        auto AssemblerFragments = InContext.GetFragmentView<FMassDspAssemblerFragment>();
-        auto RepresentationFragments = InContext.GetFragmentView<FMassRepresentationFragment>();
-        auto RepresentationLODFragments = InContext.GetFragmentView<FMassRepresentationLODFragment>();
-
-        UMassRepresentationSubsystem* RepresentationSubsystem = InContext.GetSharedFragment<FMassRepresentationSubsystemSharedFragment>().RepresentationSubsystem;
-        FMassInstancedStaticMeshInfoArrayView IsmInfo = RepresentationSubsystem->GetMutableInstancedStaticMeshInfos();
-
-        for (int32 i = 0; i < NumEntities; ++i)
-        {
-            auto AssemblerFragment = AssemblerFragments[i];
-            auto RepresentationFragment = RepresentationFragments[i];
-            auto RepresentationLODFragment = RepresentationLODFragments[i];
-            if ((RepresentationLODFragment.LOD != EMassLOD::Off || RepresentationLODFragment.PrevLOD != EMassLOD::Off) && RepresentationFragment.CurrentRepresentation ==
-                EMassRepresentationType::StaticMeshInstance)
-            {
-                auto& Ism = IsmInfo[RepresentationFragment.StaticMeshDescHandle.ToIndex()];
-
-                Ism.AddBatchedCustomData(
-                    AssemblerFragment.GetCraftingProgress(WorldTime, Recipe),
-                    RepresentationLODFragment.LODSignificance, RepresentationFragment.PrevLODSignificance
-                );
-            }
-        }
-    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -204,9 +164,12 @@ void UMassDspBuildingProcessor::ProcessOutputSlots(FMassDspBuildingSlotsFragment
         if (!Slot.ConnectedLaneHandle.IsValid()) continue;
         if (!Slot.IsReady(WorldTime)) continue;
 
-        if (DspManager->ProvideItemToBelt(Slot.ConnectedLaneHandle, [&Fragment, Idx]()
+        if (DspManager->ProvideItemToBelt(Slot.ConnectedLaneHandle, [&Fragment, Idx, InRecipe]()
         {
-            return Fragment.TryProvideItemToSlot(Idx);
+            if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
+                return Fragment.TryProvideItemToSlot(Idx, *InRecipe);
+            else
+                return Fragment.TryProvideItemToSlot(Idx);
         }))
         {
             Slot.SetReadyAt(WorldTime);

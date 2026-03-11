@@ -577,5 +577,5 @@ public:
 template <typename T>
 concept IsDspBuildFragment = requires(T TT, int SlotIdx)
 {
-    { TT.TryProvideItemToSlot(SlotIdx) } -> std::convertible_to<EItemType>;
+    std::is_base_of_v<FMassFragment, T>;
 };

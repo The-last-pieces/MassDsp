@@ -1,6 +1,6 @@
 #include "Fragments/MassDspAssemblerFragment.h"
 
-EItemType FMassDspAssemblerFragment::TryProvideItemToSlot(int SlotIdx)
+EItemType FMassDspAssemblerFragment::TryProvideItemToSlot(int SlotIdx, const FRecipeDataForFragment& Recipe)
 {
     auto& Entry = OutputBuffers[SlotIdx];
     if (Entry.ItemType != EItemType::None && Entry.Amount > 0)
@@ -11,6 +11,7 @@ EItemType FMassDspAssemblerFragment::TryProvideItemToSlot(int SlotIdx)
         {
             Entry.ItemType = EItemType::None;
         }
+        UpdateSatisfied(Recipe);
         return Provided;
     }
     return EItemType::None;
@@ -24,18 +25,7 @@ bool FMassDspAssemblerFragment::TryConsumeItemFromSlot(EItemType ItemType, const
         {
             ++InputBuffers[i].Amount;
 
-            // 检查是否所有输入槽都已达到配方需求量，更新缓存标记
-            // 循环体最多 4 次，仅在入库时触发一次，不在每帧 TickExecute 里重复
-            bool bAllMet = true;
-            for (int j = 0; j < Recipe.InputsCount; ++j)
-            {
-                if (InputBuffers[j].Amount < Recipe.Inputs[j].Amount)
-                {
-                    bAllMet = false;
-                    break;
-                }
-            }
-            bInputSatisfied = bAllMet;
+            UpdateSatisfied(Recipe);
             return true;
         }
     }
@@ -88,9 +78,7 @@ void FMassDspAssemblerFragment::TickExecute(float WorldTime, const FRecipeDataFo
                 OutputBuffers[i].ItemType = Recipe.Outputs[i].ItemType;
             OutputBuffers[i].Amount += BatchCount * Recipe.Outputs[i].Amount;
         }
-
-        // 输入已消耗，清除满足标记并重置计时器，等待下次补充
-        bInputSatisfied = false;
+        UpdateSatisfied(Recipe);
         NextCraftWorldTime = 0.f;
     }
     else
@@ -98,4 +86,33 @@ void FMassDspAssemblerFragment::TickExecute(float WorldTime, const FRecipeDataFo
         // 输出满导致阻塞：推进计时器避免下帧空转
         NextCraftWorldTime = WorldTime + Interval;
     }
+}
+
+bool FMassDspAssemblerFragment::IsRunning() const
+{
+    return bInputSatisfied && bOutputSatisfied;
+}
+
+void FMassDspAssemblerFragment::UpdateSatisfied(const FRecipeDataForFragment& Recipe)
+{
+    bool bAllMet = true;
+    for (int j = 0; j < Recipe.InputsCount; ++j)
+    {
+        if (InputBuffers[j].Amount < Recipe.Inputs[j].Amount)
+        {
+            bAllMet = false;
+            break;
+        }
+    }
+    bInputSatisfied = bAllMet;
+    bAllMet = true;
+    for (int j = 0; j < Recipe.OutputsCount; ++j)
+    {
+        if (OutputBuffers[j].Amount + Recipe.Outputs[j].Amount > OutputBufferCapacity)
+        {
+            bAllMet = false;
+            break;
+        }
+    }
+    bOutputSatisfied = bAllMet;
 }

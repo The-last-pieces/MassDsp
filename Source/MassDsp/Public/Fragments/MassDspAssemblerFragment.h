@@ -75,8 +75,9 @@ struct MASSDSP_API FMassDspAssemblerFragment : public FMassFragment
     // 仅在 TryConsumeItemFromSlot 填入饱和时置 true，消耗输入后清 false。
     // TickExecute 入口直接 return，不再每帧遍历 InputBuffers 作比较。
     bool bInputSatisfied = false;
+    bool bOutputSatisfied = true;
 
-    EItemType TryProvideItemToSlot(int SlotIdx);
+    EItemType TryProvideItemToSlot(int SlotIdx, const FRecipeDataForFragment& Recipe);
 
     // 入库成功后自动更新 bInputSatisfied
     bool TryConsumeItemFromSlot(EItemType ItemType, const FRecipeDataForFragment& Recipe);
@@ -91,4 +92,8 @@ struct MASSDSP_API FMassDspAssemblerFragment : public FMassFragment
         const float Interval = Recipe.CraftingTime / FMath::Max(CraftingSpeedMultiplier, KINDA_SMALL_NUMBER);
         return FMath::Clamp(1.f - (NextCraftWorldTime - WorldTime) / Interval, 0.f, 1.f);
     }
+
+    bool IsRunning() const;
+
+    void UpdateSatisfied(const FRecipeDataForFragment& Recipe);
 };
