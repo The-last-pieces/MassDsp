@@ -129,6 +129,7 @@ private:
     void ExecuteTake(bool bTakeAll);
     void EnsureTransferItemSelected();
     void BuildTransferSelectableItems(TArray<EItemType>& OutItems) const;
+    void AppendTransferCandidate(TArray<EItemType>& OutItems, EItemType ItemType) const;
 
     UFUNCTION()
     void OnCloseButtonClicked();

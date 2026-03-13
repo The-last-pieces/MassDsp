@@ -4,6 +4,10 @@
 #include "Components/TextBlock.h"
 #include "GameFramework/PlayerController.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
+#include "Fragments/MassDspAssemblerFragment.h"
+#include "Fragments/MassDspMinerFragment.h"
+#include "Fragments/MassDspStorageFragment.h"
+#include "MassEntitySubsystem.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
 
@@ -156,19 +160,65 @@ void UMassDspBuildingWidget::BuildTransferSelectableItems(TArray<EItemType>& Out
 {
     OutItems.Reset();
 
-    const UGameConfigData* GameConfig = GetGameConfig();
-    const UEnum* ItemEnum = StaticEnum<EItemType>();
-    if (!GameConfig || !ItemEnum) return;
-
-    for (int32 Index = 0; Index < ItemEnum->NumEnums() - 1; ++Index)
+    if (const UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventory())
     {
-        const EItemType ItemType = static_cast<EItemType>(ItemEnum->GetValueByIndex(Index));
-        if (ItemType == EItemType::None) continue;
-        if (GameConfig->GetItemConfig(ItemType))
+        TArray<EItemType> ActiveItems;
+        Inventory->GetActiveItems(ActiveItems);
+        for (EItemType ItemType : ActiveItems)
         {
-            OutItems.Add(ItemType);
+            AppendTransferCandidate(OutItems, ItemType);
         }
     }
+
+    if (!TargetEntity.IsValid()) return;
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem) return;
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    if (!EntityManager.IsEntityValid(TargetEntity)) return;
+
+    if (const FMassDspMinerFragment* Miner = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(TargetEntity))
+    {
+        if (Miner->InventoryCount > 0)
+        {
+            AppendTransferCandidate(OutItems, Miner->StoredItemType);
+        }
+    }
+
+    if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(TargetEntity))
+    {
+        if (Storage->InventoryCount > 0)
+        {
+            AppendTransferCandidate(OutItems, Storage->StoredItemType);
+        }
+    }
+
+    if (const FMassDspAssemblerFragment* Assembler = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(TargetEntity))
+    {
+        for (const FBufferEntry& Entry : Assembler->InputBuffers)
+        {
+            if (Entry.Amount > 0)
+            {
+                AppendTransferCandidate(OutItems, Entry.ItemType);
+            }
+        }
+
+        for (const FBufferEntry& Entry : Assembler->OutputBuffers)
+        {
+            if (Entry.Amount > 0)
+            {
+                AppendTransferCandidate(OutItems, Entry.ItemType);
+            }
+        }
+    }
+}
+
+void UMassDspBuildingWidget::AppendTransferCandidate(TArray<EItemType>& OutItems, EItemType ItemType) const
+{
+    if (ItemType == EItemType::None) return;
+    if (OutItems.Contains(ItemType)) return;
+    OutItems.Add(ItemType);
 }
 
 void UMassDspBuildingWidget::EnsureTransferItemSelected()
@@ -215,7 +265,7 @@ void UMassDspBuildingWidget::RefreshTransferWidgets()
     {
         TextBlock_TransferItem->SetText(SelectedTransferItem != EItemType::None
             ? GetItemTypeDisplayName(SelectedTransferItem)
-            : FText::FromString(TEXT("未选择物品")));
+            : FText::FromString(TEXT("无可存取物品")));
     }
 
     if (TextBlock_TransferStatus)
