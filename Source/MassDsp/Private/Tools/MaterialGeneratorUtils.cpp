@@ -535,30 +535,18 @@ struct FWidgetBuilder
 // 接受外部创建的 Package，封装工厂创建 + Existing Rename
 static UWidgetBlueprint* MakeWidgetBP(UPackage* Package, const FString& AssetName, UClass* ParentClass)
 {
-    // 如果已有同名对象，先将其 Rename 避免工厂创建时 check 失败
-    if (UObject* Existing = StaticFindObjectFast(nullptr, Package, *AssetName))
-        {
-        Existing->Rename(
-            *FString::Printf(TEXT("%s_OLD"), *AssetName),
-                GetTransientPackage(),
-                REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional
-            );
-        }
-
     UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
     Factory->ParentClass = ParentClass;
 
-    UWidgetBlueprint* WBP = Cast<UWidgetBlueprint>(
-        Factory->FactoryCreateNew(UWidgetBlueprint::StaticClass(),
-                                  Package, *AssetName, RF_Public | RF_Standalone, nullptr, GWarn));
+    UWidgetBlueprint* Wbp = Cast<UWidgetBlueprint>(Factory->FactoryCreateNew(UWidgetBlueprint::StaticClass(), Package, *AssetName, RF_Public | RF_Standalone, nullptr, GWarn));
 
-    if (!WBP)
+    if (!Wbp)
     {
         UE_LOG(LogTemp, Error, TEXT("Failed to create Widget Blueprint: %s"), *AssetName);
         return nullptr;
     }
 
-    return WBP;
+    return Wbp;
 }
 
 // 编译蓝图并调用 PostEditChange（AssetCreated/MarkPackageDirty 由 FProceduralAssetBuilder 统一处理）
@@ -657,9 +645,9 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
 
     // 进度条区段
     B.Text(FName("Label_Progress"), TEXT("生产进度"),
-             IX, 202.f, IW, 18.f, WidgetColors::TextLabel, 11);
+           IX, 202.f, IW, 18.f, WidgetColors::TextLabel, 11);
     B.Bar(FName("ProgressBar_Production"),
-            IX, 224.f, IW, 20.f, WidgetColors::FillMiner);
+          IX, 224.f, IW, 20.f, WidgetColors::FillMiner);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -756,14 +744,14 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
            IX + IW * 0.6f, 80.f, IW * 0.4f, 22.f, WidgetColors::TextValue, 14);
 
     B.Text(FName("Label_Crafting"), TEXT("合成进度"),
-             IX, 130.f, IW, 18.f, WidgetColors::TextLabel, 11);
+           IX, 130.f, IW, 18.f, WidgetColors::TextLabel, 11);
     B.Bar(FName("ProgressBar_Crafting"),
-            IX, 152.f, IW, 20.f, WidgetColors::FillAssembler);
+          IX, 152.f, IW, 20.f, WidgetColors::FillAssembler);
 
     // ── 输入区 ─────────────────────────────────────────────────────────────
-        B.Rect(FName("Border_InputSep"), 0.f, 186.f, CW, 1.f, WidgetColors::Divider);
+    B.Rect(FName("Border_InputSep"), 0.f, 186.f, CW, 1.f, WidgetColors::Divider);
     B.Text(FName("Label_Input"), TEXT("输入材料"),
-            IX, 194.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+           IX, 194.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
 
     const FName InputNames[4] = {
         FName("TextBlock_Input_0"), FName("TextBlock_Input_1"),
@@ -778,9 +766,9 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     }
 
     // ── 输出区 ─────────────────────────────────────────────────────────────
-        B.Rect(FName("Border_OutputSep"), 0.f, 302.f, CW, 1.f, WidgetColors::Divider);
+    B.Rect(FName("Border_OutputSep"), 0.f, 302.f, CW, 1.f, WidgetColors::Divider);
     B.Text(FName("Label_Output"), TEXT("输出产物"),
-            IX, 310.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+           IX, 310.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
 
     const FName OutputNames[4] = {
         FName("TextBlock_Output_0"), FName("TextBlock_Output_1"),
