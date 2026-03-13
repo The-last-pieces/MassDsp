@@ -47,6 +47,14 @@ bool UMassDspLogisticsTowerWidget::GetFragments(
     return OutStorage && OutTower;
 }
 
+EItemType UMassDspLogisticsTowerWidget::GetSuggestedTransferItemType() const
+{
+    const FMassDspStorageFragment* Storage = nullptr;
+    const FMassDspLogisticsTowerFragment* Tower = nullptr;
+    if (!GetFragments(Storage, Tower)) return EItemType::None;
+    return Tower->ItemType != EItemType::None ? Tower->ItemType : Storage->StoredItemType;
+}
+
 // 
 
 void UMassDspLogisticsTowerWidget::RefreshWidgets()

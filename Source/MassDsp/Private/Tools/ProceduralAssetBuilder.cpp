@@ -17,12 +17,27 @@ UObject* FProceduralAssetBuilder::GenerateAsset(const FString& AssetPath, const 
     bool bCacheMatched = CacheMap.Contains(AssetPath) && CacheMap[AssetPath] == Version;
 
     // 2. 如果版本匹配且资产存在，直接加载并返回 (极速跳过)
-    if (bool bAssetExists = FPackageName::DoesPackageExist(AssetPath); bCacheMatched && bAssetExists)
+    bool bAssetExists = FPackageName::DoesPackageExist(AssetPath);
+    if (bCacheMatched && bAssetExists)
     {
         UE_LOG(LogTemp, Log, TEXT("ProceduralGen: 版本匹配，跳过生成 -> %s"), *AssetPath);
         // 必须使用完整对象路径（PackagePath.AssetName），否则 StaticLoadObject 找不到对象
         const FString ObjectPath = AssetPath + TEXT(".") + FPackageName::GetLongPackageAssetName(AssetPath);
         return StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath);
+    }
+
+    // 3. 如果bAssetExists则删除旧资产
+    if (bAssetExists)
+    {
+        FString PackageFileName = FPackageName::LongPackageNameToFilename(AssetPath, FPackageName::GetAssetPackageExtension());
+        if (IFileManager::Get().Delete(*PackageFileName))
+        {
+            UE_LOG(LogTemp, Display, TEXT("ProceduralGen: 旧资产已删除 -> %s"), *AssetPath);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("ProceduralGen: 无法删除旧资产，可能会导致新资产保存失败 -> %s"), *AssetPath);
+        }
     }
 
     UE_LOG(LogTemp, Display, TEXT("ProceduralGen: 开始生成资产 -> %s"), *AssetPath);

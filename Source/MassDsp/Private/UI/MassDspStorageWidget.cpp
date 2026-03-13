@@ -14,6 +14,12 @@ const FMassDspStorageFragment* UMassDspStorageWidget::GetFragment() const
     return EM.GetFragmentDataPtr<FMassDspStorageFragment>(TargetEntity);
 }
 
+EItemType UMassDspStorageWidget::GetSuggestedTransferItemType() const
+{
+    const FMassDspStorageFragment* Fragment = GetFragment();
+    return Fragment ? Fragment->StoredItemType : EItemType::None;
+}
+
 void UMassDspStorageWidget::RefreshWidgets()
 {
     const FMassDspStorageFragment* F = GetFragment();

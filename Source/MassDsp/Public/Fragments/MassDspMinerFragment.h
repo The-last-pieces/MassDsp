@@ -46,4 +46,5 @@ struct MASSDSP_API FMassDspMinerFragment : public FMassFragment
         if (NextProductionWorldTime <= 0.f || ProductionInterval <= 0.f) return 0.f;
         const float Remaining = NextProductionWorldTime - WorldTime;
         return FMath::Clamp(1.f - Remaining / ProductionInterval, 0.f, 1.f);
-    }};
+    }
+};

@@ -19,6 +19,26 @@ const FMassDspAssemblerFragment* UMassDspAssemblerWidget::GetFragment() const
     return EM.GetFragmentDataPtr<FMassDspAssemblerFragment>(TargetEntity);
 }
 
+EItemType UMassDspAssemblerWidget::GetSuggestedTransferItemType() const
+{
+    const FMassDspAssemblerFragment* Fragment = GetFragment();
+    UGameConfigData* GameConfig = GetGameConfig();
+    if (!Fragment || !GameConfig) return EItemType::None;
+
+    const FRecipeConfigData* RecipeConfig = GameConfig->GetRecipeConfig(Fragment->ActiveRecipeType);
+    if (!RecipeConfig) return EItemType::None;
+
+    if (!RecipeConfig->Outputs.IsEmpty())
+    {
+        return RecipeConfig->Outputs[0].ItemType;
+    }
+    if (!RecipeConfig->Inputs.IsEmpty())
+    {
+        return RecipeConfig->Inputs[0].ItemType;
+    }
+    return EItemType::None;
+}
+
 void UMassDspAssemblerWidget::NativeConstruct()
 {
     Super::NativeConstruct();

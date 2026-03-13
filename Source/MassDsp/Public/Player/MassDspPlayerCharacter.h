@@ -9,6 +9,7 @@ class USpringArmComponent;
 class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
+class UMassDspPlayerInventoryComponent;
 struct FInputActionValue;
 
 /**
@@ -46,6 +47,9 @@ protected:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
     TObjectPtr<UCameraComponent> FollowCamera;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Inventory")
+    TObjectPtr<UMassDspPlayerInventoryComponent> InventoryComponent;
 
     //  Enhanced Input 资产（在 BP_MainPlayer 中赋值）
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")

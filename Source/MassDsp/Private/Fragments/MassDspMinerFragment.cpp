@@ -17,7 +17,11 @@ bool FMassDspMinerFragment::TryConsumeItemFromSlot(EItemType ItemType)
 
 void FMassDspMinerFragment::TickExecute(float WorldTime)
 {
-    if (InventoryCount >= MaxInventory) return;
+    if (InventoryCount >= MaxInventory)
+    {
+        NextProductionWorldTime = 0.f;
+        return;
+    }
 
     // 第一帧初始化计时器，避免放置时立即产出
     if (NextProductionWorldTime <= 0.f)

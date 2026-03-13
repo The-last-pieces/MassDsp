@@ -34,6 +34,7 @@ protected:
 private:
     const FMassDspAssemblerFragment* GetFragment() const;
     void ChangeRecipe(int32 Direction);
+    virtual EItemType GetSuggestedTransferItemType() const override;
 
     UFUNCTION()
     void OnPrevRecipeClicked();

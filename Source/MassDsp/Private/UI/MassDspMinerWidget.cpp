@@ -44,6 +44,12 @@ const FMassDspMinerFragment* UMassDspMinerWidget::GetFragment() const
     return EM.GetFragmentDataPtr<FMassDspMinerFragment>(TargetEntity);
 }
 
+EItemType UMassDspMinerWidget::GetSuggestedTransferItemType() const
+{
+    const FMassDspMinerFragment* Fragment = GetFragment();
+    return Fragment ? Fragment->StoredItemType : EItemType::None;
+}
+
 void UMassDspMinerWidget::RefreshWidgets()
 {
     const FMassDspMinerFragment* F = GetFragment();

@@ -31,6 +31,7 @@ protected:
 private:
     const FMassDspMinerFragment* GetFragment() const;
     void ChangeMinerItemType(int32 Direction);
+    virtual EItemType GetSuggestedTransferItemType() const override;
 
     UFUNCTION()
     void OnPrevItemTypeClicked();

@@ -11,6 +11,7 @@
 
 class UMassDspBuildingWidget;
 class UMassDspHotbarWidget;
+class UMassDspInventoryWidget;
 class AMassDspBuilding;
 
 struct FGameConst
@@ -372,6 +373,10 @@ public:
     /** 底部热键栏 Widget 蓝图类（手动指定 BP_Hotbar） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
     TSubclassOf<UMassDspHotbarWidget> HotbarWidgetClass;
+
+    /** 玩家背包 Widget 蓝图类（可指向 BP_Inventory） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
+    TSubclassOf<UMassDspInventoryWidget> InventoryWidgetClass;
 
     // ── 物流 / 无人机配置 ─────────────────────────────────────────────────────
     // 无人机 ISM 网格（用于物流演示场景）

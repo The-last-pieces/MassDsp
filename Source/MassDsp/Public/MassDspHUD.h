@@ -5,6 +5,8 @@
 #include "UI/MassDspHotbarWidget.h"
 #include "MassDspHUD.generated.h"
 
+class UMassDspInventoryWidget;
+
 UCLASS()
 class MASSDSP_API AMassDspHUD : public AHUD
 {
@@ -39,6 +41,9 @@ public:
     UPROPERTY()
     TObjectPtr<UMassDspHotbarWidget> HotbarWidget;
 
+    UPROPERTY()
+    TObjectPtr<UMassDspInventoryWidget> InventoryWidget;
+
     //  高度自适应镜头移动 
     float CameraSpeedFactor = 2.0f;
     float CameraMinSpeed = 300.f;
@@ -52,6 +57,9 @@ public:
     float GetAdaptiveCameraSpeed(float Height) const;
 
 private:
+    void HandleInteractKey();
+    void ToggleInventoryWidget();
+
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
     void DrawBuildSystemHint();
     void DrawBuildingPreviewSlots();

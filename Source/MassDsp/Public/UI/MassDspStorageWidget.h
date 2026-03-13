@@ -25,6 +25,7 @@ protected:
 
 private:
     const FMassDspStorageFragment* GetFragment() const;
+    virtual EItemType GetSuggestedTransferItemType() const override;
 
     UPROPERTY(meta = (BindWidget))
     TObjectPtr<UProgressBar> ProgressBar_Fill;

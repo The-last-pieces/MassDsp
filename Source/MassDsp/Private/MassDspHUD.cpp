@@ -4,6 +4,7 @@
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
 #include "Actors/MassDspBuilding.h"
+#include "UI/MassDspInventoryWidget.h"
 
 #include "GameFramework/PlayerController.h"
 #include "Components/InputComponent.h"
@@ -58,13 +59,68 @@ void AMassDspHUD::BeginPlay()
     InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnMouseRightClick);
     InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnScrollUp);
     InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnScrollDown);
-    InputComponent->BindKey(EKeys::F, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnInteractKey);
+    InputComponent->BindKey(EKeys::F, IE_Pressed, this, &AMassDspHUD::HandleInteractKey);
+    InputComponent->BindKey(EKeys::I, IE_Pressed, this, &AMassDspHUD::ToggleInventoryWidget);
 }
 
 void AMassDspHUD::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+
+    if (InventoryWidget && !InventoryWidget->IsInViewport())
+    {
+        InventoryWidget = nullptr;
+    }
+
     UpdateCameraMovement(DeltaSeconds);
+}
+
+void AMassDspHUD::HandleInteractKey()
+{
+    if (InventoryWidget)
+    {
+        InventoryWidget->CloseWidget();
+        InventoryWidget = nullptr;
+    }
+
+    if (HotbarWidget)
+    {
+        HotbarWidget->OnInteractKey();
+    }
+}
+
+void AMassDspHUD::ToggleInventoryWidget()
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return;
+
+    if (InventoryWidget)
+    {
+        InventoryWidget->CloseWidget();
+        InventoryWidget = nullptr;
+        return;
+    }
+
+    if (HotbarWidget && HotbarWidget->CurrentBuildingWidget)
+    {
+        HotbarWidget->CurrentBuildingWidget->CloseWidget();
+        HotbarWidget->CurrentBuildingWidget = nullptr;
+    }
+
+    AMassDspGameMode* GM = GetWorld() ? Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()) : nullptr;
+    TSubclassOf<UMassDspInventoryWidget> InventoryClass = GM && GM->GameConfig ? GM->GameConfig->InventoryWidgetClass : nullptr;
+    if (!InventoryClass) return;
+
+    InventoryWidget = CreateWidget<UMassDspInventoryWidget>(PC, InventoryClass);
+    if (!InventoryWidget) return;
+
+    InventoryWidget->AddToViewport(10);
+
+    FInputModeGameAndUI UIMode;
+    UIMode.SetWidgetToFocus(InventoryWidget->TakeWidget());
+    UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+    PC->SetInputMode(UIMode);
+    PC->bShowMouseCursor = true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

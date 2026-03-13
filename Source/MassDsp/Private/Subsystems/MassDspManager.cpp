@@ -24,7 +24,61 @@
 #include "Components/SplineComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+
+namespace
+{
+    UMassDspPlayerInventoryComponent* GetPlayerInventoryComponent(UWorld* World)
+    {
+        if (!World) return nullptr;
+        APlayerController* PC = World->GetFirstPlayerController();
+        if (APawn* Pawn = PC ? PC->GetPawn() : nullptr)
+        {
+            UMassDspPlayerInventoryComponent* InvComp = Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>();
+            if (!InvComp)
+            {
+                InvComp = NewObject<UMassDspPlayerInventoryComponent>(Pawn);
+                InvComp->RegisterComponent();
+            }
+            return InvComp;
+        }
+        return nullptr;
+    }
+
+    int32 StoreIntoAssembler(FMassDspAssemblerFragment& Assembler, const FRecipeDataForFragment& Recipe, EItemType ItemType, int32 Quantity)
+    {
+        int32 Stored = 0;
+        while (Stored < Quantity && Assembler.TryConsumeItemFromSlot(ItemType, Recipe))
+        {
+            ++Stored;
+        }
+        return Stored;
+    }
+
+    int32 TakeFromAssembler(FMassDspAssemblerFragment& Assembler, const FRecipeDataForFragment& Recipe, EItemType ItemType, int32 Quantity)
+    {
+        if (Quantity <= 0) return 0;
+
+        int32 Taken = 0;
+        for (int32 SlotIndex = 0; SlotIndex < Recipe.OutputsCount && Taken < Quantity; ++SlotIndex)
+        {
+            FBufferEntry& Entry = Assembler.OutputBuffers[SlotIndex];
+            if (Entry.ItemType != ItemType || Entry.Amount <= 0) continue;
+
+            const int32 ToTake = FMath::Min(Quantity - Taken, Entry.Amount);
+            Entry.Amount -= ToTake;
+            Taken += ToTake;
+            if (Entry.Amount == 0)
+            {
+                Entry.ItemType = EItemType::None;
+            }
+        }
+
+        Assembler.UpdateSatisfied(Recipe);
+        return Taken;
+    }
+}
 
 void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -131,20 +185,95 @@ bool UMassDspManager::SetLogisticsTowerMode(FMassEntityHandle Entity, ELogistics
 
 int32 UMassDspManager::TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity)
 {
-    (void)Entity;
-    (void)ItemType;
-    (void)Quantity;
-    // 为后续玩家背包系统统一预留入口；本次仅定义接口，不在建筑面板中真正执行存入。
-    return 0;
+    if (!Entity.IsValid() || ItemType == EItemType::None || Quantity <= 0) return 0;
+
+    UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventoryComponent(GetWorld());
+    if (!Inventory) return 0;
+
+    UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!ESub) return 0;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    if (!EM.IsEntityValid(Entity)) return 0;
+
+    const int32 Available = Inventory->GetItemCount(ItemType);
+    const int32 Requested = FMath::Min(Quantity, Available);
+    if (Requested <= 0) return 0;
+
+    int32 Stored = 0;
+    if (FMassDspStorageFragment* Storage = EM.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
+    {
+        Stored = Storage->TryConsumeItems(ItemType, Requested);
+    }
+    else if (FMassDspAssemblerFragment* Assembler = EM.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity))
+    {
+        TryGetGameMode();
+        const UGameConfigData* GameConfig = GameMode.IsValid() ? GameMode->GameConfig.Get() : nullptr;
+        const FRecipeConfigData* RecipeConfig = GameConfig ? GameConfig->GetRecipeConfig(Assembler->ActiveRecipeType) : nullptr;
+        if (RecipeConfig)
+        {
+            const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(Assembler->ActiveRecipeType);
+            Stored = StoreIntoAssembler(*Assembler, Recipe, ItemType, Requested);
+        }
+    }
+
+    if (Stored > 0)
+    {
+        Inventory->RemoveItem(ItemType, Stored);
+    }
+
+    return Stored;
 }
 
 int32 UMassDspManager::TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity)
 {
-    (void)Entity;
-    (void)ItemType;
-    (void)Quantity;
-    // 为后续玩家背包系统统一预留入口；本次仅定义接口，不在建筑面板中真正执行取出。
-    return 0;
+    if (!Entity.IsValid() || ItemType == EItemType::None || Quantity <= 0) return 0;
+
+    UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventoryComponent(GetWorld());
+    if (!Inventory) return 0;
+
+    const int32 Requested = FMath::Min(Quantity, Inventory->GetFreeCapacity());
+    if (Requested <= 0) return 0;
+
+    UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!ESub) return 0;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    if (!EM.IsEntityValid(Entity)) return 0;
+
+    int32 Taken = 0;
+    if (FMassDspStorageFragment* Storage = EM.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
+    {
+        if (Storage->StoredItemType == ItemType)
+        {
+            Taken = Storage->TryProvideItems(Requested);
+        }
+    }
+    else if (FMassDspMinerFragment* Miner = EM.GetFragmentDataPtr<FMassDspMinerFragment>(Entity))
+    {
+        if (Miner->StoredItemType == ItemType)
+        {
+            Taken = FMath::Min(Requested, Miner->InventoryCount);
+            Miner->InventoryCount -= Taken;
+        }
+    }
+    else if (FMassDspAssemblerFragment* Assembler = EM.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity))
+    {
+        TryGetGameMode();
+        const UGameConfigData* GameConfig = GameMode.IsValid() ? GameMode->GameConfig.Get() : nullptr;
+        if (const FRecipeConfigData* RecipeConfig = GameConfig ? GameConfig->GetRecipeConfig(Assembler->ActiveRecipeType) : nullptr)
+        {
+            const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(Assembler->ActiveRecipeType);
+            Taken = TakeFromAssembler(*Assembler, Recipe, ItemType, Requested);
+        }
+    }
+
+    if (Taken > 0)
+    {
+        Inventory->AddItem(ItemType, Taken);
+    }
+
+    return Taken;
 }
 
 TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()

@@ -39,6 +39,7 @@
 #include "UI/MassDspAssemblerWidget.h"
 #include "UI/MassDspLogisticsTowerWidget.h"
 #include "UI/MassDspHotbarWidget.h"
+#include "UI/MassDspInventoryWidget.h"
 
 // UMG Editor
 #include "WidgetBlueprint.h"
@@ -590,13 +591,31 @@ static void BuildLabelValue(FWidgetBuilder& B, FName LabelName, FName ValueName,
     B.Text(ValueName, DefaultValue, X, Y + LH + 2.f, W, VH, WidgetColors::TextValue, 14);
 }
 
+static void BuildTransferControls(FWidgetBuilder& B, float CardW, float StartY)
+{
+    constexpr float IX = 20.f;
+    const float IW = CardW - 40.f;
+
+    B.Rect(FName("Border_TransferSep"), 0.f, StartY, CardW, 1.f, WidgetColors::Divider);
+    B.Text(FName("Label_Transfer"), TEXT("玩家存取"), IX, StartY + 8.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+    B.Text(FName("TextBlock_TransferItem"), TEXT("铁矿石"), IX, StartY + 32.f, IW - 96.f, 22.f, WidgetColors::TextValue, 14);
+    B.ActionButton(FName("Button_PrevTransferItem"), TEXT("<"), IX + IW - 84.f, StartY + 30.f, 36.f, 24.f);
+    B.ActionButton(FName("Button_NextTransferItem"), TEXT(">"), IX + IW - 40.f, StartY + 30.f, 36.f, 24.f);
+
+    B.ActionButton(FName("Button_StoreOne"), TEXT("存1"), IX, StartY + 66.f, 84.f, 28.f);
+    B.ActionButton(FName("Button_TakeOne"), TEXT("取1"), IX + 96.f, StartY + 66.f, 84.f, 28.f);
+    B.ActionButton(FName("Button_StoreAll"), TEXT("全存"), IX + 192.f, StartY + 66.f, 84.f, 28.f);
+    B.ActionButton(FName("Button_TakeAll"), TEXT("全取"), IX + 288.f, StartY + 66.f, 84.f, 28.f);
+    B.Text(FName("TextBlock_TransferStatus"), TEXT("背包持有: 0"), IX, StartY + 104.f, IW, 20.f, WidgetColors::TextLabel, 11);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  BP_Miner
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void BuildMinerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 292.f;
+    constexpr float CW = 440.f, CH = 430.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -648,6 +667,8 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
            IX, 202.f, IW, 18.f, WidgetColors::TextLabel, 11);
     B.Bar(FName("ProgressBar_Production"),
           IX, 224.f, IW, 20.f, WidgetColors::FillMiner);
+
+    BuildTransferControls(B, CW, 266.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -656,7 +677,7 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
 
 static void BuildStorageLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 248.f;
+    constexpr float CW = 440.f, CH = 386.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -696,6 +717,8 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
            IX, 160.f, IW, 18.f, WidgetColors::TextLabel, 11);
     B.Bar(FName("ProgressBar_Fill"),
           IX, 182.f, IW, 20.f, WidgetColors::FillStorage);
+
+    BuildTransferControls(B, CW, 224.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -704,7 +727,7 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
 
 static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 482.f;
+    constexpr float CW = 440.f, CH = 620.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -781,6 +804,8 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
         B.Text(OutputNames[i], TEXT("—"), IX + Col, 334.f + Row, IW * 0.5f - 8.f, 30.f,
                WidgetColors::TextValue, 12);
     }
+
+    BuildTransferControls(B, CW, 450.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -789,7 +814,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 
 static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 410.f;
+    constexpr float CW = 440.f, CH = 548.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -869,6 +894,46 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
                     FName("Label_IncomingDrones"), FName("TextBlock_IncomingDrones"),
                     TEXT("来航"), TEXT("—"),
                     IX + IW * 0.5f, 334.f, IW * 0.5f);
+
+    BuildTransferControls(B, CW, 410.f);
+}
+
+static void BuildInventoryLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 420.f, CH = 460.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    {
+        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+        FSlateBrush Brush;
+        Brush.TintColor = FSlateColor(WidgetColors::Overlay);
+        Brush.DrawAs = ESlateBrushDrawType::Box;
+        Overlay->SetBrush(Brush);
+        UCanvasPanelSlot* Slot = B.Root->AddChildToCanvas(Overlay);
+        Slot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+        Slot->SetOffsets(FMargin(0.f));
+    }
+
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+    BuildCommonHeader(B, TEXT("玩家背包"), CW);
+
+    constexpr float IX = 20.f, IW = CW - 40.f;
+    B.Text(FName("TextBlock_Capacity"), TEXT("容量: 0 / 200"), IX, 60.f, IW, 24.f, WidgetColors::TextValue, 14);
+    B.Text(FName("TextBlock_Hint"), TEXT("I 关闭, F 可打开建筑面板做存取"), IX, 88.f, IW, 18.f, WidgetColors::TextLabel, 11);
+    B.Rect(FName("Border_ItemsSep"), 0.f, 118.f, CW, 1.f, WidgetColors::Divider);
+
+    for (int32 Index = 0; Index < 12; ++Index)
+    {
+        B.Text(*FString::Printf(TEXT("TextBlock_Item_%d"), Index),
+               Index == 0 ? TEXT("背包为空") : TEXT(""),
+               IX, 132.f + Index * 24.f, IW, 20.f, WidgetColors::TextValue, 12);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1007,15 +1072,25 @@ static UObject* ImpBuildHotbarWidget(UPackage* Package, const FString& AssetName
     return WBP;
 }
 
+static UObject* ImpBuildInventoryWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspInventoryWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildInventoryLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
 void FUMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Hotbar"), TEXT("v2"), &ImpBuildHotbarWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v2"), &ImpBuildMinerWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v2"), &ImpBuildMakerWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v1"), &ImpBuildStorageWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v2"), &ImpBuildLogisticsTowerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v3"), &ImpBuildMinerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v3"), &ImpBuildMakerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v2"), &ImpBuildStorageWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v3"), &ImpBuildLogisticsTowerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Inventory"), TEXT("v1"), &ImpBuildInventoryWidget);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

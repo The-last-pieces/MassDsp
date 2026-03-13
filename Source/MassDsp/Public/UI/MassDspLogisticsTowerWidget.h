@@ -37,6 +37,7 @@ private:
     /** 同时返回 Storage + Tower 两个 Fragment 指针，任意一个无效则全返回 false */
     bool GetFragments(const FMassDspStorageFragment*& OutStorage,
                       const FMassDspLogisticsTowerFragment*& OutTower) const;
+    virtual EItemType GetSuggestedTransferItemType() const override;
 
     void ChangeTowerMode(int32 Direction);
 

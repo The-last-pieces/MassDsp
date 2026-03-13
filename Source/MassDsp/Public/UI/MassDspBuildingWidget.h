@@ -10,6 +10,7 @@
 
 class UMassDspManager;
 class UGameConfigData;
+class UMassDspPlayerInventoryComponent;
 
 /**
  * 建筑交互 UI 基类
@@ -68,6 +69,10 @@ protected:
 
     UGameConfigData* GetGameConfig() const;
 
+    UMassDspPlayerInventoryComponent* GetPlayerInventory() const;
+
+    virtual EItemType GetSuggestedTransferItemType() const { return EItemType::None; }
+
     //  数据 
 
     FMassEntityHandle TargetEntity;
@@ -89,9 +94,60 @@ protected:
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_Title;
 
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_TransferItem;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_TransferStatus;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_PrevTransferItem;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_NextTransferItem;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_StoreOne;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_TakeOne;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_StoreAll;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_TakeAll;
+
 private:
     float RefreshAccum = 0.f;
+    EItemType SelectedTransferItem = EItemType::None;
+    FText LastTransferStatus;
+
+    void RefreshTransferWidgets();
+    void ChangeTransferItem(int32 Direction);
+    void ExecuteStore(bool bStoreAll);
+    void ExecuteTake(bool bTakeAll);
+    void EnsureTransferItemSelected();
+    void BuildTransferSelectableItems(TArray<EItemType>& OutItems) const;
 
     UFUNCTION()
     void OnCloseButtonClicked();
+
+    UFUNCTION()
+    void OnPrevTransferItemClicked();
+
+    UFUNCTION()
+    void OnNextTransferItemClicked();
+
+    UFUNCTION()
+    void OnStoreOneClicked();
+
+    UFUNCTION()
+    void OnTakeOneClicked();
+
+    UFUNCTION()
+    void OnStoreAllClicked();
+
+    UFUNCTION()
+    void OnTakeAllClicked();
 };
