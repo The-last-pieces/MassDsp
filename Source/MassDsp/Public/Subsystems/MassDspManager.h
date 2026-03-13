@@ -235,6 +235,16 @@ private:
     );
 
 public:
+    bool SetMinerItemType(FMassEntityHandle Entity, EItemType NewItemType);
+
+    bool SetAssemblerRecipe(FMassEntityHandle Entity, ERecipeType NewRecipeType);
+
+    bool SetLogisticsTowerMode(FMassEntityHandle Entity, ELogisticsTowerMode NewMode);
+
+    int32 TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity);
+
+    int32 TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity);
+
     FBeltHandle CreateAndLinkBeltForSlot(
         FMassEntityHandle SBuilding, int32 StartSlotIndex,
         FMassEntityHandle EBuilding, int32 EndSlotIndex,

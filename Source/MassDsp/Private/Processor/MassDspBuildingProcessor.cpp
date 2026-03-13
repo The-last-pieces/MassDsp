@@ -3,10 +3,10 @@
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspAssemblerFragment.h"
+#include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
 #include "MassExecutionContext.h"
 #include "MassCommonTypes.h"
-#include "MassRepresentationFragments.h"
 
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
@@ -35,7 +35,6 @@ void UMassDspBuildingProcessor::ConfigureQueries(const TSharedRef<FMassEntityMan
     // 配置合成台Query - 查询拥有 AssemblerFragment、SlotsFragment 和 RecipeSharedFragment 的实体
     AssemblerQuery.AddRequirement<FMassDspAssemblerFragment>(EMassFragmentAccess::ReadWrite);
     AssemblerQuery.AddRequirement<FMassDspBuildingSlotsFragment>(EMassFragmentAccess::ReadWrite);
-    AssemblerQuery.AddSharedRequirement<FMassDspRecipeSharedFragment>(EMassFragmentAccess::ReadOnly);
     AssemblerQuery.RegisterWithProcessor(*this);
 }
 
@@ -58,19 +57,22 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     // 将 IsValid 检查提升到 Execute 顶层一次，避免在每个实体的 ProcessSlots 里重复检查
     if (!DspManager.IsValid()) return;
 
+    const AMassDspGameMode* GameMode = Cast<AMassDspGameMode>(World->GetAuthGameMode());
+    const UGameConfigData* GameConfig = GameMode ? GameMode->GameConfig.Get() : nullptr;
+
     const float WorldTime = World->GetTimeSeconds();
 
     // ── Pass 1: TickExecute + 输出槽（Provide）──────────────────────────────
     // 每条传送带只有 1 个 Provide 方 → 各线程写不同 FBeltData，ParallelFor 安全
-    ProcessBuildingOutputs<FMassDspMinerFragment>(MinerQuery, Context, WorldTime);
-    ProcessBuildingOutputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
-    ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
+    ProcessBuildingOutputs<FMassDspMinerFragment>(MinerQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingOutputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig);
 
     // ── Pass 2: 输入槽（Consume）────────────────────────────────────────────
     // 每条传送带只有 1 个 Consume 方 → 各线程写不同 FBeltData，ParallelFor 安全
     // Pass 1 全部线程归栅后才进入 Pass 2 → Provide/Consume 时间上不重叠，无需锁
-    ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime);
-    ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime);
+    ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig);
     // 矿机无 Input Slot，不参与 Pass 2
 }
 
@@ -78,9 +80,9 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
 //  Pass 1 驱动：TickExecute + 输出槽（Provide）
 // ─────────────────────────────────────────────────────────────────────────────
 template <class TT> requires IsDspBuildFragment<TT>
-void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime) const
+void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig) const
 {
-    Query.ParallelForEachEntityChunk(Context, [this, WorldTime](FMassExecutionContext& InContext)
+    Query.ParallelForEachEntityChunk(Context, [this, WorldTime, GameConfig](FMassExecutionContext& InContext)
     {
         const int32 NumEntities = InContext.GetNumEntities();
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
@@ -88,10 +90,12 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
 
         if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
         {
-            const FRecipeDataForFragment& Recipe = InContext.GetSharedFragment<FMassDspRecipeSharedFragment>().Recipe;
-            if (Recipe.RecipeType == ERecipeType::None) return;
             for (int32 i = 0; i < NumEntities; ++i)
             {
+                if (!GameConfig) continue;
+                const FRecipeConfigData* RecipeConfig = GameConfig->GetRecipeConfig(BuildingFragments[i].ActiveRecipeType);
+                if (!RecipeConfig) continue;
+                const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(BuildingFragments[i].ActiveRecipeType);
                 BuildingFragments[i].TickExecute(WorldTime, Recipe);
                 ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
             }
@@ -120,9 +124,9 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
 //  Pass 2 驱动：输入槽（Consume）
 // ─────────────────────────────────────────────────────────────────────────────
 template <class TT> requires IsDspBuildFragment<TT>
-void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime) const
+void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig) const
 {
-    Query.ParallelForEachEntityChunk(Context, [this, WorldTime](FMassExecutionContext& InContext)
+    Query.ParallelForEachEntityChunk(Context, [this, WorldTime, GameConfig](FMassExecutionContext& InContext)
     {
         const int32 NumEntities = InContext.GetNumEntities();
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
@@ -130,10 +134,14 @@ void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, F
 
         if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
         {
-            const FRecipeDataForFragment& Recipe = InContext.GetSharedFragment<FMassDspRecipeSharedFragment>().Recipe;
-            if (Recipe.RecipeType == ERecipeType::None) return;
             for (int32 i = 0; i < NumEntities; ++i)
+            {
+                if (!GameConfig) continue;
+                const FRecipeConfigData* RecipeConfig = GameConfig->GetRecipeConfig(BuildingFragments[i].ActiveRecipeType);
+                if (!RecipeConfig) continue;
+                const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(BuildingFragments[i].ActiveRecipeType);
                 ProcessInputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
+            }
         }
         else
         {

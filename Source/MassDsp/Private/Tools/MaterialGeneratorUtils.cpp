@@ -42,6 +42,7 @@
 
 // UMG Editor
 #include "WidgetBlueprint.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Blueprint/WidgetTree.h"
 #include "Kismet2/KismetEditorUtilities.h"
 
@@ -386,6 +387,8 @@ namespace WidgetColors
     static constexpr FLinearColor FillLogistics{0.15f, 0.75f, 0.82f, 1.00f}; // 青（物流塔）
     static constexpr FLinearColor BarBg{0.06f, 0.08f, 0.12f, 1.00f};
     // 按钮
+    static constexpr FLinearColor BtnAction{0.14f, 0.22f, 0.34f, 1.00f};
+    static constexpr FLinearColor BtnActionHover{0.22f, 0.36f, 0.56f, 1.00f};
     static constexpr FLinearColor BtnClose{0.40f, 0.08f, 0.08f, 1.00f};
     static constexpr FLinearColor BtnCloseHover{0.75f, 0.15f, 0.15f, 1.00f};
 }
@@ -492,6 +495,39 @@ struct FWidgetBuilder
         Place(Btn, CardW - 38.f, 8.f, 30.f, 30.f);
         return Btn;
     }
+
+    UButton* ActionButton(FName Name, const FString& Label, float X, float Y, float W, float H)
+    {
+        UButton* Btn = Tree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
+
+        FButtonStyle Style = Btn->GetStyle();
+        auto MakeBrush = [](FLinearColor C)
+        {
+            FSlateBrush Br;
+            Br.TintColor = FSlateColor(C);
+            Br.DrawAs = ESlateBrushDrawType::Box;
+            return Br;
+        };
+        Style.Normal = MakeBrush(WidgetColors::BtnAction);
+        Style.Hovered = MakeBrush(WidgetColors::BtnActionHover);
+        Style.Pressed = MakeBrush(FLinearColor(0.10f, 0.18f, 0.28f, 1.f));
+        Style.SetNormalPadding(FMargin(0.f));
+        Style.SetPressedPadding(FMargin(0.f));
+        Btn->SetStyle(Style);
+
+        UTextBlock* Text = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), *FString::Printf(TEXT("%s_Label"), *Name.ToString()));
+        Text->SetText(FText::FromString(Label));
+        Text->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+        Text->SetJustification(ETextJustify::Center);
+        FSlateFontInfo Font = Text->GetFont();
+        Font.Size = 12;
+        Font.TypefaceFontName = FName("Bold");
+        Text->SetFont(Font);
+        Btn->SetContent(Text);
+
+        Place(Btn, X, Y, W, H);
+        return Btn;
+    }
 };
 
 // ─── 单个蓝图生成 ─────────────────────────────────────────────────────────────
@@ -501,13 +537,13 @@ static UWidgetBlueprint* MakeWidgetBP(UPackage* Package, const FString& AssetNam
 {
     // 如果已有同名对象，先将其 Rename 避免工厂创建时 check 失败
     if (UObject* Existing = StaticFindObjectFast(nullptr, Package, *AssetName))
-    {
+        {
         Existing->Rename(
             *FString::Printf(TEXT("%s_OLD"), *AssetName),
-            GetTransientPackage(),
-            REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional
-        );
-    }
+                GetTransientPackage(),
+                REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional
+            );
+        }
 
     UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
     Factory->ParentClass = ParentClass;
@@ -529,6 +565,8 @@ static UWidgetBlueprint* MakeWidgetBP(UPackage* Package, const FString& AssetNam
 static void CompileWidgetBP(UWidgetBlueprint* WBP)
 {
     if (!WBP) return;
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WBP);
 
     // 仅更新 WidgetTree，无需完整 Kismet 图编译
     FKismetEditorUtilities::CompileBlueprint(WBP,
@@ -570,7 +608,7 @@ static void BuildLabelValue(FWidgetBuilder& B, FName LabelName, FName ValueName,
 
 static void BuildMinerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 278.f;
+    constexpr float CW = 440.f, CH = 292.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -603,7 +641,10 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
     BuildLabelValue(B,
                     FName("Label_ItemType"), FName("TextBlock_ItemType"),
                     TEXT("资源类型"), TEXT("—"),
-                    IX, 60.f, IW);
+                    IX, 60.f, IW - 96.f);
+
+    B.ActionButton(FName("Button_PrevItemType"), TEXT("<"), IX + IW - 84.f, 80.f, 36.f, 24.f);
+    B.ActionButton(FName("Button_NextItemType"), TEXT(">"), IX + IW - 40.f, 80.f, 36.f, 24.f);
 
     BuildLabelValue(B,
                     FName("Label_Inventory"), FName("TextBlock_Inventory"),
@@ -616,9 +657,9 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
 
     // 进度条区段
     B.Text(FName("Label_Progress"), TEXT("生产进度"),
-           IX, 188.f, IW, 18.f, WidgetColors::TextLabel, 11);
+             IX, 202.f, IW, 18.f, WidgetColors::TextLabel, 11);
     B.Bar(FName("ProgressBar_Production"),
-          IX, 210.f, IW, 20.f, WidgetColors::FillMiner);
+            IX, 224.f, IW, 20.f, WidgetColors::FillMiner);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -675,7 +716,7 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
 
 static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 468.f;
+    constexpr float CW = 440.f, CH = 482.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -704,7 +745,10 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     BuildLabelValue(B,
                     FName("Label_Recipe"), FName("TextBlock_RecipeType"),
                     TEXT("当前配方"), TEXT("—"),
-                    IX, 60.f, IW * 0.6f);
+                    IX, 60.f, IW * 0.6f - 96.f);
+
+    B.ActionButton(FName("Button_PrevRecipe"), TEXT("<"), IX + IW * 0.6f - 84.f, 80.f, 36.f, 24.f);
+    B.ActionButton(FName("Button_NextRecipe"), TEXT(">"), IX + IW * 0.6f - 40.f, 80.f, 36.f, 24.f);
 
     B.Text(FName("Label_Speed"), TEXT("速度倍率"),
            IX + IW * 0.6f, 60.f, IW * 0.4f, 18.f, WidgetColors::TextLabel, 11);
@@ -712,14 +756,14 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
            IX + IW * 0.6f, 80.f, IW * 0.4f, 22.f, WidgetColors::TextValue, 14);
 
     B.Text(FName("Label_Crafting"), TEXT("合成进度"),
-           IX, 116.f, IW, 18.f, WidgetColors::TextLabel, 11);
+             IX, 130.f, IW, 18.f, WidgetColors::TextLabel, 11);
     B.Bar(FName("ProgressBar_Crafting"),
-          IX, 138.f, IW, 20.f, WidgetColors::FillAssembler);
+            IX, 152.f, IW, 20.f, WidgetColors::FillAssembler);
 
     // ── 输入区 ─────────────────────────────────────────────────────────────
-    B.Rect(FName("Border_InputSep"), 0.f, 172.f, CW, 1.f, WidgetColors::Divider);
+        B.Rect(FName("Border_InputSep"), 0.f, 186.f, CW, 1.f, WidgetColors::Divider);
     B.Text(FName("Label_Input"), TEXT("输入材料"),
-           IX, 180.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+            IX, 194.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
 
     const FName InputNames[4] = {
         FName("TextBlock_Input_0"), FName("TextBlock_Input_1"),
@@ -729,14 +773,14 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     {
         const float Col = (i % 2) * (IW * 0.5f);
         const float Row = (i / 2) * 40.f;
-        B.Text(InputNames[i], TEXT("—"), IX + Col, 204.f + Row, IW * 0.5f - 8.f, 30.f,
+        B.Text(InputNames[i], TEXT("—"), IX + Col, 218.f + Row, IW * 0.5f - 8.f, 30.f,
                WidgetColors::TextValue, 12);
     }
 
     // ── 输出区 ─────────────────────────────────────────────────────────────
-    B.Rect(FName("Border_OutputSep"), 0.f, 288.f, CW, 1.f, WidgetColors::Divider);
+        B.Rect(FName("Border_OutputSep"), 0.f, 302.f, CW, 1.f, WidgetColors::Divider);
     B.Text(FName("Label_Output"), TEXT("输出产物"),
-           IX, 296.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+            IX, 310.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
 
     const FName OutputNames[4] = {
         FName("TextBlock_Output_0"), FName("TextBlock_Output_1"),
@@ -746,7 +790,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     {
         const float Col = (i % 2) * (IW * 0.5f);
         const float Row = (i / 2) * 40.f;
-        B.Text(OutputNames[i], TEXT("—"), IX + Col, 320.f + Row, IW * 0.5f - 8.f, 30.f,
+        B.Text(OutputNames[i], TEXT("—"), IX + Col, 334.f + Row, IW * 0.5f - 8.f, 30.f,
                WidgetColors::TextValue, 12);
     }
 }
@@ -757,7 +801,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 
 static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 396.f;
+    constexpr float CW = 440.f, CH = 410.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -811,29 +855,32 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
     BuildLabelValue(B,
                     FName("Label_Mode"), FName("TextBlock_Mode"),
                     TEXT("运行模式"), TEXT("仓储"),
-                    IX, 224.f, IW * 0.5f);
+                    IX, 224.f, IW * 0.5f - 96.f);
+
+    B.ActionButton(FName("Button_PrevMode"), TEXT("<"), IX + IW * 0.5f - 84.f, 244.f, 36.f, 24.f);
+    B.ActionButton(FName("Button_NextMode"), TEXT(">"), IX + IW * 0.5f - 40.f, 244.f, 36.f, 24.f);
 
     // ── 请求阈值 + 单架运量 ─────────────────────────────────────────────
     BuildLabelValue(B,
                     FName("Label_Threshold"), FName("TextBlock_Threshold"),
                     TEXT("请求阈值"), TEXT("—"),
-                    IX, 272.f, IW * 0.5f);
+                    IX, 286.f, IW * 0.5f);
 
     BuildLabelValue(B,
                     FName("Label_DroneCount"), FName("TextBlock_DroneCount"),
                     TEXT("单次运量"), TEXT("—"),
-                    IX + IW * 0.5f, 272.f, IW * 0.5f);
+                    IX + IW * 0.5f, 286.f, IW * 0.5f);
 
     // ── 归属无人机状态 + 来航数 ─────────────────────────────────
     BuildLabelValue(B,
                     FName("Label_OwnedDrones"), FName("TextBlock_OwnedDrones"),
                     TEXT("归属无人机"), TEXT("—"),
-                    IX, 320.f, IW * 0.5f);
+                    IX, 334.f, IW * 0.5f);
 
     BuildLabelValue(B,
                     FName("Label_IncomingDrones"), FName("TextBlock_IncomingDrones"),
                     TEXT("来航"), TEXT("—"),
-                    IX + IW * 0.5f, 320.f, IW * 0.5f);
+                    IX + IW * 0.5f, 334.f, IW * 0.5f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -977,10 +1024,10 @@ void FUMaterialGeneratorUtils::CreateBuildingWidgets()
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Hotbar"), TEXT("v2"), &ImpBuildHotbarWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v1"), &ImpBuildMinerWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v1"), &ImpBuildMakerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v2"), &ImpBuildMinerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v2"), &ImpBuildMakerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v1"), &ImpBuildStorageWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v1"), &ImpBuildLogisticsTowerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v2"), &ImpBuildLogisticsTowerWidget);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -28,10 +28,18 @@ class MASSDSP_API UMassDspAssemblerWidget : public UMassDspBuildingWidget
     GENERATED_BODY()
 
 protected:
+    virtual void NativeConstruct() override;
     virtual void RefreshWidgets() override;
 
 private:
     const FMassDspAssemblerFragment* GetFragment() const;
+    void ChangeRecipe(int32 Direction);
+
+    UFUNCTION()
+    void OnPrevRecipeClicked();
+
+    UFUNCTION()
+    void OnNextRecipeClicked();
 
     //  必填控件 
     UPROPERTY(meta = (BindWidget))
@@ -39,6 +47,12 @@ private:
 
     UPROPERTY(meta = (BindWidget))
     TObjectPtr<UTextBlock> TextBlock_RecipeType;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_PrevRecipe;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_NextRecipe;
 
     //  可选控件 
     UPROPERTY(meta = (BindWidgetOptional))

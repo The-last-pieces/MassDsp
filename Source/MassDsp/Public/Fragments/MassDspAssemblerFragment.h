@@ -51,6 +51,9 @@ struct MASSDSP_API FMassDspAssemblerFragment : public FMassFragment
 {
     GENERATED_BODY()
 
+    UPROPERTY()
+    ERecipeType ActiveRecipeType = ERecipeType::None;
+
     // 下次合成触发的绝对世界时间（0 = 未初始化）
     UPROPERTY()
     float NextCraftWorldTime = 0.0f;
@@ -96,4 +99,23 @@ struct MASSDSP_API FMassDspAssemblerFragment : public FMassFragment
     bool IsRunning() const;
 
     void UpdateSatisfied(const FRecipeDataForFragment& Recipe);
+
+    void ResetForRecipeChange()
+    {
+        NextCraftWorldTime = 0.f;
+        bInputSatisfied = false;
+        bOutputSatisfied = true;
+
+        for (FBufferEntry& Entry : InputBuffers)
+        {
+            Entry.ItemType = EItemType::None;
+            Entry.Amount = 0;
+        }
+
+        for (FBufferEntry& Entry : OutputBuffers)
+        {
+            Entry.ItemType = EItemType::None;
+            Entry.Amount = 0;
+        }
+    }
 };

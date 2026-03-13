@@ -62,6 +62,7 @@ void AMassDspAssembler::InitFragmentForEntity(FMassEntityManager& EntityManager,
 
     // 配方数据已通过 FMassDspRecipeSharedFragment 在 CreateBuildingEntityInternal 中注入 Archetype，
     // 此处只需设置实体独有的运行时数值。
+    AssemblerFragment.ActiveRecipeType = RecipeType;
     AssemblerFragment.CraftingSpeedMultiplier = CraftingSpeedMultiplier;
     AssemblerFragment.InputBufferCapacity = InputBufferCapacity;
     AssemblerFragment.OutputBufferCapacity = OutputBufferCapacity;

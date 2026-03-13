@@ -10,6 +10,9 @@
 #include "Fragments/BeltItemFragment.h"
 #include "Fragments/MassDspBuildingSlotsFragment.h"
 #include "Fragments/MassDspAssemblerFragment.h"
+#include "Fragments/MassDspMinerFragment.h"
+#include "Fragments/MassDspLogisticsTowerFragment.h"
+#include "Fragments/MassDspStorageFragment.h"
 
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
@@ -65,6 +68,83 @@ void UMassDspManager::Deinitialize()
     }
 
     Super::Deinitialize();
+}
+
+bool UMassDspManager::SetMinerItemType(FMassEntityHandle Entity, EItemType NewItemType)
+{
+    if (!Entity.IsValid() || NewItemType == EItemType::None) return false;
+
+    UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!ESub) return false;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    if (!EM.IsEntityValid(Entity)) return false;
+
+    FMassDspMinerFragment* Miner = EM.GetFragmentDataPtr<FMassDspMinerFragment>(Entity);
+    if (!Miner) return false;
+
+    Miner->StoredItemType = NewItemType;
+    Miner->InventoryCount = 0;
+    Miner->NextProductionWorldTime = 0.f;
+    return true;
+}
+
+bool UMassDspManager::SetAssemblerRecipe(FMassEntityHandle Entity, ERecipeType NewRecipeType)
+{
+    if (!Entity.IsValid() || NewRecipeType == ERecipeType::None) return false;
+
+    TryGetGameMode();
+    if (!GameMode.IsValid() || !GameMode->GameConfig || !GameMode->GameConfig->GetRecipeConfig(NewRecipeType))
+        return false;
+
+    UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!ESub) return false;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    if (!EM.IsEntityValid(Entity)) return false;
+
+    FMassDspAssemblerFragment* Assembler = EM.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity);
+    if (!Assembler) return false;
+
+    Assembler->ActiveRecipeType = NewRecipeType;
+    Assembler->ResetForRecipeChange();
+    return true;
+}
+
+bool UMassDspManager::SetLogisticsTowerMode(FMassEntityHandle Entity, ELogisticsTowerMode NewMode)
+{
+    if (!Entity.IsValid()) return false;
+
+    UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!ESub) return false;
+
+    FMassEntityManager& EM = ESub->GetMutableEntityManager();
+    if (!EM.IsEntityValid(Entity)) return false;
+
+    FMassDspLogisticsTowerFragment* Tower = EM.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Entity);
+    if (!Tower) return false;
+
+    Tower->TowerMode = NewMode;
+    Tower->bDirty = true;
+    return true;
+}
+
+int32 UMassDspManager::TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity)
+{
+    (void)Entity;
+    (void)ItemType;
+    (void)Quantity;
+    // 为后续玩家背包系统统一预留入口；本次仅定义接口，不在建筑面板中真正执行存入。
+    return 0;
+}
+
+int32 UMassDspManager::TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity)
+{
+    (void)Entity;
+    (void)ItemType;
+    (void)Quantity;
+    // 为后续玩家背包系统统一预留入口；本次仅定义接口，不在建筑面板中真正执行取出。
+    return 0;
 }
 
 TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()

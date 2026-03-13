@@ -8,6 +8,9 @@
 #include "Components/TextBlock.h"
 #include "MassDspBuildingWidget.generated.h"
 
+class UMassDspManager;
+class UGameConfigData;
+
 /**
  * 建筑交互 UI 基类
  *
@@ -37,6 +40,10 @@ public:
 
     EBuildingType GetTargetBuildingType() const { return BuildingType; }
 
+    int32 TryStoreItemsFromPlayer(EItemType ItemType, int32 Quantity);
+
+    int32 TryTakeItemsForPlayer(EItemType ItemType, int32 Quantity);
+
 protected:
     virtual void NativeConstruct() override;
     virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
@@ -56,6 +63,10 @@ protected:
 
     /** 将 ERecipeType 枚举值转为显示文本 */
     static FText GetRecipeTypeDisplayName(ERecipeType RecipeType);
+
+    UMassDspManager* GetDspManager() const;
+
+    UGameConfigData* GetGameConfig() const;
 
     //  数据 
 

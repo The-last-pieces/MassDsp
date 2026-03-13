@@ -3,6 +3,8 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/PlayerController.h"
+#include "MassDspGameMode.h"
+#include "Subsystems/MassDspManager.h"
 
 // 
 //  生命周期
@@ -66,6 +68,18 @@ void UMassDspBuildingWidget::CloseWidget()
     PC->bShowMouseCursor = false;
 }
 
+int32 UMassDspBuildingWidget::TryStoreItemsFromPlayer(EItemType ItemType, int32 Quantity)
+{
+    UMassDspManager* Manager = GetDspManager();
+    return Manager ? Manager->TryStoreItemsFromPlayer(TargetEntity, ItemType, Quantity) : 0;
+}
+
+int32 UMassDspBuildingWidget::TryTakeItemsForPlayer(EItemType ItemType, int32 Quantity)
+{
+    UMassDspManager* Manager = GetDspManager();
+    return Manager ? Manager->TryTakeItemsForPlayer(TargetEntity, ItemType, Quantity) : 0;
+}
+
 // 
 //  工具函数
 // 
@@ -84,6 +98,18 @@ FText UMassDspBuildingWidget::GetRecipeTypeDisplayName(ERecipeType RecipeType)
     return Enum
         ? Enum->GetDisplayNameTextByValue(static_cast<int64>(RecipeType))
         : FText::FromString(TEXT("None"));
+}
+
+UMassDspManager* UMassDspBuildingWidget::GetDspManager() const
+{
+    return GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+}
+
+UGameConfigData* UMassDspBuildingWidget::GetGameConfig() const
+{
+    const UWorld* World = GetWorld();
+    const AMassDspGameMode* GM = World ? Cast<AMassDspGameMode>(World->GetAuthGameMode()) : nullptr;
+    return GM ? GM->GameConfig.Get() : nullptr;
 }
 
 // 

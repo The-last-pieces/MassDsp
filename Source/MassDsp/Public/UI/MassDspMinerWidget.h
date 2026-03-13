@@ -25,10 +25,18 @@ class MASSDSP_API UMassDspMinerWidget : public UMassDspBuildingWidget
     GENERATED_BODY()
 
 protected:
+    virtual void NativeConstruct() override;
     virtual void RefreshWidgets() override;
 
 private:
     const FMassDspMinerFragment* GetFragment() const;
+    void ChangeMinerItemType(int32 Direction);
+
+    UFUNCTION()
+    void OnPrevItemTypeClicked();
+
+    UFUNCTION()
+    void OnNextItemTypeClicked();
 
     //  绑定控件（必须存在于蓝图，否则编译警告） 
     UPROPERTY(meta = (BindWidget))
@@ -43,4 +51,10 @@ private:
     //  可选控件 
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_Interval;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_PrevItemType;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_NextItemType;
 };

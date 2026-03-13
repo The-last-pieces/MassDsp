@@ -30,12 +30,21 @@ class MASSDSP_API UMassDspLogisticsTowerWidget : public UMassDspBuildingWidget
     GENERATED_BODY()
 
 protected:
+    virtual void NativeConstruct() override;
     virtual void RefreshWidgets() override;
 
 private:
     /** 同时返回 Storage + Tower 两个 Fragment 指针，任意一个无效则全返回 false */
     bool GetFragments(const FMassDspStorageFragment*& OutStorage,
                       const FMassDspLogisticsTowerFragment*& OutTower) const;
+
+    void ChangeTowerMode(int32 Direction);
+
+    UFUNCTION()
+    void OnPrevModeClicked();
+
+    UFUNCTION()
+    void OnNextModeClicked();
 
     //  BindWidget（必须，蓝图中必须存在同名控件） 
 
@@ -52,6 +61,12 @@ private:
 
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_Mode;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_PrevMode;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UButton> Button_NextMode;
 
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_Threshold;

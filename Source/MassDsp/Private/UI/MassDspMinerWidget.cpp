@@ -1,8 +1,38 @@
 ﻿#include "UI/MassDspMinerWidget.h"
 
 #include "MassEntitySubsystem.h"
+#include "Components/Button.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
+#include "Subsystems/MassDspManager.h"
+
+namespace
+{
+TArray<EItemType> GetMinerSelectableItems()
+{
+    return {
+        EItemType::IronOre,
+        EItemType::CopperOre,
+        EItemType::Stone,
+        EItemType::Coal,
+    };
+}
+}
+
+void UMassDspMinerWidget::NativeConstruct()
+{
+    Super::NativeConstruct();
+
+    if (Button_PrevItemType && !Button_PrevItemType->OnClicked.IsBound())
+    {
+        Button_PrevItemType->OnClicked.AddDynamic(this, &UMassDspMinerWidget::OnPrevItemTypeClicked);
+    }
+
+    if (Button_NextItemType && !Button_NextItemType->OnClicked.IsBound())
+    {
+        Button_NextItemType->OnClicked.AddDynamic(this, &UMassDspMinerWidget::OnNextItemTypeClicked);
+    }
+}
 
 const FMassDspMinerFragment* UMassDspMinerWidget::GetFragment() const
 {
@@ -39,4 +69,31 @@ void UMassDspMinerWidget::RefreshWidgets()
             FText::Format(NSLOCTEXT("MassDsp", "MinerInterval", "每 {0} 秒产出 1 个"),
                 FText::AsNumber(FMath::RoundToInt(F->ProductionInterval))));
     }
+}
+
+void UMassDspMinerWidget::ChangeMinerItemType(int32 Direction)
+{
+    const FMassDspMinerFragment* Fragment = GetFragment();
+    UMassDspManager* Manager = GetDspManager();
+    if (!Fragment || !Manager) return;
+
+    const TArray<EItemType> SelectableItems = GetMinerSelectableItems();
+    if (SelectableItems.IsEmpty()) return;
+
+    int32 CurrentIndex = SelectableItems.Find(Fragment->StoredItemType);
+    if (CurrentIndex == INDEX_NONE) CurrentIndex = 0;
+
+    const int32 NewIndex = (CurrentIndex + Direction + SelectableItems.Num()) % SelectableItems.Num();
+    Manager->SetMinerItemType(TargetEntity, SelectableItems[NewIndex]);
+    RefreshWidgets();
+}
+
+void UMassDspMinerWidget::OnPrevItemTypeClicked()
+{
+    ChangeMinerItemType(-1);
+}
+
+void UMassDspMinerWidget::OnNextItemTypeClicked()
+{
+    ChangeMinerItemType(1);
 }

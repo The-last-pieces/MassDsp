@@ -1,9 +1,26 @@
 ﻿#include "UI/MassDspLogisticsTowerWidget.h"
 
 #include "MassEntitySubsystem.h"
+#include "Components/Button.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
+#include "Subsystems/MassDspManager.h"
+
+void UMassDspLogisticsTowerWidget::NativeConstruct()
+{
+    Super::NativeConstruct();
+
+    if (Button_PrevMode && !Button_PrevMode->OnClicked.IsBound())
+    {
+        Button_PrevMode->OnClicked.AddDynamic(this, &UMassDspLogisticsTowerWidget::OnPrevModeClicked);
+    }
+
+    if (Button_NextMode && !Button_NextMode->OnClicked.IsBound())
+    {
+        Button_NextMode->OnClicked.AddDynamic(this, &UMassDspLogisticsTowerWidget::OnNextModeClicked);
+    }
+}
 
 // 
 
@@ -115,4 +132,37 @@ void UMassDspLogisticsTowerWidget::RefreshWidgets()
             }
         }
     }
+}
+
+void UMassDspLogisticsTowerWidget::ChangeTowerMode(int32 Direction)
+{
+    const FMassDspStorageFragment* SF = nullptr;
+    const FMassDspLogisticsTowerFragment* TF = nullptr;
+    if (!GetFragments(SF, TF)) return;
+
+    UMassDspManager* Manager = GetDspManager();
+    if (!Manager) return;
+
+    static const TArray<ELogisticsTowerMode> Modes = {
+        ELogisticsTowerMode::Supply,
+        ELogisticsTowerMode::Demand,
+        ELogisticsTowerMode::Storage,
+    };
+
+    int32 CurrentIndex = Modes.Find(TF->TowerMode);
+    if (CurrentIndex == INDEX_NONE) CurrentIndex = 0;
+
+    const int32 NewIndex = (CurrentIndex + Direction + Modes.Num()) % Modes.Num();
+    Manager->SetLogisticsTowerMode(TargetEntity, Modes[NewIndex]);
+    RefreshWidgets();
+}
+
+void UMassDspLogisticsTowerWidget::OnPrevModeClicked()
+{
+    ChangeTowerMode(-1);
+}
+
+void UMassDspLogisticsTowerWidget::OnNextModeClicked()
+{
+    ChangeTowerMode(1);
 }
