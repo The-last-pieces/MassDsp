@@ -4,7 +4,6 @@
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
 #include "Actors/MassDspBuilding.h"
-#include "Player/MassDspPlayerCharacter.h"
 
 #include "GameFramework/PlayerController.h"
 #include "Components/InputComponent.h"
@@ -43,19 +42,6 @@ void AMassDspHUD::BeginPlay()
         HotbarWidget->AddToViewport(0);
     if (!HotbarWidget) return;
 
-    // ── 建造模式切换：Tab 键 ──────────────────────────────────────────────
-    // Character 广播 OnBuildModeToggled，HUD 通过此回调同步状态
-    if (APlayerController* PCtrl = GetOwningPlayerController())
-    {
-        if (APawn* Pawn = PCtrl->GetPawn())
-        {
-            if (AMassDspPlayerCharacter* PlayerChar = Cast<AMassDspPlayerCharacter>(Pawn))
-            {
-                PlayerChar->OnBuildModeToggled.AddDynamic(this, &AMassDspHUD::SetBuildingMode);
-            }
-        }
-    }
-
     // 数字键 1-9：直接绑定到 HotbarWidget 各槽位（无中间层）
     InputComponent->BindKey(EKeys::One, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnSlot0Clicked);
     InputComponent->BindKey(EKeys::Two, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnSlot1Clicked);
@@ -89,16 +75,8 @@ void AMassDspHUD::Tick(float DeltaSeconds)
 //  高度自适应镜头移动
 // ─────────────────────────────────────────────────────────────────────────────
 
-void AMassDspHUD::SetBuildingMode(bool bEnabled)
-{
-    bIsBuildingMode = bEnabled;
-}
-
 void AMassDspHUD::UpdateCameraMovement(float DeltaSeconds)
 {
-    // 仅在建造平移模式下才执行 WASD 摄像机平移
-    if (!bIsBuildingMode) return;
-
     APlayerController* PC = GetOwningPlayerController();
     if (!PC) return;
     APawn* Pawn = PC->GetPawn();

@@ -39,15 +39,6 @@ public:
     UPROPERTY()
     TObjectPtr<UMassDspHotbarWidget> HotbarWidget;
 
-    // ── 角色/建造模式切换 ──────────────────────────────────────────────────
-    /** true = 建造平移视角；false = 角色控制模式（默认） */
-    UPROPERTY(BlueprintReadOnly, Category = "Mode")
-    bool bIsBuildingMode = false;
-
-    /** 由角色的 OnBuildModeToggled 事件回调，也可在蓝图中直接调用 */
-    UFUNCTION(BlueprintCallable, Category = "Mode")
-    void SetBuildingMode(bool bEnabled);
-
     //  高度自适应镜头移动 
     float CameraSpeedFactor = 2.0f;
     float CameraMinSpeed = 300.f;

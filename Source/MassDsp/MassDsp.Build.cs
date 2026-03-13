@@ -1,4 +1,4 @@
-﻿// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -30,6 +30,8 @@ public class MassDsp : ModuleRules
             "MassSpawner",
             "ProceduralMeshComponent",
             "Json",
+            // "Niagara",
+            // "NiagaraCore",
         ]);
 
         PrivateDependencyModuleNames.AddRange([
