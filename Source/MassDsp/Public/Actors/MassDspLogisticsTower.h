@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Actors/MassDspStorage.h"
+#include "Actors/MassDspBuilding.h"
 #include "Logistics/MassDspLogisticsTypes.h"
 
 #include "MassDspLogisticsTower.generated.h"
@@ -9,21 +9,21 @@
 /**
  * 物流塔 CDO（配置数据容器）
  *
- * 继承关系：AMassDspLogisticsTower  AMassDspStorage  AMassDspBuilding  AActor
+ * 继承关系：AMassDspLogisticsTower  AMassDspBuilding  AActor
  *
  * 【运行时不实例化 Actor】：与所有建筑基类一致，此类仅作为蓝图配置容器。
  * 运行时通过 UMassDspManager::SpawnBuildingFromClass / BatchSpawnBuildings
  * 创建纯 Mass Entity，由 GetDefault<AMassDspLogisticsTower>() 读取配置。
  *
  * 每个物流塔实体同时拥有三种 Fragment：
- *   - FMassDspStorageFragment             物品缓冲（由父类 AMassDspStorage 初始化）
- *   - FMassDspBuildingSlotsFragment        槽口（传送带联动，由 AMassDspBuilding 初始化）
- *   - FMassDspLogisticsTowerFragment       物流调度（本类新增）
+ *   - FMassDspStorageFragment        单物品缓冲（本类初始化）
+ *   - FMassDspBuildingSlotsFragment  槽口（传送带联动，由 AMassDspBuilding 初始化）
+ *   - FMassDspLogisticsTowerFragment 物流调度（本类新增）
  *
  * ISM 渲染：同其他建筑，由 UMassRepresentationSubsystem 管理，无独立 Mesh 组件。
  */
 UCLASS(Blueprintable)
-class MASSDSP_API AMassDspLogisticsTower : public AMassDspStorage
+class MASSDSP_API AMassDspLogisticsTower : public AMassDspBuilding
 {
     GENERATED_BODY()
 
@@ -32,10 +32,8 @@ public:
 
     //  AMassDspBuilding 接口 
 
-    /** 除父类 Fragments（Storage + Slots），额外追加 LogisticsTowerFragment */
     virtual TArray<const UScriptStruct*> GetStaticStructs() const override;
 
-    /** 初始化所有 Fragment（先调 Super 初始化 Storage/Slots，再初始化 Tower 字段） */
     virtual void InitFragmentForEntity(
         FMassEntityManager& EntityManager,
         FMassEntityHandle EntityHandle,
@@ -45,6 +43,10 @@ protected:
     virtual const UScriptStruct* GetStaticStructForFragment() const override;
 
 public:
+    /** 物流塔内部单物品缓存容量。仅用于塔自身的供需/传送带缓冲，不复用仓库泛型容器。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower", meta = (ClampMin = "1", ClampMax = "10000"))
+    int32 Capacity = 50;
+
     // ──────────────────────────────────────────────────────
     //  物流塔配置（DSP 行星内物流风格）
     // ──────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 #include "Fragments/MassDspBuildingSlotsFragment.h"
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspWarehouseFragment.h"
 #include "Fragments/MassDspAssemblerFragment.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
@@ -13,6 +14,7 @@
 UMassDspBuildingProcessor::UMassDspBuildingProcessor()
     : MinerQuery(*this)
       , StorageQuery(*this)
+      , WarehouseQuery(*this)
       , AssemblerQuery(*this)
 {
     // 设置处理器执行顺序
@@ -27,10 +29,15 @@ void UMassDspBuildingProcessor::ConfigureQueries(const TSharedRef<FMassEntityMan
     MinerQuery.AddRequirement<FMassDspBuildingSlotsFragment>(EMassFragmentAccess::ReadWrite);
     MinerQuery.RegisterWithProcessor(*this);
 
-    // 配置仓库Query - 查询拥有StorageFragment和SlotsFragment的实体
+    // 配置传统存储Query - 查询拥有StorageFragment和SlotsFragment的实体（物流塔）
     StorageQuery.AddRequirement<FMassDspStorageFragment>(EMassFragmentAccess::ReadWrite);
     StorageQuery.AddRequirement<FMassDspBuildingSlotsFragment>(EMassFragmentAccess::ReadWrite);
     StorageQuery.RegisterWithProcessor(*this);
+
+    // 配置泛型仓库Query - 查询拥有WarehouseFragment和SlotsFragment的实体
+    WarehouseQuery.AddRequirement<FMassDspWarehouseFragment>(EMassFragmentAccess::ReadWrite);
+    WarehouseQuery.AddRequirement<FMassDspBuildingSlotsFragment>(EMassFragmentAccess::ReadWrite);
+    WarehouseQuery.RegisterWithProcessor(*this);
 
     // 配置合成台Query - 查询拥有 AssemblerFragment、SlotsFragment 和 RecipeSharedFragment 的实体
     AssemblerQuery.AddRequirement<FMassDspAssemblerFragment>(EMassFragmentAccess::ReadWrite);
@@ -66,12 +73,14 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     // 每条传送带只有 1 个 Provide 方 → 各线程写不同 FBeltData，ParallelFor 安全
     ProcessBuildingOutputs<FMassDspMinerFragment>(MinerQuery, Context, WorldTime, GameConfig);
     ProcessBuildingOutputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingOutputs<FMassDspWarehouseFragment>(WarehouseQuery, Context, WorldTime, GameConfig);
     ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig);
 
     // ── Pass 2: 输入槽（Consume）────────────────────────────────────────────
     // 每条传送带只有 1 个 Consume 方 → 各线程写不同 FBeltData，ParallelFor 安全
     // Pass 1 全部线程归栅后才进入 Pass 2 → Provide/Consume 时间上不重叠，无需锁
     ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingInputs<FMassDspWarehouseFragment>(WarehouseQuery, Context, WorldTime, GameConfig);
     ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig);
     // 矿机无 Input Slot，不参与 Pass 2
 }
@@ -163,6 +172,8 @@ void UMassDspBuildingProcessor::ProcessOutputSlots(FMassDspBuildingSlotsFragment
         if (Fragment.InventoryCount == 0) return;
     if constexpr (std::is_same_v<TT, FMassDspStorageFragment>)
         if (Fragment.InventoryCount == 0) return;
+    if constexpr (std::is_same_v<TT, FMassDspWarehouseFragment>)
+        if (Fragment.GetInventoryCount() == 0) return;
 
     const int32 OutputsNum = SlotsData.GetOutputSlots().Num();
     bool AnySuc = false;
@@ -198,6 +209,8 @@ void UMassDspBuildingProcessor::ProcessInputSlots(FMassDspBuildingSlotsFragment&
 
     if constexpr (std::is_same_v<TT, FMassDspStorageFragment>)
         if (Fragment.InventoryCount >= Fragment.MaxInventory) return;
+    if constexpr (std::is_same_v<TT, FMassDspWarehouseFragment>)
+        if (Fragment.GetInventoryCount() >= Fragment.GetMaxInventory()) return;
 
     const int32 InputsNum = SlotsData.GetInputSlots().Num();
     bool AnySuc = false;

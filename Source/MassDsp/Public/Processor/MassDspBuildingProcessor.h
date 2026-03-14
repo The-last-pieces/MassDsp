@@ -35,8 +35,11 @@ private:
     // 矿机生产逻辑Query（包含槽口处理）
     FMassEntityQuery MinerQuery;
 
-    // 仓库存储逻辑Query（包含槽口处理）
+    // 传统单物品存储逻辑Query（物流塔使用，包含槽口处理）
     FMassEntityQuery StorageQuery;
+
+    // 泛型仓库存储逻辑Query（固定容量仓库使用，包含槽口处理）
+    FMassEntityQuery WarehouseQuery;
 
     // 合成台合成逻辑Query（包含槽口处理）
     FMassEntityQuery AssemblerQuery;

@@ -7,6 +7,7 @@
 #include "Fragments/MassDspLogisticsTowerFragment.h"
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspWarehouseFragment.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspManager.h"
 
@@ -134,6 +135,21 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
                 ++Snapshot.FullMinerNodes;
             }
             AccumulateItemCount(CurrentItemTotals, Miner->StoredItemType, Miner->InventoryCount);
+        }
+
+        if (const FMassDspWarehouseFragment* Warehouse = EntityManager.GetFragmentDataPtr<FMassDspWarehouseFragment>(Entity))
+        {
+            if (Warehouse->GetInventoryCount() >= Warehouse->GetMaxInventory())
+            {
+                ++Snapshot.FullStorageNodes;
+            }
+
+            TArray<FInventoryEntryView> Entries;
+            Warehouse->GetActiveEntries(Entries);
+            for (const FInventoryEntryView& Entry : Entries)
+            {
+                AccumulateItemCount(CurrentItemTotals, Entry.ItemType, Entry.Quantity);
+            }
         }
 
         if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))

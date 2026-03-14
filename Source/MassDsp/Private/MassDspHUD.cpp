@@ -288,6 +288,9 @@ void AMassDspHUD::DrawHUD()
         TimeSinceLastUpdate = 0.0f;
     }
 
+    // ── 常驻 FPS（左上角） ──
+    DrawPersistentFps();
+
     // ── 建造模式提示 ──
     DrawBuildSystemHint();
 
@@ -317,6 +320,40 @@ void AMassDspHUD::DrawHUD()
         DrawLine(L, B, L, T, DbgColor, Th);
     }
 #endif
+}
+
+void AMassDspHUD::DrawPersistentFps()
+{
+    if (!Canvas || !GEngine || !GEngine->GetSmallFont()) return;
+
+    const UWorld* World = GetWorld();
+    const float CurrentFps = World && World->GetDeltaSeconds() > 0.f ? 1.f / World->GetDeltaSeconds() : 0.f;
+
+    const FString FpsText = FString::Printf(
+        TEXT("FPS %.1f  |  Avg %.1f  |  1%% Low %.1f"),
+        CurrentFps,
+        AverageFPS,
+        OnePercentLowFPS);
+
+    constexpr float StartX = 18.f;
+    constexpr float StartY = 16.f;
+    constexpr float PaddingX = 12.f;
+    constexpr float PaddingY = 8.f;
+    constexpr float Scale = 1.15f;
+
+    float TextW = 0.f;
+    float TextH = 0.f;
+    GetTextSize(FpsText, TextW, TextH, GEngine->GetSmallFont(), Scale);
+
+    FCanvasTileItem Background(
+        FVector2D(StartX - PaddingX, StartY - PaddingY),
+        FVector2D(TextW + PaddingX * 2.f, TextH + PaddingY * 2.f),
+        FLinearColor(0.03f, 0.04f, 0.06f, 0.72f));
+    Background.BlendMode = SE_BLEND_Translucent;
+    Canvas->DrawItem(Background);
+
+    DrawText(FpsText, FLinearColor::Black, StartX + 1.f, StartY + 1.f, GEngine->GetSmallFont(), Scale);
+    DrawText(FpsText, FLinearColor(0.88f, 0.96f, 1.0f), StartX, StartY, GEngine->GetSmallFont(), Scale);
 }
 
 void AMassDspHUD::DrawBuildSystemHint()

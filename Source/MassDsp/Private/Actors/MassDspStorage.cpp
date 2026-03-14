@@ -2,7 +2,8 @@
 
 #include "MassEntityManager.h"
 
-#include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspWarehouseFragment.h"
+#include "Fragments/MassDspBuildingSlotsFragment.h"
 
 AMassDspStorage::AMassDspStorage()
 {
@@ -15,15 +16,21 @@ AMassDspStorage::AMassDspStorage()
 
 const UScriptStruct* AMassDspStorage::GetStaticStructForFragment() const
 {
-    return FMassDspStorageFragment::StaticStruct();
+    return FMassDspWarehouseFragment::StaticStruct();
+}
+
+TArray<const UScriptStruct*> AMassDspStorage::GetStaticStructs() const
+{
+    return {
+        FMassDspWarehouseFragment::StaticStruct(),
+        FMassDspBuildingSlotsFragment::StaticStruct(),
+    };
 }
 
 void AMassDspStorage::InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const
 {
     Super::InitFragmentForEntity(EntityManager, EntityHandle, WorldTransform);
 
-    FMassDspStorageFragment& StorageFragment = EntityManager.GetFragmentDataChecked<FMassDspStorageFragment>(EntityHandle);
-
-    StorageFragment.MaxInventory = Capacity;
-    StorageFragment.InventoryCount = 0;
+    FMassDspWarehouseFragment& WarehouseFragment = EntityManager.GetFragmentDataChecked<FMassDspWarehouseFragment>(EntityHandle);
+    WarehouseFragment.Initialize(Capacity);
 }

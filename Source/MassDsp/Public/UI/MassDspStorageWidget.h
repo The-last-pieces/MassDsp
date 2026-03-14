@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "UI/MassDspBuildingWidget.h"
-#include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspWarehouseFragment.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "MassDspStorageWidget.generated.h"
@@ -24,7 +24,7 @@ protected:
     virtual void RefreshWidgets() override;
 
 private:
-    const FMassDspStorageFragment* GetFragment() const;
+    const FMassDspWarehouseFragment* GetFragment() const;
     virtual EItemType GetSuggestedTransferItemType() const override;
 
     UPROPERTY(meta = (BindWidget))

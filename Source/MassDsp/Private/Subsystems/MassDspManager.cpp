@@ -13,6 +13,7 @@
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspLogisticsTowerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspWarehouseFragment.h"
 
 #include "MassEntitySubsystem.h"
 #include "MassEntityManager.h"
@@ -201,7 +202,11 @@ int32 UMassDspManager::TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemTy
     if (Requested <= 0) return 0;
 
     int32 Stored = 0;
-    if (FMassDspStorageFragment* Storage = EM.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
+    if (FMassDspWarehouseFragment* Warehouse = EM.GetFragmentDataPtr<FMassDspWarehouseFragment>(Entity))
+    {
+        Stored = Warehouse->TryConsumeItems(ItemType, Requested);
+    }
+    else if (FMassDspStorageFragment* Storage = EM.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
     {
         Stored = Storage->TryConsumeItems(ItemType, Requested);
     }
@@ -242,7 +247,11 @@ int32 UMassDspManager::TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType
     if (!EM.IsEntityValid(Entity)) return 0;
 
     int32 Taken = 0;
-    if (FMassDspStorageFragment* Storage = EM.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
+    if (FMassDspWarehouseFragment* Warehouse = EM.GetFragmentDataPtr<FMassDspWarehouseFragment>(Entity))
+    {
+        Taken = Warehouse->TryProvideItems(ItemType, Requested);
+    }
+    else if (FMassDspStorageFragment* Storage = EM.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
     {
         if (Storage->StoredItemType == ItemType)
         {

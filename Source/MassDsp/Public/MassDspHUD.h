@@ -66,6 +66,7 @@ private:
     void ToggleSystemStatsWidget();
 
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
+    void DrawPersistentFps();
     void DrawBuildSystemHint();
     void DrawBuildingPreviewSlots();
     void DrawBeltSnapIndicator();

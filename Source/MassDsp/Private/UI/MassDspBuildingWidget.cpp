@@ -7,6 +7,7 @@
 #include "Fragments/MassDspAssemblerFragment.h"
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
+#include "Fragments/MassDspWarehouseFragment.h"
 #include "MassEntitySubsystem.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
@@ -186,6 +187,11 @@ void UMassDspBuildingWidget::CollectBuildingInventoryEntries(TArray<FInventoryEn
         AppendEntry(Miner->StoredItemType, Miner->InventoryCount);
     }
 
+    if (const FMassDspWarehouseFragment* Warehouse = EntityManager.GetFragmentDataPtr<FMassDspWarehouseFragment>(TargetEntity))
+    {
+        Warehouse->GetActiveEntries(OutEntries);
+    }
+
     if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(TargetEntity))
     {
         AppendEntry(Storage->StoredItemType, Storage->InventoryCount);
@@ -284,6 +290,13 @@ FText UMassDspBuildingWidget::BuildBuildingSummaryText() const
         return FText::Format(NSLOCTEXT("MassDsp", "MinerGridSummary", "矿机缓存 {0} / {1}"),
                              FText::AsNumber(Miner->InventoryCount),
                              FText::AsNumber(Miner->MaxInventory));
+    }
+
+    if (const FMassDspWarehouseFragment* Warehouse = EntityManager.GetFragmentDataPtr<FMassDspWarehouseFragment>(TargetEntity))
+    {
+        return FText::Format(NSLOCTEXT("MassDsp", "WarehouseGridSummary", "仓库库存 {0} / {1}"),
+                             FText::AsNumber(Warehouse->GetInventoryCount()),
+                             FText::AsNumber(Warehouse->GetMaxInventory()));
     }
 
     if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(TargetEntity))

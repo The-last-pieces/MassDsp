@@ -18,6 +18,7 @@ public:
 
 protected:
     virtual const UScriptStruct* GetStaticStructForFragment() const override;
+    virtual TArray<const UScriptStruct*> GetStaticStructs() const override;
     
     virtual void InitFragmentForEntity(FMassEntityManager& EntityManager, FMassEntityHandle EntityHandle, const FTransform& WorldTransform) const override;
 
