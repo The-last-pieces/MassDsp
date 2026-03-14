@@ -40,6 +40,7 @@
 #include "UI/MassDspLogisticsTowerWidget.h"
 #include "UI/MassDspHotbarWidget.h"
 #include "UI/MassDspInventoryWidget.h"
+#include "UI/MassDspSystemStatsWidget.h"
 
 // UMG Editor
 #include "WidgetBlueprint.h"
@@ -936,6 +937,66 @@ static void BuildInventoryLayout(UWidgetBlueprint* WBP)
     }
 }
 
+static void BuildSystemStatsLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 980.f, CH = 700.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    {
+        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+        FSlateBrush Brush;
+        Brush.TintColor = FSlateColor(WidgetColors::Overlay);
+        Brush.DrawAs = ESlateBrushDrawType::Box;
+        Overlay->SetBrush(Brush);
+        UCanvasPanelSlot* Slot = B.Root->AddChildToCanvas(Overlay);
+        Slot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+        Slot->SetOffsets(FMargin(0.f));
+    }
+
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+    BuildCommonHeader(B, TEXT("系统统计 / 调试面板"), CW);
+    B.ActionButton(FName("Button_Refresh"), TEXT("刷新"), CW - 128.f, 8.f, 78.f, 30.f);
+
+    constexpr float IX = 20.f;
+    const float IW = CW - 40.f;
+    const float HalfW = (IW - 28.f) * 0.5f;
+
+    BuildLabelValue(B, FName("Label_Performance"), FName("TextBlock_Performance"),
+        TEXT("性能概览"), TEXT("FPS\n当前 60 | 平均 58 | 1% Low 45"),
+        IX, 60.f, HalfW, 18.f, 88.f);
+
+    BuildLabelValue(B, FName("Label_WorldScale"), FName("TextBlock_WorldScale"),
+        TEXT("世界规模"), TEXT("建筑 0 | 带子 0 | 带上物品 0"),
+        IX + HalfW + 28.f, 60.f, HalfW, 18.f, 88.f);
+
+    BuildLabelValue(B, FName("Label_Logistics"), FName("TextBlock_Logistics"),
+        TEXT("物流态势"), TEXT("无人机 0 | 任务 0 | 请求 0"),
+        IX, 192.f, HalfW, 18.f, 106.f);
+
+    BuildLabelValue(B, FName("Label_Bottleneck"), FName("TextBlock_Bottleneck"),
+        TEXT("瓶颈摘要"), TEXT("系统运行稳定"),
+        IX + HalfW + 28.f, 192.f, HalfW, 18.f, 106.f);
+
+    B.Rect(FName("Border_MidSep"), 0.f, 330.f, CW, 1.f, WidgetColors::Divider);
+
+    BuildLabelValue(B, FName("Label_BusiestTower"), FName("TextBlock_BusiestTower"),
+        TEXT("最忙物流塔"), TEXT("暂无活跃物流塔"),
+        IX, 346.f, IW, 18.f, 104.f);
+
+    B.Rect(FName("Border_DeltaSep"), 0.f, 490.f, CW, 1.f, WidgetColors::Divider);
+    B.Text(FName("Label_ItemDelta"), TEXT("物品每秒变化（平滑窗口）"), IX, 504.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
+    B.Text(FName("TextBlock_ItemDelta_0"), TEXT("暂无显著物品变化"), IX, 536.f, IW, 26.f, WidgetColors::TextValue, 13);
+    B.Text(FName("TextBlock_ItemDelta_1"), TEXT(""), IX, 570.f, IW, 26.f, WidgetColors::TextValue, 13);
+    B.Text(FName("TextBlock_ItemDelta_2"), TEXT(""), IX, 604.f, IW, 26.f, WidgetColors::TextValue, 13);
+    B.Text(FName("TextBlock_ItemDelta_3"), TEXT(""), IX, 638.f, IW, 26.f, WidgetColors::TextValue, 13);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  公共入口
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1081,6 +1142,15 @@ static UObject* ImpBuildInventoryWidget(UPackage* Package, const FString& AssetN
     return WBP;
 }
 
+static UObject* ImpBuildSystemStatsWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspSystemStatsWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildSystemStatsLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
 void FUMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
@@ -1091,6 +1161,7 @@ void FUMaterialGeneratorUtils::CreateBuildingWidgets()
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v2"), &ImpBuildStorageWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v3"), &ImpBuildLogisticsTowerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Inventory"), TEXT("v1"), &ImpBuildInventoryWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_SystemStats"), TEXT("v2"), &ImpBuildSystemStatsWidget);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

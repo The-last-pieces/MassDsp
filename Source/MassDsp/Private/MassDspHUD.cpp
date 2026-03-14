@@ -3,8 +3,10 @@
 #include "Engine/Engine.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspDebugStatsSubsystem.h"
 #include "Actors/MassDspBuilding.h"
 #include "UI/MassDspInventoryWidget.h"
+#include "UI/MassDspSystemStatsWidget.h"
 
 #include "GameFramework/PlayerController.h"
 #include "Components/InputComponent.h"
@@ -61,6 +63,7 @@ void AMassDspHUD::BeginPlay()
     InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnScrollDown);
     InputComponent->BindKey(EKeys::F, IE_Pressed, this, &AMassDspHUD::HandleInteractKey);
     InputComponent->BindKey(EKeys::I, IE_Pressed, this, &AMassDspHUD::ToggleInventoryWidget);
+    InputComponent->BindKey(EKeys::F3, IE_Pressed, this, &AMassDspHUD::ToggleSystemStatsWidget);
 }
 
 void AMassDspHUD::Tick(float DeltaSeconds)
@@ -72,6 +75,11 @@ void AMassDspHUD::Tick(float DeltaSeconds)
         InventoryWidget = nullptr;
     }
 
+    if (SystemStatsWidget && !SystemStatsWidget->IsInViewport())
+    {
+        SystemStatsWidget = nullptr;
+    }
+
     UpdateCameraMovement(DeltaSeconds);
 }
 
@@ -81,6 +89,12 @@ void AMassDspHUD::HandleInteractKey()
     {
         InventoryWidget->CloseWidget();
         InventoryWidget = nullptr;
+    }
+
+    if (SystemStatsWidget)
+    {
+        SystemStatsWidget->CloseWidget();
+        SystemStatsWidget = nullptr;
     }
 
     if (HotbarWidget)
@@ -101,6 +115,12 @@ void AMassDspHUD::ToggleInventoryWidget()
         return;
     }
 
+    if (SystemStatsWidget)
+    {
+        SystemStatsWidget->CloseWidget();
+        SystemStatsWidget = nullptr;
+    }
+
     if (HotbarWidget && HotbarWidget->CurrentBuildingWidget)
     {
         HotbarWidget->CurrentBuildingWidget->CloseWidget();
@@ -118,6 +138,51 @@ void AMassDspHUD::ToggleInventoryWidget()
 
     FInputModeGameAndUI UIMode;
     UIMode.SetWidgetToFocus(InventoryWidget->TakeWidget());
+    UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+    PC->SetInputMode(UIMode);
+    PC->bShowMouseCursor = true;
+}
+
+void AMassDspHUD::ToggleSystemStatsWidget()
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return;
+
+    if (SystemStatsWidget)
+    {
+        SystemStatsWidget->CloseWidget();
+        SystemStatsWidget = nullptr;
+        return;
+    }
+
+    if (InventoryWidget)
+    {
+        InventoryWidget->CloseWidget();
+        InventoryWidget = nullptr;
+    }
+
+    if (HotbarWidget && HotbarWidget->CurrentBuildingWidget)
+    {
+        HotbarWidget->CurrentBuildingWidget->CloseWidget();
+        HotbarWidget->CurrentBuildingWidget = nullptr;
+    }
+
+    AMassDspGameMode* GM = GetWorld() ? Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()) : nullptr;
+    TSubclassOf<UMassDspSystemStatsWidget> StatsClass = GM && GM->GameConfig ? GM->GameConfig->SystemStatsWidgetClass : nullptr;
+    if (!StatsClass) return;
+
+    if (UMassDspDebugStatsSubsystem* StatsSubsystem = GetWorld()->GetSubsystem<UMassDspDebugStatsSubsystem>())
+    {
+        StatsSubsystem->ForceRefresh();
+    }
+
+    SystemStatsWidget = CreateWidget<UMassDspSystemStatsWidget>(PC, StatsClass);
+    if (!SystemStatsWidget) return;
+
+    SystemStatsWidget->AddToViewport(15);
+
+    FInputModeGameAndUI UIMode;
+    UIMode.SetWidgetToFocus(SystemStatsWidget->TakeWidget());
     UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
     PC->SetInputMode(UIMode);
     PC->bShowMouseCursor = true;
@@ -222,28 +287,6 @@ void AMassDspHUD::DrawHUD()
         UpdateGameStats();
         TimeSinceLastUpdate = 0.0f;
     }
-
-    // ── 性能与游戏统计 ──
-    const float CurrentFPS = 1.0f / DeltaTime;
-    const FString FpsText = FString::Printf(
-        TEXT("Current: %.1f FPS | Avg: %.1f FPS | 1%% Low: %.1f FPS"),
-        CurrentFPS, AverageFPS, OnePercentLowFPS);
-    const FString GameText = FString::Printf(
-        TEXT("Buildings: %d | Belts: %d | Belt Items: %d"),
-        CachedBuildingCount, CachedBeltCount, CachedBeltItemCount);
-
-    constexpr float PosX = 10.0f;
-    constexpr float PosY = 10.0f;
-    constexpr float LineStep = 20.0f;
-
-    auto DrawLineText = [&](const FString& Text, float Y)
-    {
-        DrawText(Text, FLinearColor::Black, PosX + 1.0f, Y + 1.0f, GEngine->GetSmallFont(), 1.5f);
-        DrawText(Text, FLinearColor::Yellow, PosX, Y, GEngine->GetSmallFont(), 1.5f);
-    };
-
-    DrawLineText(FpsText, PosY);
-    DrawLineText(GameText, PosY + LineStep);
 
     // ── 建造模式提示 ──
     DrawBuildSystemHint();

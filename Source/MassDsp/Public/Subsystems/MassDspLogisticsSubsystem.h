@@ -141,6 +141,11 @@ public:
     /** 查询任务当前状态（若 ID 无效返回空指针） */
     const FLogisticsTask* GetTask(int32 TaskId) const;
 
+    int32 GetTotalDroneCount() const { return DronePool.Num(); }
+    int32 GetIdleDroneCount() const { return IdleDroneIndices.Num(); }
+    int32 GetPendingRequestCount() const { return AllRequests.Num(); }
+    int32 GetActiveTaskCount() const { return AllTasks.Num(); }
+
     /**
      * 查询物流塔的无人机状态快照，供 Widget UI 每帧刷新时调用。
      * O(归属机数 + 活跃任务数)，非常轻量。

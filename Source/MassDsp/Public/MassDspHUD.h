@@ -6,6 +6,7 @@
 #include "MassDspHUD.generated.h"
 
 class UMassDspInventoryWidget;
+class UMassDspSystemStatsWidget;
 
 UCLASS()
 class MASSDSP_API AMassDspHUD : public AHUD
@@ -44,6 +45,9 @@ public:
     UPROPERTY()
     TObjectPtr<UMassDspInventoryWidget> InventoryWidget;
 
+    UPROPERTY()
+    TObjectPtr<UMassDspSystemStatsWidget> SystemStatsWidget;
+
     //  高度自适应镜头移动 
     float CameraSpeedFactor = 2.0f;
     float CameraMinSpeed = 300.f;
@@ -59,6 +63,7 @@ public:
 private:
     void HandleInteractKey();
     void ToggleInventoryWidget();
+    void ToggleSystemStatsWidget();
 
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
     void DrawBuildSystemHint();
