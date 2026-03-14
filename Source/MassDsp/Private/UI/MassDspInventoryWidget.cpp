@@ -4,7 +4,8 @@
 #include "Components/TextBlock.h"
 #include "GameFramework/PlayerController.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
-#include "Player/MassDspPlayerCharacter.h"
+#include "MassDspGameMode.h"
+#include "UI/MassDspItemGridUtils.h"
 
 void UMassDspInventoryWidget::NativeConstruct()
 {
@@ -22,8 +23,10 @@ void UMassDspInventoryWidget::NativeConstruct()
 
     if (TextBlock_Hint)
     {
-        TextBlock_Hint->SetText(FText::FromString(TEXT("I 关闭, F 可打开建筑面板做存取")));
+        TextBlock_Hint->SetText(FText::FromString(TEXT("I 关闭。建筑面板内会同时显示背包网格并支持点击转移")));
     }
+
+    MassDspItemGridUtils::CollectGridSlots(this, TEXT("InventorySlot"), GridSlotCount, TEXT("Inventory"), GridSlots);
 
     RefreshAccum = RefreshInterval;
 }
@@ -75,35 +78,9 @@ void UMassDspInventoryWidget::RefreshInventory()
     TArray<FInventoryEntryView> Entries;
     InventoryComponent->GetActiveEntries(Entries);
 
-    UTextBlock* ItemRows[12] = {
-        TextBlock_Item_0, TextBlock_Item_1, TextBlock_Item_2, TextBlock_Item_3,
-        TextBlock_Item_4, TextBlock_Item_5, TextBlock_Item_6, TextBlock_Item_7,
-        TextBlock_Item_8, TextBlock_Item_9, TextBlock_Item_10, TextBlock_Item_11,
-    };
-
-    const UEnum* ItemEnum = StaticEnum<EItemType>();
-    for (int32 Index = 0; Index < UE_ARRAY_COUNT(ItemRows); ++Index)
-    {
-        UTextBlock* Row = ItemRows[Index];
-        if (!Row) continue;
-
-        if (Entries.IsValidIndex(Index))
-        {
-            const FInventoryEntryView& Entry = Entries[Index];
-            const FText ItemName = ItemEnum
-                ? ItemEnum->GetDisplayNameTextByValue(static_cast<int64>(Entry.ItemType))
-                : FText::FromString(TEXT("Unknown"));
-            Row->SetText(FText::FromString(FString::Printf(TEXT("%s x %d"), *ItemName.ToString(), Entry.Quantity)));
-            Row->SetVisibility(ESlateVisibility::HitTestInvisible);
-        }
-        else
-        {
-            Row->SetText(Index == 0 && Entries.IsEmpty()
-                ? FText::FromString(TEXT("背包为空"))
-                : FText::FromString(TEXT("")));
-            Row->SetVisibility(ESlateVisibility::HitTestInvisible);
-        }
-    }
+    const AMassDspGameMode* GameMode = GetWorld() ? Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()) : nullptr;
+    const UGameConfigData* GameConfig = GameMode ? GameMode->GameConfig.Get() : nullptr;
+    MassDspItemGridUtils::ApplyGridEntries(GameConfig, GridSlots, Entries, false, FText::FromString(TEXT("背包为空")));
 }
 
 void UMassDspInventoryWidget::OnCloseButtonClicked()

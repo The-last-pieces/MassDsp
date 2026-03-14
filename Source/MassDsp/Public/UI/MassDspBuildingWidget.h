@@ -2,14 +2,17 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Inventory/MassDspItemInventory.h"
 #include "MassEntityTypes.h"
 #include "GameConst.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
+#include "UI/MassDspItemGridUtils.h"
 #include "MassDspBuildingWidget.generated.h"
 
 class UMassDspManager;
 class UGameConfigData;
+class UMassDspItemSlotButton;
 class UMassDspPlayerInventoryComponent;
 
 /**
@@ -46,6 +49,9 @@ public:
     int32 TryTakeItemsForPlayer(EItemType ItemType, int32 Quantity);
 
 protected:
+    static constexpr int32 PlayerGridSlotCount = 16;
+    static constexpr int32 BuildingGridSlotCount = 8;
+
     virtual void NativeConstruct() override;
     virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
@@ -73,6 +79,8 @@ protected:
 
     virtual EItemType GetSuggestedTransferItemType() const { return EItemType::None; }
 
+    virtual void CollectBuildingInventoryEntries(TArray<FInventoryEntryView>& OutEntries) const;
+
     //  数据 
 
     FMassEntityHandle TargetEntity;
@@ -94,61 +102,44 @@ protected:
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_Title;
 
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_TransferItem;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_TransferStatus;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UButton> Button_PrevTransferItem;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UButton> Button_NextTransferItem;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UButton> Button_StoreOne;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UButton> Button_TakeOne;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UButton> Button_StoreAll;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UButton> Button_TakeAll;
-
 private:
     float RefreshAccum = 0.f;
-    EItemType SelectedTransferItem = EItemType::None;
     FText LastTransferStatus;
 
     void RefreshTransferWidgets();
-    void ChangeTransferItem(int32 Direction);
-    void ExecuteStore(bool bStoreAll);
-    void ExecuteTake(bool bTakeAll);
-    void EnsureTransferItemSelected();
-    void BuildTransferSelectableItems(TArray<EItemType>& OutItems) const;
-    void AppendTransferCandidate(TArray<EItemType>& OutItems, EItemType ItemType) const;
+    FText BuildPlayerSummaryText() const;
+    FText BuildBuildingSummaryText() const;
+    void HandleTransferFromPlayerSlot(int32 SlotIndex);
+    void HandleTransferFromBuildingSlot(int32 SlotIndex);
 
     UFUNCTION()
     void OnCloseButtonClicked();
 
     UFUNCTION()
-    void OnPrevTransferItemClicked();
+    void OnItemSlotClicked(UMassDspItemSlotButton* ClickedButton);
 
-    UFUNCTION()
-    void OnNextTransferItemClicked();
+    TArray<FMassDspItemGridSlotRefs> PlayerGridSlots;
 
-    UFUNCTION()
-    void OnStoreOneClicked();
+    TArray<FMassDspItemGridSlotRefs> BuildingGridSlots;
 
-    UFUNCTION()
-    void OnTakeOneClicked();
+    UPROPERTY()
+    TArray<FInventoryEntryView> CachedPlayerEntries;
 
-    UFUNCTION()
-    void OnStoreAllClicked();
+    UPROPERTY()
+    TArray<FInventoryEntryView> CachedBuildingEntries;
 
-    UFUNCTION()
-    void OnTakeAllClicked();
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_TransferStatus;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_PlayerSummary;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_PlayerHint;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_BuildingSummary;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    TObjectPtr<UTextBlock> TextBlock_BuildingHint;
 };

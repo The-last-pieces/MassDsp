@@ -40,6 +40,7 @@
 #include "UI/MassDspLogisticsTowerWidget.h"
 #include "UI/MassDspHotbarWidget.h"
 #include "UI/MassDspInventoryWidget.h"
+#include "UI/MassDspItemSlotButton.h"
 #include "UI/MassDspSystemStatsWidget.h"
 
 // UMG Editor
@@ -57,6 +58,7 @@
 #include "Components/ProgressBar.h"
 #include "Components/Button.h"
 #include "Components/Border.h"
+#include "Components/Image.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Overlay.h"
@@ -378,6 +380,8 @@ namespace WidgetColors
     static constexpr FLinearColor CardBg{0.06f, 0.06f, 0.10f, 1.00f};
     // static const FLinearColor CardBorder{0.18f, 0.18f, 0.28f, 1.00f};
     static constexpr FLinearColor Divider{0.15f, 0.15f, 0.22f, 1.00f};
+    static constexpr FLinearColor PanelBg{0.08f, 0.10f, 0.15f, 1.00f};
+    static constexpr FLinearColor SlotEmpty{0.07f, 0.09f, 0.12f, 1.00f};
     // 文字
     static constexpr FLinearColor TextTitle{0.95f, 0.95f, 1.00f, 1.00f};
     static constexpr FLinearColor TextLabel{0.55f, 0.55f, 0.70f, 1.00f};
@@ -592,22 +596,129 @@ static void BuildLabelValue(FWidgetBuilder& B, FName LabelName, FName ValueName,
     B.Text(ValueName, DefaultValue, X, Y + LH + 2.f, W, VH, WidgetColors::TextValue, 14);
 }
 
-static void BuildTransferControls(FWidgetBuilder& B, float CardW, float StartY)
+static void BuildFullscreenOverlay(FWidgetBuilder& B)
 {
-    constexpr float IX = 20.f;
-    const float IW = CardW - 40.f;
+    UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
+    FSlateBrush Brush;
+    Brush.TintColor = FSlateColor(WidgetColors::Overlay);
+    Brush.DrawAs = ESlateBrushDrawType::Box;
+    Overlay->SetBrush(Brush);
+    UCanvasPanelSlot* Slot = B.Root->AddChildToCanvas(Overlay);
+    Slot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+    Slot->SetOffsets(FMargin(0.f));
+}
 
-    B.Rect(FName("Border_TransferSep"), 0.f, StartY, CardW, 1.f, WidgetColors::Divider);
-    B.Text(FName("Label_Transfer"), TEXT("玩家存取"), IX, StartY + 8.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
-    B.Text(FName("TextBlock_TransferItem"), TEXT("铁矿石"), IX, StartY + 32.f, IW - 96.f, 22.f, WidgetColors::TextValue, 14);
-    B.ActionButton(FName("Button_PrevTransferItem"), TEXT("<"), IX + IW - 84.f, StartY + 30.f, 36.f, 24.f);
-    B.ActionButton(FName("Button_NextTransferItem"), TEXT(">"), IX + IW - 40.f, StartY + 30.f, 36.f, 24.f);
+static UMassDspItemSlotButton* BuildItemSlot(FWidgetBuilder& B, const FString& Prefix, int32 Index, float X, float Y, float Size)
+{
+    const FString BaseName = FString::Printf(TEXT("%s_%d"), *Prefix, Index);
+    UMassDspItemSlotButton* Button = B.Tree->ConstructWidget<UMassDspItemSlotButton>(UMassDspItemSlotButton::StaticClass(), *FString::Printf(TEXT("Button_%s"), *BaseName));
 
-    B.ActionButton(FName("Button_StoreOne"), TEXT("存1"), IX, StartY + 66.f, 84.f, 28.f);
-    B.ActionButton(FName("Button_TakeOne"), TEXT("取1"), IX + 96.f, StartY + 66.f, 84.f, 28.f);
-    B.ActionButton(FName("Button_StoreAll"), TEXT("全存"), IX + 192.f, StartY + 66.f, 84.f, 28.f);
-    B.ActionButton(FName("Button_TakeAll"), TEXT("全取"), IX + 288.f, StartY + 66.f, 84.f, 28.f);
-    B.Text(FName("TextBlock_TransferStatus"), TEXT("背包持有: 0"), IX, StartY + 104.f, IW, 20.f, WidgetColors::TextLabel, 11);
+    FButtonStyle Style = Button->GetStyle();
+    auto MakeTransparentBrush = []()
+    {
+        FSlateBrush Brush;
+        Brush.TintColor = FSlateColor(FLinearColor(1.f, 1.f, 1.f, 0.f));
+        Brush.DrawAs = ESlateBrushDrawType::Box;
+        return Brush;
+    };
+    Style.Normal = MakeTransparentBrush();
+    Style.Hovered = MakeTransparentBrush();
+    Style.Pressed = MakeTransparentBrush();
+    Style.SetNormalPadding(FMargin(0.f));
+    Style.SetPressedPadding(FMargin(0.f));
+    Button->SetStyle(Style);
+
+    UOverlay* Overlay = B.Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), *FString::Printf(TEXT("Overlay_%s"), *BaseName));
+
+    UBorder* Background = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), *FString::Printf(TEXT("Border_%s"), *BaseName));
+    FSlateBrush BackgroundBrush;
+    BackgroundBrush.TintColor = FSlateColor(WidgetColors::SlotEmpty);
+    BackgroundBrush.DrawAs = ESlateBrushDrawType::Box;
+    Background->SetBrush(BackgroundBrush);
+    if (UOverlaySlot* BackgroundSlot = Overlay->AddChildToOverlay(Background))
+    {
+        BackgroundSlot->SetHorizontalAlignment(HAlign_Fill);
+        BackgroundSlot->SetVerticalAlignment(VAlign_Fill);
+    }
+
+    UImage* Icon = B.Tree->ConstructWidget<UImage>(UImage::StaticClass(), *FString::Printf(TEXT("Image_%s"), *BaseName));
+    Icon->SetVisibility(ESlateVisibility::Collapsed);
+    if (UOverlaySlot* IconSlot = Overlay->AddChildToOverlay(Icon))
+    {
+        IconSlot->SetPadding(FMargin(8.f));
+        IconSlot->SetHorizontalAlignment(HAlign_Fill);
+        IconSlot->SetVerticalAlignment(VAlign_Fill);
+    }
+
+    UTextBlock* Label = B.Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), *FString::Printf(TEXT("TextBlock_%s_Label"), *BaseName));
+    Label->SetText(FText::FromString(TEXT("空")));
+    Label->SetColorAndOpacity(FSlateColor(WidgetColors::TextValue));
+    Label->SetJustification(ETextJustify::Center);
+    Label->SetAutoWrapText(false);
+    {
+        FSlateFontInfo Font = Label->GetFont();
+        Font.Size = 12;
+        Font.TypefaceFontName = FName("Bold");
+        Label->SetFont(Font);
+    }
+    if (UOverlaySlot* LabelSlot = Overlay->AddChildToOverlay(Label))
+    {
+        LabelSlot->SetPadding(FMargin(6.f, 4.f, 6.f, 16.f));
+        LabelSlot->SetHorizontalAlignment(HAlign_Fill);
+        LabelSlot->SetVerticalAlignment(VAlign_Center);
+    }
+
+    UTextBlock* Quantity = B.Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), *FString::Printf(TEXT("TextBlock_%s_Quantity"), *BaseName));
+    Quantity->SetText(FText::FromString(TEXT("0")));
+    Quantity->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+    Quantity->SetJustification(ETextJustify::Right);
+    {
+        FSlateFontInfo Font = Quantity->GetFont();
+        Font.Size = 11;
+        Font.TypefaceFontName = FName("Bold");
+        Quantity->SetFont(Font);
+    }
+    if (UOverlaySlot* QuantitySlot = Overlay->AddChildToOverlay(Quantity))
+    {
+        QuantitySlot->SetPadding(FMargin(6.f, 0.f, 6.f, 4.f));
+        QuantitySlot->SetHorizontalAlignment(HAlign_Fill);
+        QuantitySlot->SetVerticalAlignment(VAlign_Bottom);
+    }
+
+    Button->SetContent(Overlay);
+    B.Place(Button, X, Y, Size, Size);
+    return Button;
+}
+
+static void BuildGridSection(FWidgetBuilder& B,
+                             const FString& Prefix,
+                             FName SummaryName,
+                             FName HintName,
+                             const FString& Title,
+                             const FString& DefaultSummary,
+                             const FString& DefaultHint,
+                             float X,
+                             float Y,
+                             float W,
+                             float H,
+                             int32 Columns,
+                             int32 Rows,
+                             float SlotSize,
+                             float Gap)
+{
+    B.Rect(*FString::Printf(TEXT("Border_%sPanel"), *Prefix), X, Y, W, H, WidgetColors::PanelBg);
+    B.Text(*FString::Printf(TEXT("TextBlock_%sTitle"), *Prefix), Title, X + 16.f, Y + 14.f, W - 32.f, 22.f, WidgetColors::TextTitle, 13, true);
+    B.Text(SummaryName, DefaultSummary, X + 16.f, Y + 40.f, W - 32.f, 20.f, WidgetColors::TextValue, 12);
+    B.Text(HintName, DefaultHint, X + 16.f, Y + 62.f, W - 32.f, 18.f, WidgetColors::TextLabel, 10);
+
+    const float GridStartX = X + 16.f;
+    const float GridStartY = Y + 94.f;
+    for (int32 Index = 0; Index < Columns * Rows; ++Index)
+    {
+        const int32 Col = Index % Columns;
+        const int32 Row = Index / Columns;
+        BuildItemSlot(B, Prefix, Index, GridStartX + Col * (SlotSize + Gap), GridStartY + Row * (SlotSize + Gap), SlotSize);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -616,7 +727,7 @@ static void BuildTransferControls(FWidgetBuilder& B, float CardW, float StartY)
 
 static void BuildMinerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 430.f;
+    constexpr float CW = 980.f, CH = 560.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -625,26 +736,18 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
     B.OX = -CW * 0.5f;
     B.OY = -CH * 0.5f;
 
-    // ── 全屏半透明背景
-    {
-        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
-        FSlateBrush Br;
-        Br.TintColor = FSlateColor(WidgetColors::Overlay);
-        Br.DrawAs = ESlateBrushDrawType::Box;
-        Overlay->SetBrush(Br);
-        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
-        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
-        S->SetOffsets(FMargin(0.f));
-    }
+    BuildFullscreenOverlay(B);
 
-    // ── 卡片背景
     B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
-
-    // ── 标题栏 + 分割线
     BuildCommonHeader(B, TEXT("矿机"), CW);
 
-    // ── 内容（X=20 左边距，Y 从 60 开始）
-    constexpr float IX = 20.f, IW = CW - 40.f;
+    BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
+        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+        20.f, 60.f, 320.f, 420.f, 4, 4, 68.f, 8.f);
+
+    B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 420.f, WidgetColors::Divider);
+
+    constexpr float IX = 376.f, IW = 580.f;
 
     BuildLabelValue(B,
                     FName("Label_ItemType"), FName("TextBlock_ItemType"),
@@ -669,7 +772,12 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
     B.Bar(FName("ProgressBar_Production"),
           IX, 224.f, IW, 20.f, WidgetColors::FillMiner);
 
-    BuildTransferControls(B, CW, 266.f);
+    B.Text(FName("TextBlock_TransferStatus"), TEXT("点击任意物品格子即可自动双向传输"),
+           IX, 260.f, IW, 20.f, WidgetColors::TextLabel, 11);
+
+    BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
+        TEXT("矿机缓存"), TEXT("矿机缓存 0 / 50"), TEXT("点击右侧格子取回背包"),
+        IX, 292.f, IW, 248.f, 4, 2, 72.f, 8.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -678,7 +786,7 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
 
 static void BuildStorageLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 386.f;
+    constexpr float CW = 980.f, CH = 540.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -687,22 +795,18 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
     B.OX = -CW * 0.5f;
     B.OY = -CH * 0.5f;
 
-    // 背景
-    {
-        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
-        FSlateBrush Br;
-        Br.TintColor = FSlateColor(WidgetColors::Overlay);
-        Br.DrawAs = ESlateBrushDrawType::Box;
-        Overlay->SetBrush(Br);
-        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
-        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
-        S->SetOffsets(FMargin(0.f));
-    }
+    BuildFullscreenOverlay(B);
 
     B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
     BuildCommonHeader(B, TEXT("仓库"), CW);
 
-    constexpr float IX = 20.f, IW = CW - 40.f;
+    BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
+        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+        20.f, 60.f, 320.f, 400.f, 4, 4, 68.f, 8.f);
+
+    B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 400.f, WidgetColors::Divider);
+
+    constexpr float IX = 376.f, IW = 580.f;
 
     BuildLabelValue(B,
                     FName("Label_ItemType"), FName("TextBlock_ItemType"),
@@ -719,7 +823,12 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
     B.Bar(FName("ProgressBar_Fill"),
           IX, 182.f, IW, 20.f, WidgetColors::FillStorage);
 
-    BuildTransferControls(B, CW, 224.f);
+    B.Text(FName("TextBlock_TransferStatus"), TEXT("点击任意物品格子即可自动双向传输"),
+           IX, 220.f, IW, 20.f, WidgetColors::TextLabel, 11);
+
+    BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
+        TEXT("仓库库存"), TEXT("建筑库存 0 / 50"), TEXT("点击右侧格子取回背包"),
+        IX, 252.f, IW, 248.f, 4, 2, 72.f, 8.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -728,7 +837,7 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
 
 static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 620.f;
+    constexpr float CW = 980.f, CH = 700.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -737,21 +846,18 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     B.OX = -CW * 0.5f;
     B.OY = -CH * 0.5f;
 
-    {
-        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
-        FSlateBrush Br;
-        Br.TintColor = FSlateColor(WidgetColors::Overlay);
-        Br.DrawAs = ESlateBrushDrawType::Box;
-        Overlay->SetBrush(Br);
-        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
-        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
-        S->SetOffsets(FMargin(0.f));
-    }
+    BuildFullscreenOverlay(B);
 
     B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
     BuildCommonHeader(B, TEXT("合成台"), CW);
 
-    constexpr float IX = 20.f, IW = CW - 40.f;
+    BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
+        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+        20.f, 60.f, 320.f, 560.f, 4, 4, 68.f, 8.f);
+
+    B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 560.f, WidgetColors::Divider);
+
+    constexpr float IX = 376.f, IW = 580.f;
 
     // 配方 + 进度
     BuildLabelValue(B,
@@ -773,7 +879,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
           IX, 152.f, IW, 20.f, WidgetColors::FillAssembler);
 
     // ── 输入区 ─────────────────────────────────────────────────────────────
-    B.Rect(FName("Border_InputSep"), 0.f, 186.f, CW, 1.f, WidgetColors::Divider);
+    B.Rect(FName("Border_InputSep"), IX, 186.f, IW, 1.f, WidgetColors::Divider);
     B.Text(FName("Label_Input"), TEXT("输入材料"),
            IX, 194.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
 
@@ -790,7 +896,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     }
 
     // ── 输出区 ─────────────────────────────────────────────────────────────
-    B.Rect(FName("Border_OutputSep"), 0.f, 302.f, CW, 1.f, WidgetColors::Divider);
+    B.Rect(FName("Border_OutputSep"), IX, 302.f, IW, 1.f, WidgetColors::Divider);
     B.Text(FName("Label_Output"), TEXT("输出产物"),
            IX, 310.f, IW, 18.f, WidgetColors::TextLabel, 11, true);
 
@@ -806,7 +912,12 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
                WidgetColors::TextValue, 12);
     }
 
-    BuildTransferControls(B, CW, 450.f);
+    B.Text(FName("TextBlock_TransferStatus"), TEXT("点击任意物品格子即可自动双向传输"),
+           IX, 430.f, IW, 20.f, WidgetColors::TextLabel, 11);
+
+    BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
+        TEXT("合成台缓存"), TEXT("输入/输出缓冲 0"), TEXT("点击右侧格子取回背包"),
+        IX, 462.f, IW, 218.f, 4, 2, 72.f, 8.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -815,7 +926,7 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
 
 static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 440.f, CH = 548.f;
+    constexpr float CW = 980.f, CH = 620.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -824,25 +935,18 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
     B.OX = -CW * 0.5f;
     B.OY = -CH * 0.5f;
 
-    // ── 全屏半透明背景 ──────────────────────────────────────────────────────
-    {
-        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
-        FSlateBrush Br;
-        Br.TintColor = FSlateColor(WidgetColors::Overlay);
-        Br.DrawAs = ESlateBrushDrawType::Box;
-        Overlay->SetBrush(Br);
-        UCanvasPanelSlot* S = B.Root->AddChildToCanvas(Overlay);
-        S->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
-        S->SetOffsets(FMargin(0.f));
-    }
+    BuildFullscreenOverlay(B);
 
-    // ── 卡片背景 ────────────────────────────────────────────────────────────
     B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
-
-    // ── 标题栏 + 分割线 ─────────────────────────────────────────────────────
     BuildCommonHeader(B, TEXT("物流塔"), CW);
 
-    constexpr float IX = 20.f, IW = CW - 40.f;
+    BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
+        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+        20.f, 60.f, 320.f, 480.f, 4, 4, 68.f, 8.f);
+
+    B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 480.f, WidgetColors::Divider);
+
+    constexpr float IX = 376.f, IW = 580.f;
 
     // ── 物品类型 ─────────────────────────────────────────────────────────────
     BuildLabelValue(B,
@@ -863,7 +967,7 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
           IX, 182.f, IW, 20.f, WidgetColors::FillLogistics);
 
     // ── 分割线 ───────────────────────────────────────────────────────────────
-    B.Rect(FName("Border_InfoSep"), 0.f, 216.f, CW, 1.f, WidgetColors::Divider);
+    B.Rect(FName("Border_InfoSep"), IX, 216.f, IW, 1.f, WidgetColors::Divider);
 
     // ── 运行模式 ───────────────────────────────────────────────────────────
     BuildLabelValue(B,
@@ -896,12 +1000,17 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
                     TEXT("来航"), TEXT("—"),
                     IX + IW * 0.5f, 334.f, IW * 0.5f);
 
-    BuildTransferControls(B, CW, 410.f);
+    B.Text(FName("TextBlock_TransferStatus"), TEXT("点击任意物品格子即可自动双向传输"),
+           IX, 404.f, IW, 20.f, WidgetColors::TextLabel, 11);
+
+    BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
+        TEXT("物流塔库存"), TEXT("建筑库存 0 / 50"), TEXT("点击右侧格子取回背包"),
+        IX, 436.f, IW, 164.f, 4, 2, 72.f, 8.f);
 }
 
 static void BuildInventoryLayout(UWidgetBlueprint* WBP)
 {
-    constexpr float CW = 420.f, CH = 460.f;
+    constexpr float CW = 520.f, CH = 540.f;
 
     FWidgetBuilder B;
     B.Tree = WBP->WidgetTree;
@@ -910,31 +1019,14 @@ static void BuildInventoryLayout(UWidgetBlueprint* WBP)
     B.OX = -CW * 0.5f;
     B.OY = -CH * 0.5f;
 
-    {
-        UBorder* Overlay = B.Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Border_Overlay"));
-        FSlateBrush Brush;
-        Brush.TintColor = FSlateColor(WidgetColors::Overlay);
-        Brush.DrawAs = ESlateBrushDrawType::Box;
-        Overlay->SetBrush(Brush);
-        UCanvasPanelSlot* Slot = B.Root->AddChildToCanvas(Overlay);
-        Slot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
-        Slot->SetOffsets(FMargin(0.f));
-    }
+    BuildFullscreenOverlay(B);
 
     B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
     BuildCommonHeader(B, TEXT("玩家背包"), CW);
 
-    constexpr float IX = 20.f, IW = CW - 40.f;
-    B.Text(FName("TextBlock_Capacity"), TEXT("容量: 0 / 200"), IX, 60.f, IW, 24.f, WidgetColors::TextValue, 14);
-    B.Text(FName("TextBlock_Hint"), TEXT("I 关闭, F 可打开建筑面板做存取"), IX, 88.f, IW, 18.f, WidgetColors::TextLabel, 11);
-    B.Rect(FName("Border_ItemsSep"), 0.f, 118.f, CW, 1.f, WidgetColors::Divider);
-
-    for (int32 Index = 0; Index < 12; ++Index)
-    {
-        B.Text(*FString::Printf(TEXT("TextBlock_Item_%d"), Index),
-               Index == 0 ? TEXT("背包为空") : TEXT(""),
-               IX, 132.f + Index * 24.f, IW, 20.f, WidgetColors::TextValue, 12);
-    }
+    BuildGridSection(B, TEXT("InventorySlot"), FName("TextBlock_Capacity"), FName("TextBlock_Hint"),
+        TEXT("网格背包"), TEXT("容量: 0 / 200"), TEXT("I 关闭。建筑面板内会同时显示背包网格并支持点击转移"),
+        20.f, 60.f, 480.f, 460.f, 4, 4, 82.f, 10.f);
 }
 
 static void BuildSystemStatsLayout(UWidgetBlueprint* WBP)
@@ -1156,11 +1248,11 @@ void FUMaterialGeneratorUtils::CreateBuildingWidgets()
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Hotbar"), TEXT("v2"), &ImpBuildHotbarWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v3"), &ImpBuildMinerWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v3"), &ImpBuildMakerWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v2"), &ImpBuildStorageWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v3"), &ImpBuildLogisticsTowerWidget);
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Inventory"), TEXT("v1"), &ImpBuildInventoryWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v5"), &ImpBuildMinerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v5"), &ImpBuildMakerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v4"), &ImpBuildStorageWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v5"), &ImpBuildLogisticsTowerWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Inventory"), TEXT("v3"), &ImpBuildInventoryWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_SystemStats"), TEXT("v2"), &ImpBuildSystemStatsWidget);
 }
 

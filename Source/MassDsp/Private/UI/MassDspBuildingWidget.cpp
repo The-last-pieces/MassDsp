@@ -10,6 +10,8 @@
 #include "MassEntitySubsystem.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
+#include "UI/MassDspItemGridUtils.h"
+#include "UI/MassDspItemSlotButton.h"
 
 // 
 //  生命周期
@@ -25,34 +27,25 @@ void UMassDspBuildingWidget::NativeConstruct()
         Button_Close->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnCloseButtonClicked);
     }
 
-    if (Button_PrevTransferItem && !Button_PrevTransferItem->OnClicked.IsBound())
+    MassDspItemGridUtils::CollectGridSlots(this, TEXT("PlayerSlot"), PlayerGridSlotCount, TEXT("Player"), PlayerGridSlots);
+    MassDspItemGridUtils::CollectGridSlots(this, TEXT("BuildingSlot"), BuildingGridSlotCount, TEXT("Building"), BuildingGridSlots);
+
+    for (const FMassDspItemGridSlotRefs& GridSlot : PlayerGridSlots)
     {
-        Button_PrevTransferItem->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnPrevTransferItemClicked);
+        if (GridSlot.Button)
+        {
+            GridSlot.Button->OnItemSlotClicked.RemoveAll(this);
+            GridSlot.Button->OnItemSlotClicked.AddDynamic(this, &UMassDspBuildingWidget::OnItemSlotClicked);
+        }
     }
 
-    if (Button_NextTransferItem && !Button_NextTransferItem->OnClicked.IsBound())
+    for (const FMassDspItemGridSlotRefs& GridSlot : BuildingGridSlots)
     {
-        Button_NextTransferItem->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnNextTransferItemClicked);
-    }
-
-    if (Button_StoreOne && !Button_StoreOne->OnClicked.IsBound())
-    {
-        Button_StoreOne->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnStoreOneClicked);
-    }
-
-    if (Button_TakeOne && !Button_TakeOne->OnClicked.IsBound())
-    {
-        Button_TakeOne->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnTakeOneClicked);
-    }
-
-    if (Button_StoreAll && !Button_StoreAll->OnClicked.IsBound())
-    {
-        Button_StoreAll->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnStoreAllClicked);
-    }
-
-    if (Button_TakeAll && !Button_TakeAll->OnClicked.IsBound())
-    {
-        Button_TakeAll->OnClicked.AddDynamic(this, &UMassDspBuildingWidget::OnTakeAllClicked);
+        if (GridSlot.Button)
+        {
+            GridSlot.Button->OnItemSlotClicked.RemoveAll(this);
+            GridSlot.Button->OnItemSlotClicked.AddDynamic(this, &UMassDspBuildingWidget::OnItemSlotClicked);
+        }
     }
 }
 
@@ -75,22 +68,23 @@ void UMassDspBuildingWidget::NativeTick(const FGeometry& MyGeometry, float InDel
 
 void UMassDspBuildingWidget::InitWidget(FMassEntityHandle InEntity, EBuildingType InBuildingType)
 {
-    TargetEntity  = InEntity;
-    BuildingType  = InBuildingType;
+    TargetEntity = InEntity;
+    BuildingType = InBuildingType;
 
     // 写入标题（若蓝图放置了 TextBlock_Title）
     if (TextBlock_Title)
     {
         const UEnum* Enum = StaticEnum<EBuildingType>();
         FText Title = Enum
-            ? Enum->GetDisplayNameTextByValue(static_cast<int64>(BuildingType))
-            : FText::FromString(TEXT("Building"));
+                          ? Enum->GetDisplayNameTextByValue(static_cast<int64>(BuildingType))
+                          : FText::FromString(TEXT("Building"));
         TextBlock_Title->SetText(Title);
     }
 
     // 立即刷新一次，避免第一帧空白
     RefreshAccum = RefreshInterval;
-    EnsureTransferItemSelected();
+    RefreshWidgets();
+    RefreshTransferWidgets();
 }
 
 void UMassDspBuildingWidget::CloseWidget()
@@ -125,16 +119,16 @@ FText UMassDspBuildingWidget::GetItemTypeDisplayName(EItemType ItemType)
 {
     const UEnum* Enum = StaticEnum<EItemType>();
     return Enum
-        ? Enum->GetDisplayNameTextByValue(static_cast<int64>(ItemType))
-        : FText::FromString(TEXT("Unknown"));
+               ? Enum->GetDisplayNameTextByValue(static_cast<int64>(ItemType))
+               : FText::FromString(TEXT("Unknown"));
 }
 
 FText UMassDspBuildingWidget::GetRecipeTypeDisplayName(ERecipeType RecipeType)
 {
     const UEnum* Enum = StaticEnum<ERecipeType>();
     return Enum
-        ? Enum->GetDisplayNameTextByValue(static_cast<int64>(RecipeType))
-        : FText::FromString(TEXT("None"));
+               ? Enum->GetDisplayNameTextByValue(static_cast<int64>(RecipeType))
+               : FText::FromString(TEXT("None"));
 }
 
 UMassDspManager* UMassDspBuildingWidget::GetDspManager() const
@@ -156,19 +150,9 @@ UMassDspPlayerInventoryComponent* UMassDspBuildingWidget::GetPlayerInventory() c
     return Pawn ? Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>() : nullptr;
 }
 
-void UMassDspBuildingWidget::BuildTransferSelectableItems(TArray<EItemType>& OutItems) const
+void UMassDspBuildingWidget::CollectBuildingInventoryEntries(TArray<FInventoryEntryView>& OutEntries) const
 {
-    OutItems.Reset();
-
-    if (const UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventory())
-    {
-        TArray<EItemType> ActiveItems;
-        Inventory->GetActiveItems(ActiveItems);
-        for (EItemType ItemType : ActiveItems)
-        {
-            AppendTransferCandidate(OutItems, ItemType);
-        }
-    }
+    OutEntries.Reset();
 
     if (!TargetEntity.IsValid()) return;
 
@@ -178,149 +162,191 @@ void UMassDspBuildingWidget::BuildTransferSelectableItems(TArray<EItemType>& Out
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
     if (!EntityManager.IsEntityValid(TargetEntity)) return;
 
+    auto AppendEntry = [&OutEntries](EItemType ItemType, int32 Quantity)
+    {
+        if (ItemType == EItemType::None || Quantity <= 0) return;
+
+        for (FInventoryEntryView& Entry : OutEntries)
+        {
+            if (Entry.ItemType == ItemType)
+            {
+                Entry.Quantity += Quantity;
+                return;
+            }
+        }
+
+        FInventoryEntryView Entry;
+        Entry.ItemType = ItemType;
+        Entry.Quantity = Quantity;
+        OutEntries.Add(Entry);
+    };
+
     if (const FMassDspMinerFragment* Miner = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(TargetEntity))
     {
-        if (Miner->InventoryCount > 0)
-        {
-            AppendTransferCandidate(OutItems, Miner->StoredItemType);
-        }
+        AppendEntry(Miner->StoredItemType, Miner->InventoryCount);
     }
 
     if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(TargetEntity))
     {
-        if (Storage->InventoryCount > 0)
-        {
-            AppendTransferCandidate(OutItems, Storage->StoredItemType);
-        }
+        AppendEntry(Storage->StoredItemType, Storage->InventoryCount);
     }
 
     if (const FMassDspAssemblerFragment* Assembler = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(TargetEntity))
     {
         for (const FBufferEntry& Entry : Assembler->InputBuffers)
         {
-            if (Entry.Amount > 0)
-            {
-                AppendTransferCandidate(OutItems, Entry.ItemType);
-            }
+            AppendEntry(Entry.ItemType, Entry.Amount);
         }
 
         for (const FBufferEntry& Entry : Assembler->OutputBuffers)
         {
-            if (Entry.Amount > 0)
-            {
-                AppendTransferCandidate(OutItems, Entry.ItemType);
-            }
+            AppendEntry(Entry.ItemType, Entry.Amount);
         }
     }
-}
-
-void UMassDspBuildingWidget::AppendTransferCandidate(TArray<EItemType>& OutItems, EItemType ItemType) const
-{
-    if (ItemType == EItemType::None) return;
-    if (OutItems.Contains(ItemType)) return;
-    OutItems.Add(ItemType);
-}
-
-void UMassDspBuildingWidget::EnsureTransferItemSelected()
-{
-    TArray<EItemType> Items;
-    BuildTransferSelectableItems(Items);
-    if (Items.IsEmpty())
-    {
-        SelectedTransferItem = EItemType::None;
-        return;
-    }
-
-    if (Items.Contains(SelectedTransferItem)) return;
-
-    const EItemType Suggested = GetSuggestedTransferItemType();
-    if (Suggested != EItemType::None && Items.Contains(Suggested))
-    {
-        SelectedTransferItem = Suggested;
-        return;
-    }
-
-    if (const UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventory())
-    {
-        TArray<EItemType> ActiveItems;
-        Inventory->GetActiveItems(ActiveItems);
-        for (EItemType ItemType : ActiveItems)
-        {
-            if (Items.Contains(ItemType))
-            {
-                SelectedTransferItem = ItemType;
-                return;
-            }
-        }
-    }
-
-    SelectedTransferItem = Items[0];
 }
 
 void UMassDspBuildingWidget::RefreshTransferWidgets()
 {
-    EnsureTransferItemSelected();
-
-    if (TextBlock_TransferItem)
+    CachedPlayerEntries.Reset();
+    if (const UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventory())
     {
-        TextBlock_TransferItem->SetText(SelectedTransferItem != EItemType::None
-            ? GetItemTypeDisplayName(SelectedTransferItem)
-            : FText::FromString(TEXT("无可存取物品")));
+        Inventory->GetActiveEntries(CachedPlayerEntries);
+    }
+
+    CollectBuildingInventoryEntries(CachedBuildingEntries);
+
+    if (TextBlock_PlayerSummary)
+    {
+        TextBlock_PlayerSummary->SetText(BuildPlayerSummaryText());
+    }
+
+    if (TextBlock_PlayerHint)
+    {
+        TextBlock_PlayerHint->SetText(FText::FromString(TEXT("点击左侧格子，将整组物品存入建筑")));
+    }
+
+    if (TextBlock_BuildingSummary)
+    {
+        TextBlock_BuildingSummary->SetText(BuildBuildingSummaryText());
+    }
+
+    if (TextBlock_BuildingHint)
+    {
+        TextBlock_BuildingHint->SetText(FText::FromString(TEXT("点击右侧格子，将整组物品取回背包")));
     }
 
     if (TextBlock_TransferStatus)
     {
-        const UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventory();
-        const int32 Count = Inventory ? Inventory->GetItemCount(SelectedTransferItem) : 0;
-        const FString Prefix = FString::Printf(TEXT("背包持有: %d"), Count);
         TextBlock_TransferStatus->SetText(LastTransferStatus.IsEmpty()
-            ? FText::FromString(Prefix)
-            : FText::FromString(Prefix + TEXT(" | ") + LastTransferStatus.ToString()));
+                                              ? FText::FromString(TEXT("点击任意物品格子即可自动双向传输"))
+                                              : LastTransferStatus);
     }
+
+    const UGameConfigData* GameConfig = GetGameConfig();
+    MassDspItemGridUtils::ApplyGridEntries(GameConfig, PlayerGridSlots, CachedPlayerEntries, true, FText::FromString(TEXT("背包为空")));
+    MassDspItemGridUtils::ApplyGridEntries(GameConfig, BuildingGridSlots, CachedBuildingEntries, true, FText::FromString(TEXT("建筑为空")));
 }
 
-void UMassDspBuildingWidget::ChangeTransferItem(int32 Direction)
+FText UMassDspBuildingWidget::BuildPlayerSummaryText() const
 {
-    TArray<EItemType> Items;
-    BuildTransferSelectableItems(Items);
-    if (Items.IsEmpty()) return;
+    const UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventory();
+    if (!Inventory)
+    {
+        return FText::FromString(TEXT("背包未连接"));
+    }
 
-    EnsureTransferItemSelected();
-    int32 CurrentIndex = Items.Find(SelectedTransferItem);
-    if (CurrentIndex == INDEX_NONE) CurrentIndex = 0;
-
-    const int32 NextIndex = (CurrentIndex + Direction + Items.Num()) % Items.Num();
-    SelectedTransferItem = Items[NextIndex];
-    LastTransferStatus = FText();
-    RefreshTransferWidgets();
+    return FText::Format(NSLOCTEXT("MassDsp", "PlayerInventorySummary", "背包 {0} / {1}"),
+                         FText::AsNumber(Inventory->GetTotalItemCount()),
+                         FText::AsNumber(Inventory->GetCapacity()));
 }
 
-void UMassDspBuildingWidget::ExecuteStore(bool bStoreAll)
+FText UMassDspBuildingWidget::BuildBuildingSummaryText() const
 {
-    EnsureTransferItemSelected();
-    if (SelectedTransferItem == EItemType::None) return;
+    if (!TargetEntity.IsValid())
+    {
+        return FText::FromString(TEXT("建筑未连接"));
+    }
 
-    const int32 Quantity = bStoreAll ? MAX_int32 : 1;
-    const int32 Stored = TryStoreItemsFromPlayer(SelectedTransferItem, Quantity);
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return FText::FromString(TEXT("建筑状态不可用"));
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    if (!EntityManager.IsEntityValid(TargetEntity))
+    {
+        return FText::FromString(TEXT("建筑实体失效"));
+    }
+
+    if (const FMassDspMinerFragment* Miner = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(TargetEntity))
+    {
+        return FText::Format(NSLOCTEXT("MassDsp", "MinerGridSummary", "矿机缓存 {0} / {1}"),
+                             FText::AsNumber(Miner->InventoryCount),
+                             FText::AsNumber(Miner->MaxInventory));
+    }
+
+    if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(TargetEntity))
+    {
+        return FText::Format(NSLOCTEXT("MassDsp", "StorageGridSummary", "建筑库存 {0} / {1}"),
+                             FText::AsNumber(Storage->InventoryCount),
+                             FText::AsNumber(Storage->MaxInventory));
+    }
+
+    if (EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(TargetEntity))
+    {
+        int32 TotalBuffered = 0;
+        for (const FInventoryEntryView& Entry : CachedBuildingEntries)
+        {
+            TotalBuffered += Entry.Quantity;
+        }
+        return FText::Format(NSLOCTEXT("MassDsp", "AssemblerGridSummary", "输入/输出缓冲 {0}"),
+                             FText::AsNumber(TotalBuffered));
+    }
+
+    return FText::FromString(TEXT("可交互库存"));
+}
+
+void UMassDspBuildingWidget::HandleTransferFromPlayerSlot(int32 SlotIndex)
+{
+    if (!CachedPlayerEntries.IsValidIndex(SlotIndex)) return;
+
+    const FInventoryEntryView& Entry = CachedPlayerEntries[SlotIndex];
+    const int32 Stored = TryStoreItemsFromPlayer(Entry.ItemType, Entry.Quantity);
     LastTransferStatus = Stored > 0
-        ? FText::FromString(FString::Printf(TEXT("已存入 %d"), Stored))
-        : FText::FromString(TEXT("存入失败"));
+                             ? FText::Format(NSLOCTEXT("MassDsp", "StoreStatus", "已存入 {0} x {1}"), GetItemTypeDisplayName(Entry.ItemType), FText::AsNumber(Stored))
+                             : FText::Format(NSLOCTEXT("MassDsp", "StoreFailedStatus", "{0} 无法存入当前建筑"), GetItemTypeDisplayName(Entry.ItemType));
+
     RefreshWidgets();
     RefreshTransferWidgets();
 }
 
-void UMassDspBuildingWidget::ExecuteTake(bool bTakeAll)
+void UMassDspBuildingWidget::HandleTransferFromBuildingSlot(int32 SlotIndex)
 {
-    EnsureTransferItemSelected();
-    if (SelectedTransferItem == EItemType::None) return;
+    if (!CachedBuildingEntries.IsValidIndex(SlotIndex)) return;
 
-    const int32 Quantity = bTakeAll ? MAX_int32 : 1;
-    const int32 Taken = TryTakeItemsForPlayer(SelectedTransferItem, Quantity);
+    const FInventoryEntryView& Entry = CachedBuildingEntries[SlotIndex];
+    const int32 Taken = TryTakeItemsForPlayer(Entry.ItemType, Entry.Quantity);
     LastTransferStatus = Taken > 0
-        ? FText::FromString(FString::Printf(TEXT("已取出 %d"), Taken))
-        : FText::FromString(TEXT("取出失败"));
+                             ? FText::Format(NSLOCTEXT("MassDsp", "TakeStatus", "已取出 {0} x {1}"), GetItemTypeDisplayName(Entry.ItemType), FText::AsNumber(Taken))
+                             : FText::Format(NSLOCTEXT("MassDsp", "TakeFailedStatus", "{0} 无法取回背包"), GetItemTypeDisplayName(Entry.ItemType));
+
     RefreshWidgets();
     RefreshTransferWidgets();
+}
+
+void UMassDspBuildingWidget::OnItemSlotClicked(UMassDspItemSlotButton* ClickedButton)
+{
+    if (!ClickedButton) return;
+
+    if (ClickedButton->SlotGroup == TEXT("Player"))
+    {
+        HandleTransferFromPlayerSlot(ClickedButton->SlotIndex);
+    }
+    else if (ClickedButton->SlotGroup == TEXT("Building"))
+    {
+        HandleTransferFromBuildingSlot(ClickedButton->SlotIndex);
+    }
 }
 
 // 
@@ -330,34 +356,4 @@ void UMassDspBuildingWidget::ExecuteTake(bool bTakeAll)
 void UMassDspBuildingWidget::OnCloseButtonClicked()
 {
     CloseWidget();
-}
-
-void UMassDspBuildingWidget::OnPrevTransferItemClicked()
-{
-    ChangeTransferItem(-1);
-}
-
-void UMassDspBuildingWidget::OnNextTransferItemClicked()
-{
-    ChangeTransferItem(1);
-}
-
-void UMassDspBuildingWidget::OnStoreOneClicked()
-{
-    ExecuteStore(false);
-}
-
-void UMassDspBuildingWidget::OnTakeOneClicked()
-{
-    ExecuteTake(false);
-}
-
-void UMassDspBuildingWidget::OnStoreAllClicked()
-{
-    ExecuteStore(true);
-}
-
-void UMassDspBuildingWidget::OnTakeAllClicked()
-{
-    ExecuteTake(true);
 }

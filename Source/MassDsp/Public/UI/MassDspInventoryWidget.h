@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "UI/MassDspItemGridUtils.h"
 
 #include "MassDspInventoryWidget.generated.h"
 
@@ -22,6 +23,8 @@ protected:
     virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
+    static constexpr int32 GridSlotCount = 16;
+
     void RefreshInventory();
     UMassDspPlayerInventoryComponent* GetInventoryComponent() const;
 
@@ -43,18 +46,7 @@ private:
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> TextBlock_Hint;
 
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_0;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_1;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_2;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_3;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_4;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_5;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_6;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_7;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_8;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_9;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_10;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_Item_11;
+    TArray<FMassDspItemGridSlotRefs> GridSlots;
 
     float RefreshAccum = 0.f;
 };
