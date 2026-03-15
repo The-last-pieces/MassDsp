@@ -15,6 +15,22 @@
 #include "InputCoreTypes.h"
 #include "Engine/Canvas.h"
 
+namespace
+{
+    struct FSaveDebugExpiryMinHeapOrder
+    {
+        bool operator()(const FSaveDebugExpiryEntry& A, const FSaveDebugExpiryEntry& B) const
+        {
+            if (!FMath::IsNearlyEqual(A.ExpireAtSeconds, B.ExpireAtSeconds))
+            {
+                return A.ExpireAtSeconds < B.ExpireAtSeconds;
+            }
+
+            return A.Sequence < B.Sequence;
+        }
+    };
+}
+
 AMassDspHUD::AMassDspHUD()
 {
     PrimaryActorTick.bCanEverTick = true;
@@ -82,6 +98,8 @@ void AMassDspHUD::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
 
+    TickSaveDebugMessages();
+
     if (InventoryWidget && !InventoryWidget->IsInViewport())
     {
         InventoryWidget = nullptr;
@@ -139,8 +157,8 @@ void AMassDspHUD::HandleQuickSaveKey()
     if (!GameInstance->SaveGameToSlotAsync(UMassDspGameInstance::DebugQuickSaveSlotName, 0))
     {
         const FString Message = GameInstance->IsSaveLoadRequestInFlight()
-            ? FString::Printf(TEXT("[SaveDebug] F5 QuickSave rejected: %s in progress"), *GameInstance->GetActiveSaveLoadOperationName())
-            : FString::Printf(TEXT("[SaveDebug] F5 QuickSave failed to start: %s"), UMassDspGameInstance::DebugQuickSaveSlotName);
+                                    ? FString::Printf(TEXT("[SaveDebug] F5 QuickSave rejected: %s in progress"), *GameInstance->GetActiveSaveLoadOperationName())
+                                    : FString::Printf(TEXT("[SaveDebug] F5 QuickSave failed to start: %s"), UMassDspGameInstance::DebugQuickSaveSlotName);
         UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
         ShowSaveDebugMessage(Message, FColor::Red);
         return;
@@ -176,8 +194,8 @@ void AMassDspHUD::HandleQuickLoadKey()
     if (!GameInstance->LoadGameFromSlotAsync(UMassDspGameInstance::DebugQuickSaveSlotName, 0))
     {
         const FString Message = GameInstance->IsSaveLoadRequestInFlight()
-            ? FString::Printf(TEXT("[SaveDebug] F9 QuickLoad rejected: %s in progress"), *GameInstance->GetActiveSaveLoadOperationName())
-            : FString::Printf(TEXT("[SaveDebug] F9 QuickLoad failed to start: %s"), UMassDspGameInstance::DebugQuickSaveSlotName);
+                                    ? FString::Printf(TEXT("[SaveDebug] F9 QuickLoad rejected: %s in progress"), *GameInstance->GetActiveSaveLoadOperationName())
+                                    : FString::Printf(TEXT("[SaveDebug] F9 QuickLoad failed to start: %s"), UMassDspGameInstance::DebugQuickSaveSlotName);
         UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
         ShowSaveDebugMessage(Message, FColor::Red);
         return;
@@ -373,11 +391,127 @@ void AMassDspHUD::ToggleTechTreeWidget()
     PC->bShowMouseCursor = true;
 }
 
-void AMassDspHUD::ShowSaveDebugMessage(const FString& Message, const FColor& Color) const
+void AMassDspHUD::ShowSaveDebugMessage(const FString& Message, const FColor& Color, float DurationSeconds)
 {
-    if (GEngine)
+    const UWorld* World = GetWorld();
+    if (!World)
     {
-        GEngine->AddOnScreenDebugMessage(INDEX_NONE, 3.0f, Color, Message);
+        return;
+    }
+
+    const double NowSeconds = World->GetTimeSeconds();
+
+    FSaveDebugMessageEntry& Entry = SaveDebugMessagesById.Add(NextSaveDebugMessageId);
+    Entry.MessageId = NextSaveDebugMessageId;
+    Entry.Sequence = NextSaveDebugSequence++;
+    Entry.Message = Message;
+    Entry.Color = Color;
+    Entry.ExpireAtSeconds = NowSeconds + FMath::Max(0.0f, DurationSeconds);
+
+    SaveDebugMessageOrder.PushFirst(NextSaveDebugMessageId);
+
+    FSaveDebugExpiryEntry ExpiryEntry;
+    ExpiryEntry.MessageId = NextSaveDebugMessageId;
+    ExpiryEntry.Sequence = Entry.Sequence;
+    ExpiryEntry.ExpireAtSeconds = Entry.ExpireAtSeconds;
+    SaveDebugExpiryHeap.HeapPush(ExpiryEntry, FSaveDebugExpiryMinHeapOrder());
+
+    ++NextSaveDebugMessageId;
+}
+
+void AMassDspHUD::TickSaveDebugMessages()
+{
+    const UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    const double NowSeconds = World->GetTimeSeconds();
+
+    while (!SaveDebugExpiryHeap.IsEmpty())
+    {
+        const FSaveDebugExpiryEntry& Top = SaveDebugExpiryHeap.HeapTop();
+        if (Top.ExpireAtSeconds > NowSeconds)
+        {
+            break;
+        }
+
+        FSaveDebugExpiryEntry ExpiredEntry;
+        SaveDebugExpiryHeap.HeapPop(ExpiredEntry, FSaveDebugExpiryMinHeapOrder());
+
+        if (const FSaveDebugMessageEntry* ActiveEntry = SaveDebugMessagesById.Find(ExpiredEntry.MessageId))
+        {
+            if (ActiveEntry->Sequence == ExpiredEntry.Sequence)
+            {
+                SaveDebugMessagesById.Remove(ExpiredEntry.MessageId);
+                bSaveDebugOrderDirty = true;
+            }
+        }
+    }
+
+    if (bSaveDebugOrderDirty)
+    {
+        CompactSaveDebugMessageOrder();
+    }
+}
+
+void AMassDspHUD::CompactSaveDebugMessageOrder()
+{
+    const int32 MessageCount = SaveDebugMessageOrder.Num();
+    for (int32 Index = 0; Index < MessageCount; ++Index)
+    {
+        const int32 MessageId = SaveDebugMessageOrder.First();
+        SaveDebugMessageOrder.PopFirst();
+
+        if (SaveDebugMessagesById.Contains(MessageId))
+        {
+            SaveDebugMessageOrder.PushLast(MessageId);
+        }
+    }
+
+    bSaveDebugOrderDirty = false;
+}
+
+void AMassDspHUD::DrawSaveDebugMessages()
+{
+    if (!Canvas || !GEngine || !GEngine->GetSmallFont() || SaveDebugMessageOrder.IsEmpty())
+    {
+        return;
+    }
+
+    constexpr float StartX = 18.f;
+    constexpr float StartY = 54.f;
+    constexpr float VerticalSpacing = 8.f;
+    constexpr float PaddingX = 12.f;
+    constexpr float PaddingY = 7.f;
+    constexpr float Scale = 1.0f;
+
+    float CurrentY = StartY;
+    for (const int32 MessageId : SaveDebugMessageOrder)
+    {
+        const FSaveDebugMessageEntry* Entry = SaveDebugMessagesById.Find(MessageId);
+        if (!Entry)
+        {
+            continue;
+        }
+
+        float TextW = 0.f;
+        float TextH = 0.f;
+        GetTextSize(Entry->Message, TextW, TextH, GEngine->GetSmallFont(), Scale);
+
+        FCanvasTileItem Background(
+            FVector2D(StartX - PaddingX, CurrentY - PaddingY),
+            FVector2D(TextW + PaddingX * 2.f, TextH + PaddingY * 2.f),
+            FLinearColor(0.03f, 0.04f, 0.06f, 0.76f));
+        Background.BlendMode = SE_BLEND_Translucent;
+        Canvas->DrawItem(Background);
+
+        const FLinearColor MessageColor = FLinearColor(Entry->Color);
+        DrawText(Entry->Message, FLinearColor::Black, StartX + 1.f, CurrentY + 1.f, GEngine->GetSmallFont(), Scale);
+        DrawText(Entry->Message, MessageColor, StartX, CurrentY, GEngine->GetSmallFont(), Scale);
+
+        CurrentY += TextH + PaddingY * 2.f + VerticalSpacing;
     }
 }
 
@@ -483,6 +617,9 @@ void AMassDspHUD::DrawHUD()
 
     // ── 常驻 FPS（左上角） ──
     DrawPersistentFps();
+
+    // ── Save / Load 调试消息（Shipping 可用） ──
+    DrawSaveDebugMessages();
 
     // ── 建造模式提示 ──
     DrawBuildSystemHint();

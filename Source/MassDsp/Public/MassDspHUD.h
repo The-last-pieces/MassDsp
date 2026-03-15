@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Deque.h"
 #include "GameFramework/HUD.h"
 #include "UI/MassDspHotbarWidget.h"
 #include "MassDspHUD.generated.h"
@@ -9,6 +10,22 @@ struct FMassDspAsyncSaveLoadResult;
 class UMassDspInventoryWidget;
 class UMassDspSystemStatsWidget;
 class UMassDspTechTreeWidget;
+
+struct FSaveDebugMessageEntry
+{
+    int32 MessageId = INDEX_NONE;
+    int64 Sequence = 0;
+    FString Message;
+    FColor Color = FColor::White;
+    double ExpireAtSeconds = 0.0;
+};
+
+struct FSaveDebugExpiryEntry
+{
+    int32 MessageId = INDEX_NONE;
+    int64 Sequence = 0;
+    double ExpireAtSeconds = 0.0;
+};
 
 UCLASS()
 class MASSDSP_API AMassDspHUD : public AHUD
@@ -74,7 +91,10 @@ private:
     void ToggleInventoryWidget();
     void ToggleSystemStatsWidget();
     void ToggleTechTreeWidget();
-    void ShowSaveDebugMessage(const FString& Message, const FColor& Color) const;
+    void ShowSaveDebugMessage(const FString& Message, const FColor& Color, float DurationSeconds = 5.0f);
+    void TickSaveDebugMessages();
+    void CompactSaveDebugMessageOrder();
+    void DrawSaveDebugMessages();
 
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
     void DrawPersistentFps();
@@ -84,4 +104,12 @@ private:
     void DrawBeltSnapIndicator();
     void DrawInteractionHint();
     bool GetScreenCenterWorldRay(FVector& OutOrigin, FVector& OutDirection) const;
+
+private:
+    TMap<int32, FSaveDebugMessageEntry> SaveDebugMessagesById;
+    TDeque<int32> SaveDebugMessageOrder;
+    TArray<FSaveDebugExpiryEntry> SaveDebugExpiryHeap;
+    int32 NextSaveDebugMessageId = 1;
+    int64 NextSaveDebugSequence = 1;
+    bool bSaveDebugOrderDirty = false;
 };
