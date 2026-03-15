@@ -1,6 +1,7 @@
 ﻿#include "MassDspHUD.h"
 
 #include "Engine/Engine.h"
+#include "MassDspGameInstance.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
 #include "Subsystems/MassDspDebugStatsSubsystem.h"
@@ -63,8 +64,10 @@ void AMassDspHUD::BeginPlay()
     InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnScrollUp);
     InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::OnScrollDown);
     InputComponent->BindKey(EKeys::F, IE_Pressed, this, &AMassDspHUD::HandleInteractKey);
-    InputComponent->BindKey(EKeys::I, IE_Pressed, this, &AMassDspHUD::ToggleInventoryWidget);
-    InputComponent->BindKey(EKeys::F3, IE_Pressed, this, &AMassDspHUD::ToggleSystemStatsWidget);
+    InputComponent->BindKey(EKeys::B, IE_Pressed, this, &AMassDspHUD::ToggleInventoryWidget);
+    InputComponent->BindKey(EKeys::P, IE_Pressed, this, &AMassDspHUD::ToggleSystemStatsWidget);
+    InputComponent->BindKey(EKeys::O, IE_Pressed, this, &AMassDspHUD::HandleQuickSaveKey);
+    InputComponent->BindKey(EKeys::L, IE_Pressed, this, &AMassDspHUD::HandleQuickLoadKey);
     InputComponent->BindKey(EKeys::T, IE_Pressed, this, &AMassDspHUD::ToggleTechTreeWidget);
 }
 
@@ -114,6 +117,76 @@ void AMassDspHUD::HandleInteractKey()
     {
         HotbarWidget->OnInteractKey();
     }
+}
+
+void AMassDspHUD::HandleQuickSaveKey()
+{
+    UMassDspGameInstance* GameInstance = GetGameInstance<UMassDspGameInstance>();
+    if (!GameInstance)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[SaveDebug] QuickSave failed: GameInstance is null"));
+        ShowSaveDebugMessage(TEXT("[SaveDebug] QuickSave failed: GameInstance is null"), FColor::Red);
+        return;
+    }
+
+    const double StartSeconds = FPlatformTime::Seconds();
+    const bool bSucceeded = GameInstance->SaveGameToSlot(UMassDspGameInstance::DebugQuickSaveSlotName, 0);
+    const double ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
+    const FString Message = FString::Printf(
+        TEXT("[SaveDebug] F5 QuickSave %s: %s (%.2f ms)"),
+        bSucceeded ? TEXT("ok") : TEXT("failed"),
+        UMassDspGameInstance::DebugQuickSaveSlotName,
+        ElapsedMs);
+
+    if (bSucceeded)
+    {
+        UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
+    }
+    ShowSaveDebugMessage(Message, bSucceeded ? FColor::Green : FColor::Red);
+}
+
+void AMassDspHUD::HandleQuickLoadKey()
+{
+    UMassDspGameInstance* GameInstance = GetGameInstance<UMassDspGameInstance>();
+    if (!GameInstance)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[SaveDebug] QuickLoad failed: GameInstance is null"));
+        ShowSaveDebugMessage(TEXT("[SaveDebug] QuickLoad failed: GameInstance is null"), FColor::Red);
+        return;
+    }
+
+    if (!GameInstance->DoesSaveExist(UMassDspGameInstance::DebugQuickSaveSlotName, 0))
+    {
+        const FString Message = FString::Printf(
+            TEXT("[SaveDebug] F9 QuickLoad skipped: slot not found (%s)"),
+            UMassDspGameInstance::DebugQuickSaveSlotName);
+        UE_LOG(LogTemp, Warning, TEXT("%s"), *Message);
+        ShowSaveDebugMessage(Message, FColor::Yellow);
+        return;
+    }
+
+    const double StartSeconds = FPlatformTime::Seconds();
+    const bool bSucceeded = GameInstance->LoadGameFromSlot(UMassDspGameInstance::DebugQuickSaveSlotName, 0);
+    const double ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
+    const FString Message = FString::Printf(
+        TEXT("[SaveDebug] F9 QuickLoad %s: %s (%.2f ms)"),
+        bSucceeded ? TEXT("ok") : TEXT("failed"),
+        UMassDspGameInstance::DebugQuickSaveSlotName,
+        ElapsedMs);
+
+    if (bSucceeded)
+    {
+        UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
+    }
+    ShowSaveDebugMessage(Message, bSucceeded ? FColor::Green : FColor::Red);
 }
 
 void AMassDspHUD::ToggleInventoryWidget()
@@ -257,6 +330,14 @@ void AMassDspHUD::ToggleTechTreeWidget()
     UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
     PC->SetInputMode(UIMode);
     PC->bShowMouseCursor = true;
+}
+
+void AMassDspHUD::ShowSaveDebugMessage(const FString& Message, const FColor& Color) const
+{
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(INDEX_NONE, 3.0f, Color, Message);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

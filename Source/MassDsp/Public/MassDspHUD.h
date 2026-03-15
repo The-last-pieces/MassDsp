@@ -66,9 +66,12 @@ public:
 
 private:
     void HandleInteractKey();
+    void HandleQuickSaveKey();
+    void HandleQuickLoadKey();
     void ToggleInventoryWidget();
     void ToggleSystemStatsWidget();
     void ToggleTechTreeWidget();
+    void ShowSaveDebugMessage(const FString& Message, const FColor& Color) const;
 
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
     void DrawPersistentFps();

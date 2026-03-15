@@ -13,6 +13,8 @@ class MASSDSP_API UMassDspGameInstance : public UGameInstance
     GENERATED_BODY()
 
 public:
+    static constexpr TCHAR DebugQuickSaveSlotName[] = TEXT("QuickSave_Debug");
+
     virtual void Init() override;
 
     UFUNCTION(BlueprintCallable, Category = "MassDsp|Save")
