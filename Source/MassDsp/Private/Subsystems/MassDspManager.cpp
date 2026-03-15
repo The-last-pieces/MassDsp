@@ -605,9 +605,7 @@ FBeltHandle UMassDspManager::CreateRuntimeBelt(const FBeltRebuildData& RebuildDa
     if (BeltType != EBeltType::None)
     {
         const FIntPoint ChunkKey = GetChunkKey(Traj.RepresentativePosition);
-        FBeltChunk& Chunk = BeltChunks.FindOrAdd(ChunkKey);
-        Chunk.BeltTrajectoryIndices.Add(Index);
-        Chunk.bMeshDirty = true;
+        BeltData.RenderId = RegisterBeltRenderState(NewHandle, ChunkKey);
     }
 
     return NewHandle;
@@ -1769,29 +1767,13 @@ bool UMassDspManager::DestroyBeltInternal(FBeltHandle BeltHandle, TSet<FIntPoint
         }
     }
 
+    FIntPoint RemovedChunkKey = FIntPoint::ZeroValue;
+    bool bHasRemovedChunkKey = false;
     if (BeltTrajectories.IsValidIndex(BeltHandle.Index))
     {
-        const FIntPoint ChunkKey = GetChunkKey(BeltTrajectories[BeltHandle.Index].RepresentativePosition);
-        OutAffectedChunkKeys.Add(ChunkKey);
-        if (FBeltChunk* Chunk = BeltChunks.Find(ChunkKey))
-        {
-            Chunk->BeltTrajectoryIndices.Remove(BeltHandle.Index);
-            if (Chunk->BeltTrajectoryIndices.IsEmpty())
-            {
-                ReleaseChunkPMC(*Chunk);
-                BeltChunks.Remove(ChunkKey);
-            }
-            else
-            {
-                Chunk->bMeshDirty = true;
-            }
-
-            if (PendingFlushSet.Remove(ChunkKey) > 0)
-            {
-                PendingFlushQueue.Remove(ChunkKey);
-            }
-        }
-
+        RemovedChunkKey = GetChunkKey(BeltTrajectories[BeltHandle.Index].RepresentativePosition);
+        bHasRemovedChunkKey = true;
+        OutAffectedChunkKeys.Add(RemovedChunkKey);
         BeltTrajectories.RemoveAt(BeltHandle.Index);
     }
 
@@ -1801,7 +1783,25 @@ bool UMassDspManager::DestroyBeltInternal(FBeltHandle BeltHandle, TSet<FIntPoint
     }
 
     BeltData->ItemCache.Empty();
+    if (BeltData->RenderId != INDEX_NONE)
+    {
+        UnregisterBeltRenderState(BeltData->RenderId);
+        BeltData->RenderId = INDEX_NONE;
+
+        if (bHasRemovedChunkKey)
+        {
+            if (FBeltChunk* Chunk = BeltChunks.Find(RemovedChunkKey); Chunk && Chunk->RenderIds.IsEmpty())
+            {
+                BeltChunks.Remove(RemovedChunkKey);
+            }
+        }
+    }
     BeltEntityRegistry.Remove(BeltHandle);
+
+    if (bHasRemovedChunkKey && PendingFlushSet.Remove(RemovedChunkKey) > 0)
+    {
+        PendingFlushQueue.Remove(RemovedChunkKey);
+    }
 
     return true;
 }
@@ -1809,14 +1809,6 @@ bool UMassDspManager::DestroyBeltInternal(FBeltHandle BeltHandle, TSet<FIntPoint
 void UMassDspManager::FinalizeBeltMutations(const TSet<FIntPoint>& AffectedChunkKeys)
 {
     CachedTransformsByType.Reset();
-    for (auto& [ItemType, ISM] : ItemISMPool)
-    {
-        if (ISM && ISM->GetInstanceCount() > 0)
-        {
-            ISM->ClearInstances();
-            ISM->MarkRenderStateDirty();
-        }
-    }
 
     RebuildBeltSoA();
 
@@ -1824,8 +1816,10 @@ void UMassDspManager::FinalizeBeltMutations(const TSet<FIntPoint>& AffectedChunk
     {
         if (FBeltChunk* Chunk = BeltChunks.Find(ChunkKey))
         {
-            Chunk->bMeshDirty = true;
-            FlushChunk(ChunkKey, *Chunk, FVector::ZeroVector);
+            if (Chunk->bMeshDirty)
+            {
+                FlushChunk(ChunkKey, *Chunk, FVector::ZeroVector);
+            }
         }
     }
 }
@@ -2073,22 +2067,11 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
 
     for (auto& [ChunkKey, Chunk] : BeltChunks)
     {
-        if (!Chunk.PMC)
-        {
-            continue;
-        }
-
-        Chunk.PMC->ClearAllMeshSections();
-        if (FreePMCPool.Num() < MaxFreePMCPoolSize)
-        {
-            FreePMCPool.Add(Chunk.PMC);
-        }
-        else
-        {
-            Chunk.PMC->DestroyComponent();
-        }
-        Chunk.PMC = nullptr;
+        ReleaseChunkPMCComponent(Chunk.PMC);
         Chunk.CurrentMeshLOD = -1;
+        Chunk.RenderIds.Reset();
+        Chunk.FreeSectionIndices.Reset();
+        Chunk.NextSectionIndex = 0;
         Chunk.bMeshDirty = false;
     }
 
@@ -2099,6 +2082,8 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
     BeltEntityRegistry.Reset();
     BeltTrajectories.Empty();
     BeltRebuildData.Empty();
+    BeltRenderRegistry.Reset();
+    NextBeltRenderId = 1;
     Belt_TotalMove.Reset();
     Belt_Speed.Reset();
     Belt_Ptrs.Reset();
@@ -2212,12 +2197,31 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
 
 void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FVector& CameraPos)
 {
-    Chunk.BeltTrajectoryIndices.RemoveAll([this](int32 TrajIdx)
+    TArray<int32> StaleRenderIds;
+    for (const int32 RenderId : Chunk.RenderIds)
     {
-        return !BeltTrajectories.IsValidIndex(TrajIdx) || !BeltRebuildData.IsValidIndex(TrajIdx);
-    });
+        const FBeltRenderState* RenderState = BeltRenderRegistry.Find(RenderId);
+        if (!RenderState)
+        {
+            StaleRenderIds.Add(RenderId);
+            continue;
+        }
 
-    if (Chunk.BeltTrajectoryIndices.IsEmpty())
+        const FBeltHandle BeltHandle = RenderState->BeltHandle;
+        if (!BeltEntityRegistry.Contains(BeltHandle)
+            || !BeltTrajectories.IsValidIndex(BeltHandle.Index)
+            || !BeltRebuildData.IsValidIndex(BeltHandle.Index))
+        {
+            StaleRenderIds.Add(RenderId);
+        }
+    }
+
+    for (const int32 RenderId : StaleRenderIds)
+    {
+        UnregisterBeltRenderState(RenderId);
+    }
+
+    if (Chunk.RenderIds.IsEmpty())
     {
         ReleaseChunkPMC(Chunk);
         return;
@@ -2235,17 +2239,7 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
     // 视距之外：清空网格，归还 PMC 到对象池
     if (bUseCameraLOD && ChunkDist > LUTUnloadDistance + LUTLoadHysteresis)
     {
-        if (Chunk.PMC)
-        {
-            Chunk.PMC->ClearAllMeshSections();
-            if (FreePMCPool.Num() < MaxFreePMCPoolSize)
-                FreePMCPool.Add(Chunk.PMC);
-            else
-                Chunk.PMC->DestroyComponent();
-            Chunk.PMC = nullptr;
-            Chunk.CurrentMeshLOD = -1;
-        }
-        Chunk.bMeshDirty = false;
+        ReleaseChunkPMC(Chunk);
         return;
     }
 
@@ -2254,34 +2248,26 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
     // LOD 无变化且网格未标脏 → 不重建
     if (!Chunk.bMeshDirty && Chunk.CurrentMeshLOD == TargetLOD) return;
 
-    // --- 从对象池取用 PMC（池空时才新建，避免频繁 RegisterComponent 开销）---
-    if (!Chunk.PMC)
-    {
-        if (FreePMCPool.Num() > 0)
-        {
-            Chunk.PMC = FreePMCPool.Pop(EAllowShrinking::No);
-        }
-        else
-        {
-            const FString PMCName = FString::Printf(TEXT("BeltChunkPMC_%d_%d"), ChunkKey.X, ChunkKey.Y);
-            Chunk.PMC = NewObject<UProceduralMeshComponent>(BeltsContainerActor, *PMCName);
-            Chunk.PMC->SetupAttachment(BeltsContainerActor->GetRootComponent());
-            Chunk.PMC->SetVisibility(true);
-            Chunk.PMC->SetCastShadow(false);
-            Chunk.PMC->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-            Chunk.PMC->SetCullDistance(MaxRenderDistance * 2.f);
-            Chunk.PMC->RegisterComponent();
-        }
-    }
-
     // --- 按 LOD 对应参数重建本 Chunk 内所有传送带的网格 ---
     const float AngleThresh = BeltLODAngleThresholds[TargetLOD];
     const float MaxSegLen = BeltLODMaxSegLengths[TargetLOD];
 
-    TMap<EBeltType, FMergedBeltMeshData> ChunkMeshData;
-
-    for (const int32 TrajIdx : Chunk.BeltTrajectoryIndices)
+    struct FChunkSectionBuildData
     {
+        int32 RenderId = INDEX_NONE;
+        EBeltType BeltType = EBeltType::None;
+        FMergedBeltMeshData MeshData;
+    };
+
+    TArray<FChunkSectionBuildData> SectionBuildData;
+    SectionBuildData.Reserve(Chunk.RenderIds.Num());
+
+    for (const int32 RenderId : Chunk.RenderIds)
+    {
+        const FBeltRenderState* RenderState = BeltRenderRegistry.Find(RenderId);
+        if (!RenderState) continue;
+
+        const int32 TrajIdx = RenderState->BeltHandle.Index;
         if (!BeltTrajectories.IsValidIndex(TrajIdx)) continue;
         if (!BeltRebuildData.IsValidIndex(TrajIdx)) continue;
 
@@ -2297,20 +2283,49 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
             BuildBeltSplineFromPoints(SharedSplineHelper, RD.HermiteData.A, RD.HermiteData.B,
                                       RD.HermiteData.C, RD.HermiteData.D);
 
-        GenerateConveyorMesh(ChunkMeshData.FindOrAdd(RD.BeltType), SharedSplineHelper,
+        FChunkSectionBuildData& BuildData = SectionBuildData.AddDefaulted_GetRef();
+    BuildData.RenderId = RenderId;
+        BuildData.BeltType = RD.BeltType;
+        GenerateConveyorMesh(BuildData.MeshData, SharedSplineHelper,
                              C_Width, C_BeltThickness, C_UVScale, AngleThresh, MaxSegLen);
     }
 
-    // --- 提交到 PMC（每 BeltType 一个 Section）---
-    TryGetGameMode();
-    Chunk.PMC->ClearAllMeshSections();
-    Chunk.PMC->MarkRenderStateDirty();
-    for (auto& [BeltType, MeshData] : ChunkMeshData)
+    if (SectionBuildData.IsEmpty())
     {
+        ReleaseChunkPMC(Chunk);
+        return;
+    }
+
+    TryGetGameMode();
+
+    if (!Chunk.PMC)
+    {
+        Chunk.PMC = AcquireChunkPMC(ChunkKey, TEXT("Front"), true);
+    }
+
+    UProceduralMeshComponent* BuildPMC = Chunk.PMC;
+    if (!BuildPMC)
+    {
+        return;
+    }
+
+    TSet<int32> ActiveRenderIds;
+    ActiveRenderIds.Reserve(SectionBuildData.Num());
+
+    int32 LiveSectionCount = 0;
+    for (FChunkSectionBuildData& BuildData : SectionBuildData)
+    {
+        ActiveRenderIds.Add(BuildData.RenderId);
+
+        const EBeltType BeltType = BuildData.BeltType;
+        FMergedBeltMeshData& MeshData = BuildData.MeshData;
         if (MeshData.Vertices.IsEmpty()) continue;
 
-        const int32 SectionIdx = static_cast<int32>(BeltType);
-        Chunk.PMC->CreateMeshSection_LinearColor(
+        FBeltRenderState* RenderState = BeltRenderRegistry.Find(BuildData.RenderId);
+        if (!RenderState) continue;
+
+        const int32 SectionIdx = EnsureBeltRenderSectionIndex(*RenderState, Chunk);
+        BuildPMC->CreateMeshSection_LinearColor(
             SectionIdx,
             MeshData.Vertices,
             MeshData.Triangles,
@@ -2326,7 +2341,6 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
             {
                 if (Config->Material)
                 {
-                    // 按 BeltType 缓存 MID：同种传送带所有 Chunk 共享同一实例，避免每次 FlushChunk 泄漏新 MID
                     UMaterialInstanceDynamic* DynMat = nullptr;
                     if (UMaterialInstanceDynamic** Cached = BeltMIDCache.Find(BeltType))
                     {
@@ -2339,18 +2353,47 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
                         DynMat->SetScalarParameterValue(TEXT("Speed"), Config->Speed / C_UVScale);
                         BeltMIDCache.Add(BeltType, DynMat);
                     }
-                    Chunk.PMC->SetMaterial(SectionIdx, DynMat);
+                    BuildPMC->SetMaterial(SectionIdx, DynMat);
                 }
             }
         }
+
+        ++LiveSectionCount;
     }
 
-    if (ChunkMeshData.IsEmpty())
+    TArray<int32> InactiveRenderIds;
+    for (const int32 RenderId : Chunk.RenderIds)
+    {
+        if (!ActiveRenderIds.Contains(RenderId))
+        {
+            InactiveRenderIds.Add(RenderId);
+        }
+    }
+
+    for (const int32 RenderId : InactiveRenderIds)
+    {
+        if (FBeltRenderState* RenderState = BeltRenderRegistry.Find(RenderId))
+        {
+            ClearBeltRenderSection(*RenderState, Chunk);
+        }
+        UnregisterBeltRenderState(RenderId);
+    }
+
+    if (Chunk.RenderIds.IsEmpty())
     {
         ReleaseChunkPMC(Chunk);
         return;
     }
 
+    if (LiveSectionCount == 0)
+    {
+        ReleaseChunkPMC(Chunk);
+        return;
+    }
+
+    BuildPMC->SetVisibility(true);
+    BuildPMC->SetHiddenInGame(false);
+    BuildPMC->MarkRenderStateDirty();
     Chunk.CurrentMeshLOD = TargetLOD;
     Chunk.bMeshDirty = false;
 }
@@ -2466,9 +2509,21 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
         float Dist;
     };
     TArray<FDirtyEntry> NewEntries;
+    TArray<FIntPoint> EmptyChunkKeys;
 
     for (auto& [ChunkKey, Chunk] : BeltChunks)
     {
+        if (Chunk.RenderIds.IsEmpty())
+        {
+            ReleaseChunkPMC(Chunk);
+            if (PendingFlushSet.Remove(ChunkKey))
+            {
+                PendingFlushQueue.Remove(ChunkKey);
+            }
+            EmptyChunkKeys.Add(ChunkKey);
+            continue;
+        }
+
         const FVector ChunkCenter(
             (static_cast<float>(ChunkKey.X) + 0.5f) * SpatialGridCellSize,
             (static_cast<float>(ChunkKey.Y) + 0.5f) * SpatialGridCellSize,
@@ -2480,16 +2535,7 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
         if (Dist > LUTUnloadDistance + LUTLoadHysteresis)
         {
             // 超出卸载距离：归还 PMC 到对象池，从待刷新队列中移除
-            if (Chunk.PMC)
-            {
-                Chunk.PMC->ClearAllMeshSections();
-                if (FreePMCPool.Num() < MaxFreePMCPoolSize)
-                    FreePMCPool.Add(Chunk.PMC);
-                else
-                    Chunk.PMC->DestroyComponent();
-                Chunk.PMC = nullptr;
-                Chunk.CurrentMeshLOD = -1;
-            }
+            ReleaseChunkPMC(Chunk);
             // 移出队列（如果已入队），远距离 Chunk 不应占用刷新时间片
             if (PendingFlushSet.Remove(ChunkKey))
                 PendingFlushQueue.Remove(ChunkKey);
@@ -2513,6 +2559,12 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
         PendingFlushSet.Add(E.Key);
         PendingFlushQueue.Add(E.Key);
     }
+
+    for (const FIntPoint& EmptyChunkKey : EmptyChunkKeys)
+    {
+        BeltChunks.Remove(EmptyChunkKey);
+    }
+
     // 不在此处立即 Flush：由调用方每帧调 TickBeltMeshFlush 分帧处理
 }
 
@@ -3159,28 +3211,146 @@ bool UMassDspManager::FindNearestBuildingSlot(
     return bFound;
 }
 
-void UMassDspManager::ReleaseChunkPMC(FBeltChunk& Chunk)
+UProceduralMeshComponent* UMassDspManager::AcquireChunkPMC(const FIntPoint& ChunkKey, const TCHAR* NameSuffix, bool bVisible)
 {
-    if (!Chunk.PMC)
+    if (!BeltsContainerActor)
     {
-        Chunk.CurrentMeshLOD = -1;
-        Chunk.bMeshDirty = false;
-        return;
+        return nullptr;
     }
 
-    Chunk.PMC->ClearAllMeshSections();
-    Chunk.PMC->MarkRenderStateDirty();
-    if (FreePMCPool.Num() < MaxFreePMCPoolSize)
+    UProceduralMeshComponent* PMC = nullptr;
+    if (FreePMCPool.Num() > 0)
     {
-        FreePMCPool.Add(Chunk.PMC);
+        PMC = FreePMCPool.Pop(EAllowShrinking::No);
     }
     else
     {
-        Chunk.PMC->DestroyComponent();
+        const FString PMCName = FString::Printf(TEXT("BeltChunkPMC_%d_%d_%s"), ChunkKey.X, ChunkKey.Y, NameSuffix);
+        PMC = NewObject<UProceduralMeshComponent>(BeltsContainerActor, *PMCName);
+        PMC->SetupAttachment(BeltsContainerActor->GetRootComponent());
+        PMC->SetCastShadow(false);
+        PMC->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        PMC->SetCullDistance(MaxRenderDistance * 2.f);
+        PMC->RegisterComponent();
     }
 
-    Chunk.PMC = nullptr;
+    PMC->ClearAllMeshSections();
+    PMC->SetVisibility(bVisible);
+    PMC->SetHiddenInGame(!bVisible);
+    PMC->MarkRenderStateDirty();
+    return PMC;
+}
+
+int32 UMassDspManager::RegisterBeltRenderState(FBeltHandle BeltHandle, const FIntPoint& ChunkKey)
+{
+    const int32 RenderId = NextBeltRenderId++;
+
+    FBeltRenderState& RenderState = BeltRenderRegistry.Add(RenderId);
+    RenderState.BeltHandle = BeltHandle;
+    RenderState.ChunkKey = ChunkKey;
+    RenderState.SectionIndex = INDEX_NONE;
+
+    FBeltChunk& Chunk = BeltChunks.FindOrAdd(ChunkKey);
+    Chunk.RenderIds.Add(RenderId);
+    Chunk.bMeshDirty = true;
+
+    return RenderId;
+}
+
+void UMassDspManager::UnregisterBeltRenderState(int32 RenderId)
+{
+    FBeltRenderState RenderState;
+    if (!BeltRenderRegistry.RemoveAndCopyValue(RenderId, RenderState))
+    {
+        return;
+    }
+
+    if (FBeltChunk* Chunk = BeltChunks.Find(RenderState.ChunkKey))
+    {
+        ClearBeltRenderSection(RenderState, *Chunk);
+
+        if (RenderState.SectionIndex != INDEX_NONE)
+        {
+            Chunk->FreeSectionIndices.Add(RenderState.SectionIndex);
+        }
+
+        Chunk->RenderIds.Remove(RenderId);
+        if (Chunk->RenderIds.IsEmpty())
+        {
+            ReleaseChunkPMC(*Chunk);
+        }
+    }
+}
+
+int32 UMassDspManager::EnsureBeltRenderSectionIndex(FBeltRenderState& RenderState, FBeltChunk& Chunk)
+{
+    if (RenderState.SectionIndex != INDEX_NONE)
+    {
+        return RenderState.SectionIndex;
+    }
+
+    if (!Chunk.FreeSectionIndices.IsEmpty())
+    {
+        RenderState.SectionIndex = Chunk.FreeSectionIndices.Pop(EAllowShrinking::No);
+    }
+    else
+    {
+        RenderState.SectionIndex = Chunk.NextSectionIndex++;
+    }
+
+    return RenderState.SectionIndex;
+}
+
+void UMassDspManager::ClearBeltRenderSection(const FBeltRenderState& RenderState, FBeltChunk& Chunk)
+{
+    if (RenderState.SectionIndex == INDEX_NONE)
+    {
+        return;
+    }
+
+    if (Chunk.PMC)
+    {
+        Chunk.PMC->ClearMeshSection(RenderState.SectionIndex);
+        Chunk.PMC->MarkRenderStateDirty();
+    }
+}
+
+void UMassDspManager::ReleaseChunkPMCComponent(UProceduralMeshComponent*& PMC)
+{
+    if (!PMC)
+    {
+        return;
+    }
+
+    PMC->ClearAllMeshSections();
+    PMC->MarkRenderStateDirty();
+    PMC->SetVisibility(false);
+    PMC->SetHiddenInGame(true);
+    if (FreePMCPool.Num() < MaxFreePMCPoolSize)
+    {
+        FreePMCPool.Add(PMC);
+    }
+    else
+    {
+        PMC->DestroyComponent();
+    }
+
+    PMC = nullptr;
+}
+
+void UMassDspManager::ReleaseChunkPMC(FBeltChunk& Chunk)
+{
+    ReleaseChunkPMCComponent(Chunk.PMC);
     Chunk.CurrentMeshLOD = -1;
+    Chunk.FreeSectionIndices.Reset();
+    Chunk.NextSectionIndex = 0;
+    for (const int32 RenderId : Chunk.RenderIds)
+    {
+        if (FBeltRenderState* RenderState = BeltRenderRegistry.Find(RenderId))
+        {
+            RenderState->SectionIndex = INDEX_NONE;
+        }
+    }
     Chunk.bMeshDirty = false;
 }
 

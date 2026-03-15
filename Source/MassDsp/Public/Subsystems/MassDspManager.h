@@ -194,7 +194,15 @@ protected:
     AActor* BeltsContainerActor;
 
 private:
+    struct FBeltChunk;
+    struct FBeltRenderState;
     TWeakObjectPtr<AMassDspGameMode> TryGetGameMode();
+    UProceduralMeshComponent* AcquireChunkPMC(const FIntPoint& ChunkKey, const TCHAR* NameSuffix, bool bVisible);
+    void ReleaseChunkPMCComponent(UProceduralMeshComponent*& PMC);
+    int32 RegisterBeltRenderState(FBeltHandle BeltHandle, const FIntPoint& ChunkKey);
+    void UnregisterBeltRenderState(int32 RenderId);
+    int32 EnsureBeltRenderSectionIndex(FBeltRenderState& RenderState, FBeltChunk& Chunk);
+    void ClearBeltRenderSection(const FBeltRenderState& RenderState, FBeltChunk& Chunk);
 
     // ── 传送带网格分块（Chunk）管理 ──────────────────────────────────────────────
     // 以 SpatialGridCellSize 为格子边长将世界划分为块，每块独立 PMC。
@@ -203,11 +211,22 @@ private:
     {
         // 注意：PMC 附加到 BeltsContainerActor 并 RegisterComponent，GC 由 Actor 持有。
         UProceduralMeshComponent* PMC = nullptr;
-        TArray<int32> BeltTrajectoryIndices; ///< 属于此 chunk 的 BeltTrajectories 稀疏数组下标
+        TArray<int32> RenderIds; ///< 属于此 chunk 的 belt render id
+        TArray<int32> FreeSectionIndices;
         bool  bMeshDirty   = false; ///< 标记需要重建网格
         int32 CurrentMeshLOD = -1;  ///< 当前 PMC 已生成的 LOD 等级（-1 = 无几何）
+        int32 NextSectionIndex = 0;
     };
     TMap<FIntPoint, FBeltChunk> BeltChunks;
+
+    struct FBeltRenderState
+    {
+        FBeltHandle BeltHandle;
+        FIntPoint ChunkKey = FIntPoint::ZeroValue;
+        int32 SectionIndex = INDEX_NONE;
+    };
+    TMap<int32, FBeltRenderState> BeltRenderRegistry;
+    int32 NextBeltRenderId = 1;
 
     // PMC 对象池：Chunk 离开视距时归还，进入视距时优先复用，上限防止池子无限膨胀
     static constexpr int32 MaxFreePMCPoolSize = 64;

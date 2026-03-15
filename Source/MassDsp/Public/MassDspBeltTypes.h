@@ -28,6 +28,7 @@ struct MASSDSP_API FBeltData
     FMassEntityHandle EndBuildingEntity;
     int32 StartSlotIndex = INDEX_NONE;
     int32 EndSlotIndex = INDEX_NONE;
+    int32 RenderId = INDEX_NONE;
 
     // TODO 考虑特化数据结构,弃用Deque
     // 物品缓存：[0] = 出口端(Tail)，[Last] = 入口端(Front)
