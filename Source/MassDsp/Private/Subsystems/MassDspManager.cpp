@@ -22,9 +22,11 @@
 #include "MassLODFragments.h"
 
 #include "ProceduralMeshComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Components/SplineComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Save/MassDspSaveData.h"
@@ -82,6 +84,31 @@ namespace
             return InvComp;
         }
         return nullptr;
+    }
+
+    bool TryGetCurrentViewLocation(UWorld* World, FVector& OutViewLocation)
+    {
+        if (!World)
+        {
+            return false;
+        }
+
+        if (APlayerController* PC = World->GetFirstPlayerController())
+        {
+            if (APlayerCameraManager* CameraManager = PC->PlayerCameraManager)
+            {
+                OutViewLocation = CameraManager->GetCameraLocation();
+                return true;
+            }
+
+            if (APawn* Pawn = PC->GetPawn())
+            {
+                OutViewLocation = Pawn->GetActorLocation();
+                return true;
+            }
+        }
+
+        return false;
     }
 
     struct FBeltEndpointSaveRef
@@ -2192,6 +2219,18 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
     }
 
     RebuildBeltSoA();
+
+    FVector ViewLocation = FVector::ZeroVector;
+    if (TryGetCurrentViewLocation(GetWorld(), ViewLocation))
+    {
+        UpdateBeltLODs(ViewLocation);
+        UpdateBeltChunkVisibility(ViewLocation);
+        FlushBeltMesh(ViewLocation);
+        PendingFlushQueue.Reset();
+        PendingFlushSet.Reset();
+        LodAccum = 0.f;
+    }
+
     return true;
 }
 
