@@ -540,6 +540,7 @@ void AMassDspHUD::UpdateCameraMovement(float DeltaSeconds)
     const bool bS = PC->IsInputKeyDown(EKeys::S);
     const bool bA = PC->IsInputKeyDown(EKeys::A);
     const bool bD = PC->IsInputKeyDown(EKeys::D);
+    const bool bShiftBoost = PC->IsInputKeyDown(EKeys::LeftShift) || PC->IsInputKeyDown(EKeys::RightShift);
 
     if (!bW && !bS && !bA && !bD) return;
 
@@ -558,11 +559,12 @@ void AMassDspHUD::UpdateCameraMovement(float DeltaSeconds)
 
     if (MoveDir.IsNearlyZero()) return;
 
-    MoveDir.Z = 0.f; // 确保只在水平面移动
+    // MoveDir.Z = 0.f; // 确保只在水平面移动
     MoveDir.Normalize();
 
     // 直接偏移 Pawn（绕过 MovementComponent，不与蓝图默认移动绑定叠加）
-    Pawn->AddActorWorldOffset(MoveDir * CurrentCameraSpeed * DeltaSeconds, false);
+    const float EffectiveMoveSpeed = bShiftBoost ? CurrentCameraSpeed * CameraShiftSpeedMultiplier : CurrentCameraSpeed;
+    Pawn->AddActorWorldOffset(MoveDir * EffectiveMoveSpeed * DeltaSeconds, false);
 }
 
 float AMassDspHUD::GetCameraHeight() const

@@ -75,6 +75,7 @@ public:
     float CameraMinSpeed = 300.f;
     float CameraMaxSpeed = 100000.f;
     float CameraSpeedSmoothRate = 8.f;
+    float CameraShiftSpeedMultiplier = 10.f;
     bool bUseSurfaceTraceForHeight = true;
     float CurrentCameraSpeed = 500.f;
 
