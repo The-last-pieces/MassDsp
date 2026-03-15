@@ -50,3 +50,19 @@ void UMassDspPlayerInventoryComponent::GetActiveItems(TArray<EItemType>& OutItem
 {
     Inventory.GetActiveItems(OutItems);
 }
+
+void UMassDspPlayerInventoryComponent::RestoreInventorySnapshot(int32 InMaxInventoryItems, const TArray<FInventoryEntryView>& Entries)
+{
+    MaxInventoryItems = FMath::Max(0, InMaxInventoryItems);
+    Inventory.Initialize(MaxInventoryItems);
+
+    for (const FInventoryEntryView& Entry : Entries)
+    {
+        if (Entry.ItemType == EItemType::None || Entry.Quantity <= 0)
+        {
+            continue;
+        }
+
+        Inventory.TryAddItem(Entry.ItemType, Entry.Quantity);
+    }
+}

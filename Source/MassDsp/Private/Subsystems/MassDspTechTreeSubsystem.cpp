@@ -40,6 +40,13 @@ void UMassDspTechTreeSubsystem::Deinitialize()
     Super::Deinitialize();
 }
 
+void UMassDspTechTreeSubsystem::RestorePlayerTechState(const FMassDspPlayerTechState& InState)
+{
+    PlayerTechState = InState;
+    RebuildCaches();
+    TechTreeChangedEvent.Broadcast();
+}
+
 bool UMassDspTechTreeSubsystem::IsNodeUnlocked(ETechNodeId NodeId) const
 {
     return NodeId == ETechNodeId::None || PlayerTechState.UnlockedNodes.Contains(NodeId);

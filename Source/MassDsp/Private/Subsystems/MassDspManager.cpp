@@ -27,6 +27,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Save/MassDspSaveData.h"
 #include "Subsystems/MassDspTechTreeSubsystem.h"
 
 namespace
@@ -1173,6 +1174,236 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
     UE_LOG(LogTemp, Log, TEXT("BatchSpawnBuildings: Created %d / %d building entities"), SuccessCount, SpawnDataList.Num());
 
     return CreatedEntities;
+}
+
+void UMassDspManager::CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& OutSaveData) const
+{
+    OutSaveData.Reset();
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+    for (const FMassEntityHandle Entity : SpawnedBuildingEntities)
+    {
+        if (!EntityManager.IsEntityValid(Entity))
+        {
+            continue;
+        }
+
+        const EBuildingType* BuildingTypePtr = BuildingEntityTypeRegistry.Find(Entity);
+        const FTransformFragment* TransformFragment = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
+        if (!BuildingTypePtr || !TransformFragment)
+        {
+            continue;
+        }
+
+        FMassDspBuildingSaveData SaveData;
+        SaveData.BuildingType = *BuildingTypePtr;
+        SaveData.WorldTransform = TransformFragment->GetTransform();
+
+        if (const FMassDspMinerFragment* Miner = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(Entity))
+        {
+            SaveData.bHasMinerFragment = true;
+            SaveData.MinerData.NextProductionWorldTime = Miner->NextProductionWorldTime;
+            SaveData.MinerData.ProductionInterval = Miner->ProductionInterval;
+            SaveData.MinerData.InventoryCount = Miner->InventoryCount;
+            SaveData.MinerData.MaxInventory = Miner->MaxInventory;
+            SaveData.MinerData.StoredItemType = Miner->StoredItemType;
+        }
+
+        if (const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
+        {
+            SaveData.bHasStorageFragment = true;
+            SaveData.StorageData.InventoryCount = Storage->InventoryCount;
+            SaveData.StorageData.MaxInventory = Storage->MaxInventory;
+            SaveData.StorageData.StoredItemType = Storage->StoredItemType;
+        }
+
+        if (const FMassDspAssemblerFragment* Assembler = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity))
+        {
+            SaveData.bHasAssemblerFragment = true;
+            SaveData.AssemblerData.ActiveRecipeType = Assembler->ActiveRecipeType;
+            SaveData.AssemblerData.NextCraftWorldTime = Assembler->NextCraftWorldTime;
+            SaveData.AssemblerData.CraftingSpeedMultiplier = Assembler->CraftingSpeedMultiplier;
+            SaveData.AssemblerData.InputBufferCapacity = Assembler->InputBufferCapacity;
+            SaveData.AssemblerData.OutputBufferCapacity = Assembler->OutputBufferCapacity;
+            SaveData.AssemblerData.bInputSatisfied = Assembler->bInputSatisfied;
+            SaveData.AssemblerData.bOutputSatisfied = Assembler->bOutputSatisfied;
+
+            SaveData.AssemblerData.InputBuffers.Reset(FGameConst::SlotMaxCount - 1);
+            SaveData.AssemblerData.OutputBuffers.Reset(FGameConst::SlotMaxCount - 1);
+
+            for (int32 Index = 0; Index < FGameConst::SlotMaxCount - 1; ++Index)
+            {
+                FMassDspItemStackSaveData InputEntry;
+                InputEntry.ItemType = Assembler->InputBuffers[Index].ItemType;
+                InputEntry.Quantity = Assembler->InputBuffers[Index].Amount;
+                SaveData.AssemblerData.InputBuffers.Add(InputEntry);
+
+                FMassDspItemStackSaveData OutputEntry;
+                OutputEntry.ItemType = Assembler->OutputBuffers[Index].ItemType;
+                OutputEntry.Quantity = Assembler->OutputBuffers[Index].Amount;
+                SaveData.AssemblerData.OutputBuffers.Add(OutputEntry);
+            }
+        }
+
+        if (const FMassDspLogisticsTowerFragment* Tower = EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Entity))
+        {
+            SaveData.bHasLogisticsTowerFragment = true;
+            SaveData.LogisticsTowerData.TowerMode = Tower->TowerMode;
+            SaveData.LogisticsTowerData.ItemType = Tower->ItemType;
+            SaveData.LogisticsTowerData.RequestThreshold = Tower->RequestThreshold;
+            SaveData.LogisticsTowerData.DroneCargoCount = Tower->DroneCargoCount;
+            SaveData.LogisticsTowerData.CoverageRadius = Tower->CoverageRadius;
+            SaveData.LogisticsTowerData.ScanInterval = Tower->ScanInterval;
+            SaveData.LogisticsTowerData.LastScanTime = Tower->LastScanTime;
+            SaveData.LogisticsTowerData.bDirty = Tower->bDirty;
+            SaveData.LogisticsTowerData.bAcceptsRequests = Tower->bAcceptsRequests;
+        }
+
+        OutSaveData.Add(SaveData);
+    }
+}
+
+bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData)
+{
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return false;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    for (const FMassEntityHandle Entity : SpawnedBuildingEntities)
+    {
+        if (EntityManager.IsEntityValid(Entity))
+        {
+            EntityManager.DestroyEntity(Entity);
+        }
+    }
+
+    SpawnedBuildingEntities.Reset();
+    BuildingEntityTypeRegistry.Reset();
+    BuildingHashGrid.Reset();
+    BuildingEntityCount = 0;
+
+    if (InSaveData.IsEmpty())
+    {
+        return true;
+    }
+
+    TArray<FBuildingSpawnData> SpawnDataList;
+    SpawnDataList.Reserve(InSaveData.Num());
+    for (const FMassDspBuildingSaveData& SaveData : InSaveData)
+    {
+        SpawnDataList.Emplace(SaveData.WorldTransform, SaveData.BuildingType);
+    }
+
+    const TArray<FMassEntityHandle> CreatedEntities = BatchSpawnBuildings(SpawnDataList);
+    if (CreatedEntities.Num() != InSaveData.Num())
+    {
+        return false;
+    }
+
+    for (int32 Index = 0; Index < InSaveData.Num(); ++Index)
+    {
+        const FMassEntityHandle Entity = CreatedEntities[Index];
+        if (!EntityManager.IsEntityValid(Entity))
+        {
+            return false;
+        }
+
+        const FMassDspBuildingSaveData& SaveData = InSaveData[Index];
+
+        if (FTransformFragment* TransformFragment = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity))
+        {
+            TransformFragment->SetTransform(SaveData.WorldTransform);
+        }
+
+        if (SaveData.bHasMinerFragment)
+        {
+            if (FMassDspMinerFragment* Miner = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(Entity))
+            {
+                Miner->NextProductionWorldTime = SaveData.MinerData.NextProductionWorldTime;
+                Miner->ProductionInterval = SaveData.MinerData.ProductionInterval;
+                Miner->InventoryCount = SaveData.MinerData.InventoryCount;
+                Miner->MaxInventory = SaveData.MinerData.MaxInventory;
+                Miner->StoredItemType = SaveData.MinerData.StoredItemType;
+            }
+        }
+
+        if (SaveData.bHasStorageFragment)
+        {
+            if (FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(Entity))
+            {
+                Storage->InventoryCount = SaveData.StorageData.InventoryCount;
+                Storage->MaxInventory = SaveData.StorageData.MaxInventory;
+                Storage->StoredItemType = SaveData.StorageData.StoredItemType;
+            }
+        }
+
+        if (SaveData.bHasAssemblerFragment)
+        {
+            if (FMassDspAssemblerFragment* Assembler = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity))
+            {
+                Assembler->ActiveRecipeType = SaveData.AssemblerData.ActiveRecipeType;
+                Assembler->NextCraftWorldTime = SaveData.AssemblerData.NextCraftWorldTime;
+                Assembler->CraftingSpeedMultiplier = SaveData.AssemblerData.CraftingSpeedMultiplier;
+                Assembler->InputBufferCapacity = SaveData.AssemblerData.InputBufferCapacity;
+                Assembler->OutputBufferCapacity = SaveData.AssemblerData.OutputBufferCapacity;
+                Assembler->bInputSatisfied = SaveData.AssemblerData.bInputSatisfied;
+                Assembler->bOutputSatisfied = SaveData.AssemblerData.bOutputSatisfied;
+
+                for (int32 BufferIndex = 0; BufferIndex < FGameConst::SlotMaxCount - 1; ++BufferIndex)
+                {
+                    if (SaveData.AssemblerData.InputBuffers.IsValidIndex(BufferIndex))
+                    {
+                        Assembler->InputBuffers[BufferIndex].ItemType = SaveData.AssemblerData.InputBuffers[BufferIndex].ItemType;
+                        Assembler->InputBuffers[BufferIndex].Amount = SaveData.AssemblerData.InputBuffers[BufferIndex].Quantity;
+                    }
+                    else
+                    {
+                        Assembler->InputBuffers[BufferIndex].ItemType = EItemType::None;
+                        Assembler->InputBuffers[BufferIndex].Amount = 0;
+                    }
+
+                    if (SaveData.AssemblerData.OutputBuffers.IsValidIndex(BufferIndex))
+                    {
+                        Assembler->OutputBuffers[BufferIndex].ItemType = SaveData.AssemblerData.OutputBuffers[BufferIndex].ItemType;
+                        Assembler->OutputBuffers[BufferIndex].Amount = SaveData.AssemblerData.OutputBuffers[BufferIndex].Quantity;
+                    }
+                    else
+                    {
+                        Assembler->OutputBuffers[BufferIndex].ItemType = EItemType::None;
+                        Assembler->OutputBuffers[BufferIndex].Amount = 0;
+                    }
+                }
+            }
+        }
+
+        if (SaveData.bHasLogisticsTowerFragment)
+        {
+            if (FMassDspLogisticsTowerFragment* Tower = EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Entity))
+            {
+                Tower->TowerMode = SaveData.LogisticsTowerData.TowerMode;
+                Tower->ItemType = SaveData.LogisticsTowerData.ItemType;
+                Tower->RequestThreshold = SaveData.LogisticsTowerData.RequestThreshold;
+                Tower->DroneCargoCount = SaveData.LogisticsTowerData.DroneCargoCount;
+                Tower->CoverageRadius = SaveData.LogisticsTowerData.CoverageRadius;
+                Tower->ScanInterval = SaveData.LogisticsTowerData.ScanInterval;
+                Tower->LastScanTime = SaveData.LogisticsTowerData.LastScanTime;
+                Tower->bDirty = SaveData.LogisticsTowerData.bDirty;
+                Tower->bAcceptsRequests = SaveData.LogisticsTowerData.bAcceptsRequests;
+            }
+        }
+    }
+
+    return true;
 }
 
 void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FVector& CameraPos)

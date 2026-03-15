@@ -2,6 +2,32 @@
 
 #include "GameFramework/GameUserSettings.h"
 #include "Engine/Engine.h"
+#include "Kismet/GameplayStatics.h"
+
+#include "Inventory/MassDspPlayerInventoryComponent.h"
+#include "Save/MassDspSaveData.h"
+#include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspTechTreeSubsystem.h"
+
+namespace
+{
+    UMassDspPlayerInventoryComponent* ResolvePlayerInventory(UWorld* World)
+    {
+        if (!World) return nullptr;
+        APlayerController* PC = World->GetFirstPlayerController();
+        if (APawn* Pawn = PC ? PC->GetPawn() : nullptr)
+        {
+            UMassDspPlayerInventoryComponent* InvComp = Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>();
+            if (!InvComp)
+            {
+                InvComp = NewObject<UMassDspPlayerInventoryComponent>(Pawn);
+                InvComp->RegisterComponent();
+            }
+            return InvComp;
+        }
+        return nullptr;
+    }
+}
 
 void UMassDspGameInstance::Init()
 {
@@ -51,4 +77,162 @@ void UMassDspGameInstance::Init()
     }
     // 在 GameInstance::Init 阶段设置窗口模式，早于地图加载，避免启动时短暂全屏
 #endif
+}
+
+bool UMassDspGameInstance::SaveGameToSlot(const FString& SlotName, int32 UserIndex)
+{
+    UMassDspSaveGame* SaveGameObject = Cast<UMassDspSaveGame>(UGameplayStatics::CreateSaveGameObject(UMassDspSaveGame::StaticClass()));
+    if (!SaveGameObject)
+    {
+        return false;
+    }
+
+    if (!CollectCurrentState(*SaveGameObject))
+    {
+        return false;
+    }
+
+    return UGameplayStatics::SaveGameToSlot(SaveGameObject, SlotName, UserIndex);
+}
+
+bool UMassDspGameInstance::LoadGameFromSlot(const FString& SlotName, int32 UserIndex)
+{
+    USaveGame* RawSaveGame = UGameplayStatics::LoadGameFromSlot(SlotName, UserIndex);
+    UMassDspSaveGame* SaveGameObject = Cast<UMassDspSaveGame>(RawSaveGame);
+    if (!SaveGameObject)
+    {
+        return false;
+    }
+
+    if (!UpgradeSaveGameToCurrentVersion(*SaveGameObject))
+    {
+        return false;
+    }
+
+    return RestoreCurrentState(*SaveGameObject);
+}
+
+bool UMassDspGameInstance::DoesSaveExist(const FString& SlotName, int32 UserIndex) const
+{
+    return UGameplayStatics::DoesSaveGameExist(SlotName, UserIndex);
+}
+
+bool UMassDspGameInstance::CollectCurrentState(UMassDspSaveGame& OutSaveGame) const
+{
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return false;
+    }
+
+    UMassDspManager* Manager = World->GetSubsystem<UMassDspManager>();
+    UMassDspTechTreeSubsystem* TechTree = World->GetSubsystem<UMassDspTechTreeSubsystem>();
+    UMassDspPlayerInventoryComponent* PlayerInventory = ResolvePlayerInventory(World);
+    if (!Manager || !TechTree || !PlayerInventory)
+    {
+        return false;
+    }
+
+    OutSaveGame.Header.SaveVersion = UMassDspSaveGame::CurrentSaveVersion;
+    OutSaveGame.Header.MapName = World->GetMapName();
+    OutSaveGame.Header.SavedAtUtc = FDateTime::UtcNow();
+
+    Manager->CollectBuildingSaveData(OutSaveGame.Buildings);
+
+    OutSaveGame.PlayerInventory.MaxInventoryItems = PlayerInventory->GetCapacity();
+    OutSaveGame.PlayerInventory.ItemStacks.Reset();
+
+    TArray<FInventoryEntryView> InventoryEntries;
+    PlayerInventory->GetActiveEntries(InventoryEntries);
+    for (const FInventoryEntryView& Entry : InventoryEntries)
+    {
+        if (Entry.ItemType == EItemType::None || Entry.Quantity <= 0)
+        {
+            continue;
+        }
+
+        FMassDspItemStackSaveData Stack;
+        Stack.ItemType = Entry.ItemType;
+        Stack.Quantity = Entry.Quantity;
+        OutSaveGame.PlayerInventory.ItemStacks.Add(Stack);
+    }
+
+    const FMassDspPlayerTechState& TechState = TechTree->GetPlayerTechState();
+    OutSaveGame.TechTree.Version = TechState.Version;
+    OutSaveGame.TechTree.CurrentResearchNode = TechState.CurrentResearchNode;
+    OutSaveGame.TechTree.ResearchProgress = TechState.ResearchProgress;
+    OutSaveGame.TechTree.UnlockedNodes.Reset();
+    for (const ETechNodeId NodeId : TechState.UnlockedNodes)
+    {
+        OutSaveGame.TechTree.UnlockedNodes.Add(NodeId);
+    }
+
+    return true;
+}
+
+bool UMassDspGameInstance::RestoreCurrentState(const UMassDspSaveGame& InSaveGame)
+{
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return false;
+    }
+
+    UMassDspManager* Manager = World->GetSubsystem<UMassDspManager>();
+    UMassDspTechTreeSubsystem* TechTree = World->GetSubsystem<UMassDspTechTreeSubsystem>();
+    UMassDspPlayerInventoryComponent* PlayerInventory = ResolvePlayerInventory(World);
+    if (!Manager || !TechTree || !PlayerInventory)
+    {
+        return false;
+    }
+
+    if (!Manager->RestoreBuildingSaveData(InSaveGame.Buildings))
+    {
+        return false;
+    }
+
+    TArray<FInventoryEntryView> InventoryEntries;
+    InventoryEntries.Reserve(InSaveGame.PlayerInventory.ItemStacks.Num());
+    for (const FMassDspItemStackSaveData& Stack : InSaveGame.PlayerInventory.ItemStacks)
+    {
+        FInventoryEntryView Entry;
+        Entry.ItemType = Stack.ItemType;
+        Entry.Quantity = Stack.Quantity;
+        InventoryEntries.Add(Entry);
+    }
+    PlayerInventory->RestoreInventorySnapshot(InSaveGame.PlayerInventory.MaxInventoryItems, InventoryEntries);
+
+    FMassDspPlayerTechState TechState;
+    TechState.Version = InSaveGame.TechTree.Version;
+    TechState.CurrentResearchNode = InSaveGame.TechTree.CurrentResearchNode;
+    TechState.ResearchProgress = InSaveGame.TechTree.ResearchProgress;
+    for (const ETechNodeId NodeId : InSaveGame.TechTree.UnlockedNodes)
+    {
+        TechState.UnlockedNodes.Add(NodeId);
+    }
+    TechTree->RestorePlayerTechState(TechState);
+
+    return true;
+}
+
+bool UMassDspGameInstance::UpgradeSaveGameToCurrentVersion(UMassDspSaveGame& InOutSaveGame) const
+{
+    if (InOutSaveGame.Header.SaveVersion > UMassDspSaveGame::CurrentSaveVersion)
+    {
+        return false;
+    }
+
+    while (InOutSaveGame.Header.SaveVersion < UMassDspSaveGame::CurrentSaveVersion)
+    {
+        switch (InOutSaveGame.Header.SaveVersion)
+        {
+        case 0:
+            InOutSaveGame.Header.SaveVersion = 1;
+            break;
+        default:
+            return false;
+        }
+    }
+
+    return true;
 }

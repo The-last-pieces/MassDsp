@@ -24,6 +24,7 @@ public:
     int32 GetFreeCapacity() const;
     void GetActiveEntries(TArray<FInventoryEntryView>& OutEntries) const;
     void GetActiveItems(TArray<EItemType>& OutItems) const;
+    void RestoreInventorySnapshot(int32 InMaxInventoryItems, const TArray<FInventoryEntryView>& Entries);
 
     const FCompactItemInventory& GetInventory() const { return Inventory; }
 

@@ -44,6 +44,7 @@ public:
     }
 
     const FMassDspPlayerTechState& GetPlayerTechState() const { return PlayerTechState; }
+    void RestorePlayerTechState(const FMassDspPlayerTechState& InState);
 
     bool IsNodeUnlocked(ETechNodeId NodeId) const;
     bool CanUnlockNode(ETechNodeId NodeId, FText* OutFailureReason = nullptr) const;
