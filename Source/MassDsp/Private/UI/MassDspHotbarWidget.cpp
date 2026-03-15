@@ -216,6 +216,30 @@ void UMassDspHotbarWidget::ShowLockedMessage(const FText& Message) const
     GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Yellow, Message.ToString());
 }
 
+void UMassDspHotbarWidget::ToggleDemolishMode()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return;
+
+    if (CurrentBuildingWidget)
+    {
+        CurrentBuildingWidget->CloseWidget();
+        CurrentBuildingWidget = nullptr;
+    }
+
+    const bool bEnable = !Manager->IsDemolishMode();
+    if (bEnable)
+    {
+        Manager->BeginDemolishMode();
+        ShowLockedMessage(FText::FromString(TEXT("拆除模式已开启")));
+    }
+    else
+    {
+        Manager->CancelDemolishMode();
+        ShowLockedMessage(FText::FromString(TEXT("拆除模式已关闭")));
+    }
+}
+
 bool UMassDspHotbarWidget::GetWorldHitLocation(FVector& OutLoc) const
 {
     APlayerController* PC = GetOwningPlayer();
@@ -242,6 +266,16 @@ bool UMassDspHotbarWidget::GetWorldHitLocation(FVector& OutLoc) const
     return true;
 }
 
+bool UMassDspHotbarWidget::GetScreenCenterWorldRay(FVector& OutOrigin, FVector& OutDirection) const
+{
+    APlayerController* PC = GetOwningPlayer();
+    if (!PC) return false;
+
+    int32 ViewW = 0, ViewH = 0;
+    PC->GetViewportSize(ViewW, ViewH);
+    return PC->DeprojectScreenPositionToWorld(ViewW * 0.5f, ViewH * 0.5f, OutOrigin, OutDirection);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  高亮同步
 // ─────────────────────────────────────────────────────────────────────────────
@@ -265,7 +299,7 @@ int32 UMassDspHotbarWidget::GetCurrentActiveSlot() const
     if (!Manager) return -1;
 
     const EBuildPlaceMode Mode = Manager->GetCurrentPlaceMode();
-    if (Mode == EBuildPlaceMode::None) return -1;
+    if (Mode == EBuildPlaceMode::None || Mode == EBuildPlaceMode::Demolish) return -1;
 
     for (int32 i = 0; i < SlotDefs.Num(); ++i)
     {
@@ -303,7 +337,7 @@ void UMassDspHotbarWidget::SetSlotHighlight(int32 SlotIndex, bool bActive)
 void UMassDspHotbarWidget::UpdateBuildPreview()
 {
     UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
-    if (!Manager || Manager->GetCurrentPlaceMode() == EBuildPlaceMode::None) return;
+    if (!Manager || Manager->GetCurrentPlaceMode() == EBuildPlaceMode::None || Manager->IsDemolishMode()) return;
 
     if (!GetWorldHitLocation(CachedHitLocation)) return;
 
@@ -369,6 +403,21 @@ void UMassDspHotbarWidget::OnMouseLeftClick()
             }
             break;
         }
+    case EBuildPlaceMode::Demolish:
+        {
+            FVector RayOrigin = FVector::ZeroVector;
+            FVector RayDirection = FVector::ZeroVector;
+            FDemolishTargetInfo TargetInfo;
+            if (GetScreenCenterWorldRay(RayOrigin, RayDirection) &&
+                Manager->FindDemolishTargetByRay(RayOrigin, RayDirection, 100000.f, DemolishBuildingRadius, 260.f, TargetInfo) &&
+                ((TargetInfo.TargetType == EDemolishTargetType::Belt && Manager->DestroyBelt(TargetInfo.BeltHandle)) ||
+                 (TargetInfo.TargetType == EDemolishTargetType::Building && Manager->DestroyBuilding(TargetInfo.BuildingEntity))))
+            {
+                UE_LOG(LogTemp, Log, TEXT("[Hotbar] 拆除成功 @ (%.0f, %.0f, %.0f)"),
+                    TargetInfo.WorldLocation.X, TargetInfo.WorldLocation.Y, TargetInfo.WorldLocation.Z);
+            }
+            break;
+        }
     default: break;
     }
 }
@@ -376,7 +425,16 @@ void UMassDspHotbarWidget::OnMouseLeftClick()
 void UMassDspHotbarWidget::OnMouseRightClick()
 {
     UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
-    if (Manager) Manager->CancelAnyPreview();
+    if (!Manager) return;
+
+    if (Manager->IsDemolishMode())
+    {
+        Manager->CancelDemolishMode();
+        ShowLockedMessage(FText::FromString(TEXT("拆除模式已关闭")));
+        return;
+    }
+
+    Manager->CancelAnyPreview();
 }
 
 void UMassDspHotbarWidget::OnScrollUp()

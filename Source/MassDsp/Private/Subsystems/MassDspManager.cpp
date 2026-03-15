@@ -32,6 +32,40 @@
 
 namespace
 {
+    static bool ProjectPointOntoRay(
+        const FVector& RayOrigin,
+        const FVector& RayDirection,
+        float MaxDistance,
+        const FVector& Point,
+        FVector& OutProjectedPoint,
+        float& OutRayDistance,
+        float& OutDistanceSq)
+    {
+        const float RayParam = FVector::DotProduct(Point - RayOrigin, RayDirection);
+        if (RayParam < 0.0f || RayParam > MaxDistance)
+        {
+            return false;
+        }
+
+        OutProjectedPoint = RayOrigin + RayDirection * RayParam;
+        OutRayDistance = RayParam;
+        OutDistanceSq = FVector::DistSquared(Point, OutProjectedPoint);
+        return true;
+    }
+
+    static void DisconnectSlotHandle(FBuildingSlotState& Slot, int32& ConnectedCount)
+    {
+        if (!Slot.ConnectedLaneHandle.IsValid())
+        {
+            return;
+        }
+
+        Slot.ConnectedLaneHandle = FBeltHandle();
+        Slot.BeltSpeed = 0.0f;
+        Slot.ReadyAtTime = 0.0f;
+        ConnectedCount = FMath::Max(0, ConnectedCount - 1);
+    }
+
     UMassDspPlayerInventoryComponent* GetPlayerInventoryComponent(UWorld* World)
     {
         if (!World) return nullptr;
@@ -1024,7 +1058,18 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
     if (BeltEntityRegistry.Num() != Belt_CachedCount)
         RebuildBeltSoA();
 
-    if (Belt_CachedCount <= 0) return;
+    if (Belt_CachedCount <= 0)
+    {
+        for (auto& [Type, ISM] : ItemISMPool)
+        {
+            if (ISM && ISM->GetInstanceCount() > 0)
+            {
+                ISM->ClearInstances();
+                ISM->MarkRenderStateDirty();
+            }
+        }
+        return;
+    }
 
     const float MaxDistSq = MaxRenderDistance * MaxRenderDistance;
     const float InvCell = 1.f / SpatialGridCellSize;
@@ -1648,6 +1693,330 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
     }
 
     return true;
+}
+
+bool UMassDspManager::DestroyBelt(FBeltHandle BeltHandle)
+{
+    if (!BeltHandle.IsValid())
+    {
+        return false;
+    }
+
+    FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle);
+    if (!BeltData)
+    {
+        return false;
+    }
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return false;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    for (const FMassEntityHandle Entity : SpawnedBuildingEntities)
+    {
+        if (!EntityManager.IsEntityValid(Entity))
+        {
+            continue;
+        }
+
+        FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Entity);
+        if (!SlotsFragment)
+        {
+            continue;
+        }
+
+        for (FBuildingSlotState& Slot : SlotsFragment->GetOutputSlots())
+        {
+            if (Slot.ConnectedLaneHandle == BeltHandle)
+            {
+                DisconnectSlotHandle(Slot, SlotsFragment->ConnectedOutputCount);
+            }
+        }
+
+        for (FBuildingSlotState& Slot : SlotsFragment->GetInputSlots())
+        {
+            if (Slot.ConnectedLaneHandle == BeltHandle)
+            {
+                DisconnectSlotHandle(Slot, SlotsFragment->ConnectedInputCount);
+            }
+        }
+    }
+
+    if (BeltTrajectories.IsValidIndex(BeltHandle.Index))
+    {
+        const FIntPoint ChunkKey = GetChunkKey(BeltTrajectories[BeltHandle.Index].RepresentativePosition);
+        if (FBeltChunk* Chunk = BeltChunks.Find(ChunkKey))
+        {
+            Chunk->BeltTrajectoryIndices.Remove(BeltHandle.Index);
+            if (Chunk->BeltTrajectoryIndices.IsEmpty())
+            {
+                ReleaseChunkPMC(*Chunk);
+                BeltChunks.Remove(ChunkKey);
+            }
+            else
+            {
+                Chunk->bMeshDirty = true;
+            }
+
+            if (PendingFlushSet.Remove(ChunkKey) > 0)
+            {
+                PendingFlushQueue.Remove(ChunkKey);
+            }
+        }
+
+        BeltTrajectories.RemoveAt(BeltHandle.Index);
+    }
+
+    if (BeltRebuildData.IsValidIndex(BeltHandle.Index))
+    {
+        BeltRebuildData.RemoveAt(BeltHandle.Index);
+    }
+
+    BeltData->ItemCache.Empty();
+    BeltEntityRegistry.Remove(BeltHandle);
+    CachedTransformsByType.Reset();
+
+    for (auto& [ItemType, ISM] : ItemISMPool)
+    {
+        if (ISM && ISM->GetInstanceCount() > 0)
+        {
+            ISM->ClearInstances();
+            ISM->MarkRenderStateDirty();
+        }
+    }
+
+    RebuildBeltSoA();
+    FlushBeltMesh();
+    return true;
+}
+
+bool UMassDspManager::DestroyBuilding(FMassEntityHandle BuildingEntity)
+{
+    if (!BuildingEntity.IsValid())
+    {
+        return false;
+    }
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return false;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    if (!EntityManager.IsEntityValid(BuildingEntity))
+    {
+        return false;
+    }
+
+    FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BuildingEntity);
+    TArray<FBeltHandle> ConnectedBelts;
+    if (SlotsFragment)
+    {
+        for (const FBuildingSlotState& Slot : SlotsFragment->GetOutputSlots())
+        {
+            if (Slot.ConnectedLaneHandle.IsValid())
+            {
+                ConnectedBelts.AddUnique(Slot.ConnectedLaneHandle);
+            }
+        }
+
+        for (const FBuildingSlotState& Slot : SlotsFragment->GetInputSlots())
+        {
+            if (Slot.ConnectedLaneHandle.IsValid())
+            {
+                ConnectedBelts.AddUnique(Slot.ConnectedLaneHandle);
+            }
+        }
+    }
+
+    for (const FBeltHandle ConnectedBelt : ConnectedBelts)
+    {
+        DestroyBelt(ConnectedBelt);
+    }
+
+    FVector BuildingLocation = FVector::ZeroVector;
+    if (const FTransformFragment* TransformFragment = EntityManager.GetFragmentDataPtr<FTransformFragment>(BuildingEntity))
+    {
+        BuildingLocation = TransformFragment->GetTransform().GetLocation();
+    }
+
+    UnregisterBuildingFromGrid(BuildingEntity, BuildingLocation);
+    SpawnedBuildingEntities.RemoveSingle(BuildingEntity);
+    BuildingEntityTypeRegistry.Remove(BuildingEntity);
+    BuildingEntityCount = FMath::Max(0, BuildingEntityCount - 1);
+    EntityManager.DestroyEntity(BuildingEntity);
+    return true;
+}
+
+bool UMassDspManager::TryDemolishAtLocation(const FVector& WorldPos, float BeltSearchRadius, float BuildingSearchRadius)
+{
+    FBeltHandle BeltHandle;
+    if (FindNearestBelt(WorldPos, BeltSearchRadius, BeltHandle))
+    {
+        return DestroyBelt(BeltHandle);
+    }
+
+    FMassEntityHandle BuildingEntity;
+    EBuildingType BuildingType = EBuildingType::None;
+    FVector BuildingLocation = FVector::ZeroVector;
+    if (FindNearestBuilding(WorldPos, BuildingSearchRadius, BuildingEntity, BuildingType, BuildingLocation))
+    {
+        return DestroyBuilding(BuildingEntity);
+    }
+
+    return false;
+}
+
+bool UMassDspManager::FindDemolishTargetByRay(
+    const FVector& RayOrigin,
+    const FVector& RayDirection,
+    float MaxDistance,
+    float BuildingRadius,
+    float BeltRadius,
+    FDemolishTargetInfo& OutTarget)
+{
+    OutTarget = FDemolishTargetInfo();
+
+    if (RayDirection.IsNearlyZero() || MaxDistance <= 0.0f)
+    {
+        return false;
+    }
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return false;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    const FVector NormalizedRayDir = RayDirection.GetSafeNormal();
+    const float BuildingRadiusSq = FMath::Square(BuildingRadius);
+    const float BeltRadiusSq = FMath::Square(BeltRadius);
+    float BestDistanceSq = TNumericLimits<float>::Max();
+    float BestViewDistance = MaxDistance;
+
+    for (const FMassEntityHandle Entity : SpawnedBuildingEntities)
+    {
+        if (!EntityManager.IsEntityValid(Entity))
+        {
+            continue;
+        }
+
+        const FTransformFragment* TransformFragment = EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
+        if (!TransformFragment)
+        {
+            continue;
+        }
+
+        FVector ProjectedPoint = FVector::ZeroVector;
+        float ViewDistance = 0.0f;
+        float DistanceSq = 0.0f;
+        const FVector BuildingLocation = TransformFragment->GetTransform().GetLocation();
+        if (!ProjectPointOntoRay(NormalizedRayDir.IsNormalized() ? RayOrigin : RayOrigin, NormalizedRayDir, MaxDistance, BuildingLocation,
+            ProjectedPoint, ViewDistance, DistanceSq))
+        {
+            continue;
+        }
+
+        if (DistanceSq > BuildingRadiusSq)
+        {
+            continue;
+        }
+
+        if (DistanceSq < BestDistanceSq || (FMath::IsNearlyEqual(DistanceSq, BestDistanceSq) && ViewDistance < BestViewDistance))
+        {
+            OutTarget.TargetType = EDemolishTargetType::Building;
+            OutTarget.BuildingEntity = Entity;
+            OutTarget.BuildingType = BuildingEntityTypeRegistry.FindRef(Entity);
+            OutTarget.BeltHandle = FBeltHandle();
+            OutTarget.BeltType = EBeltType::None;
+            OutTarget.WorldLocation = BuildingLocation;
+            OutTarget.ViewDistance = ViewDistance;
+            BestDistanceSq = DistanceSq;
+            BestViewDistance = ViewDistance;
+        }
+    }
+
+    for (const auto& [Handle, BeltData] : BeltEntityRegistry)
+    {
+        if (!BeltTrajectories.IsValidIndex(Handle.Index))
+        {
+            continue;
+        }
+
+        const FBeltTrajectory& Trajectory = BeltTrajectories[Handle.Index];
+        FVector BroadPhasePoint = FVector::ZeroVector;
+        float BroadPhaseDistance = 0.0f;
+        float BroadPhaseDistanceSq = 0.0f;
+        if (!ProjectPointOntoRay(RayOrigin, NormalizedRayDir, MaxDistance, Trajectory.RepresentativePosition,
+            BroadPhasePoint, BroadPhaseDistance, BroadPhaseDistanceSq))
+        {
+            continue;
+        }
+
+        const float MaxAllowedSq = FMath::Square(Trajectory.BoundRadius + BeltRadius);
+        if (BroadPhaseDistanceSq > MaxAllowedSq)
+        {
+            continue;
+        }
+
+        if (Trajectory.CurrentLOD < 0 || Trajectory.LUT.Num() < 2 || Trajectory.LUTStep > 60.0f)
+        {
+            RebuildLUTForTrajectory(Handle.Index, 1);
+        }
+
+        if (!BeltTrajectories.IsValidIndex(Handle.Index) || BeltTrajectories[Handle.Index].LUT.IsEmpty())
+        {
+            continue;
+        }
+
+        const FBeltTrajectory& RefinedTrajectory = BeltTrajectories[Handle.Index];
+        FVector BestPointForBelt = FVector::ZeroVector;
+        float BestDistanceSqForBelt = TNumericLimits<float>::Max();
+        float BestViewDistanceForBelt = MaxDistance;
+        for (const FBeltLUTSample& Sample : RefinedTrajectory.LUT)
+        {
+            FVector ProjectedPoint = FVector::ZeroVector;
+            float ViewDistance = 0.0f;
+            float DistanceSq = 0.0f;
+            if (!ProjectPointOntoRay(RayOrigin, NormalizedRayDir, MaxDistance, Sample.Position,
+                ProjectedPoint, ViewDistance, DistanceSq))
+            {
+                continue;
+            }
+
+            if (DistanceSq < BestDistanceSqForBelt || (FMath::IsNearlyEqual(DistanceSq, BestDistanceSqForBelt) && ViewDistance < BestViewDistanceForBelt))
+            {
+                BestDistanceSqForBelt = DistanceSq;
+                BestViewDistanceForBelt = ViewDistance;
+                BestPointForBelt = Sample.Position;
+            }
+        }
+
+        if (BestDistanceSqForBelt > BeltRadiusSq)
+        {
+            continue;
+        }
+
+        if (BestDistanceSqForBelt < BestDistanceSq || (FMath::IsNearlyEqual(BestDistanceSqForBelt, BestDistanceSq) && BestViewDistanceForBelt < BestViewDistance))
+        {
+            OutTarget.TargetType = EDemolishTargetType::Belt;
+            OutTarget.BuildingEntity = FMassEntityHandle();
+            OutTarget.BuildingType = EBuildingType::None;
+            OutTarget.BeltHandle = Handle;
+            OutTarget.BeltType = BeltRebuildData.IsValidIndex(Handle.Index) ? BeltRebuildData[Handle.Index].BeltType : EBeltType::None;
+            OutTarget.WorldLocation = BestPointForBelt;
+            OutTarget.ViewDistance = BestViewDistanceForBelt;
+            BestDistanceSq = BestDistanceSqForBelt;
+            BestViewDistance = BestViewDistanceForBelt;
+        }
+    }
+
+    return OutTarget.IsValid();
 }
 
 bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveData)
@@ -2518,6 +2887,21 @@ void UMassDspManager::RegisterBuildingInGrid(FMassEntityHandle Entity, const FVe
     BuildingHashGrid.FindOrAdd(MakeBuildingCellKey(CX, CY)).Add(Entity);
 }
 
+void UMassDspManager::UnregisterBuildingFromGrid(FMassEntityHandle Entity, const FVector& Location)
+{
+    const int32 CX = FMath::FloorToInt(Location.X / BuildingGridCellSize);
+    const int32 CY = FMath::FloorToInt(Location.Y / BuildingGridCellSize);
+    const uint64 CellKey = MakeBuildingCellKey(CX, CY);
+    if (TArray<FMassEntityHandle>* Bucket = BuildingHashGrid.Find(CellKey))
+    {
+        Bucket->RemoveSingle(Entity);
+        if (Bucket->IsEmpty())
+        {
+            BuildingHashGrid.Remove(CellKey);
+        }
+    }
+}
+
 void UMassDspManager::QueryBuildingGridRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const
 {
     if (BuildingHashGrid.IsEmpty()) return;
@@ -2599,6 +2983,67 @@ bool UMassDspManager::FindNearestBuilding(
     return bFound;
 }
 
+bool UMassDspManager::FindNearestBelt(const FVector& WorldPos, float SearchRadius, FBeltHandle& OutHandle, FVector* OutClosestPoint)
+{
+    const float SearchRadiusSq = SearchRadius * SearchRadius;
+    float BestDistSq = SearchRadiusSq;
+    bool bFound = false;
+
+    for (const auto& [Handle, BeltData] : BeltEntityRegistry)
+    {
+        if (!BeltTrajectories.IsValidIndex(Handle.Index))
+        {
+            continue;
+        }
+
+        const FBeltTrajectory& Trajectory = BeltTrajectories[Handle.Index];
+        const float BroadPhaseRadius = SearchRadius + Trajectory.BoundRadius;
+        if (FVector::DistSquared(WorldPos, Trajectory.RepresentativePosition) > BroadPhaseRadius * BroadPhaseRadius)
+        {
+            continue;
+        }
+
+        if (Trajectory.CurrentLOD < 0 || Trajectory.LUT.Num() < 2)
+        {
+            RebuildLUTForTrajectory(Handle.Index, 2);
+        }
+
+        if (!BeltTrajectories.IsValidIndex(Handle.Index) || BeltTrajectories[Handle.Index].LUT.Num() < 2)
+        {
+            continue;
+        }
+
+        const TArray<FBeltLUTSample>& LUT = BeltTrajectories[Handle.Index].LUT;
+        FVector BestPointForBelt = FVector::ZeroVector;
+        float BestDistSqForBelt = TNumericLimits<float>::Max();
+        for (int32 SampleIndex = 1; SampleIndex < LUT.Num(); ++SampleIndex)
+        {
+            const FVector SegmentStart = LUT[SampleIndex - 1].Position;
+            const FVector SegmentEnd = LUT[SampleIndex].Position;
+            const FVector ClosestPoint = FMath::ClosestPointOnSegment(WorldPos, SegmentStart, SegmentEnd);
+            const float DistSq = FVector::DistSquared(WorldPos, ClosestPoint);
+            if (DistSq < BestDistSqForBelt)
+            {
+                BestDistSqForBelt = DistSq;
+                BestPointForBelt = ClosestPoint;
+            }
+        }
+
+        if (BestDistSqForBelt < BestDistSq)
+        {
+            BestDistSq = BestDistSqForBelt;
+            OutHandle = Handle;
+            if (OutClosestPoint)
+            {
+                *OutClosestPoint = BestPointForBelt;
+            }
+            bFound = true;
+        }
+    }
+
+    return bFound;
+}
+
 bool UMassDspManager::FindNearestBuildingSlot(
     const FVector& WorldPos,
     EBuildingSlotType SlotType,
@@ -2651,6 +3096,31 @@ bool UMassDspManager::FindNearestBuildingSlot(
     }
 
     return bFound;
+}
+
+void UMassDspManager::ReleaseChunkPMC(FBeltChunk& Chunk)
+{
+    if (!Chunk.PMC)
+    {
+        Chunk.CurrentMeshLOD = -1;
+        Chunk.bMeshDirty = false;
+        return;
+    }
+
+    Chunk.PMC->ClearAllMeshSections();
+    Chunk.PMC->MarkRenderStateDirty();
+    if (FreePMCPool.Num() < MaxFreePMCPoolSize)
+    {
+        FreePMCPool.Add(Chunk.PMC);
+    }
+    else
+    {
+        Chunk.PMC->DestroyComponent();
+    }
+
+    Chunk.PMC = nullptr;
+    Chunk.CurrentMeshLOD = -1;
+    Chunk.bMeshDirty = false;
 }
 
 // ============================================================
@@ -2772,6 +3242,20 @@ void UMassDspManager::BeginPreviewBelt(EBeltType BeltType, EBeltSplineType Splin
     CurrentPlaceMode = EBuildPlaceMode::Belt;
 }
 
+void UMassDspManager::BeginDemolishMode()
+{
+    CancelAnyPreview();
+    CurrentPlaceMode = EBuildPlaceMode::Demolish;
+}
+
+void UMassDspManager::CancelDemolishMode()
+{
+    if (CurrentPlaceMode == EBuildPlaceMode::Demolish)
+    {
+        CurrentPlaceMode = EBuildPlaceMode::None;
+    }
+}
+
 bool UMassDspManager::SelectBeltSlot(const FVector& WorldPos)
 {
     constexpr float SnapRadius = 200.f;
@@ -2887,6 +3371,7 @@ void UMassDspManager::CancelAnyPreview()
 {
     CancelBuildingPreview();
     CancelBeltPreview();
+    CancelDemolishMode();
 }
 
 // ──── 预览传送带网格重建（通用接口：复用 GenerateConveyorMesh）────

@@ -69,6 +69,7 @@ void AMassDspHUD::BeginPlay()
     InputComponent->BindKey(EKeys::O, IE_Pressed, this, &AMassDspHUD::HandleQuickSaveKey);
     InputComponent->BindKey(EKeys::L, IE_Pressed, this, &AMassDspHUD::HandleQuickLoadKey);
     InputComponent->BindKey(EKeys::T, IE_Pressed, this, &AMassDspHUD::ToggleTechTreeWidget);
+    InputComponent->BindKey(EKeys::X, IE_Pressed, HotbarWidget.Get(), &UMassDspHotbarWidget::ToggleDemolishMode);
 }
 
 void AMassDspHUD::Tick(float DeltaSeconds)
@@ -446,6 +447,9 @@ void AMassDspHUD::DrawHUD()
     // ── 建造模式提示 ──
     DrawBuildSystemHint();
 
+    // ── 拆除模式目标提示 ──
+    DrawDemolishTargetHint();
+
     // ── 可交互建筑提示（未开 UI 时显示） ──
     DrawInteractionHint();
 
@@ -553,6 +557,11 @@ void AMassDspHUD::DrawBuildSystemHint()
             HintColor = FLinearColor(1.f, 0.8f, 0.3f);
         }
     }
+    else if (Mode == EBuildPlaceMode::Demolish)
+    {
+        ModeText = TEXT("[拆除模式] 左键拆除建筑/传送带  右键或 X 退出");
+        HintColor = FLinearColor(1.f, 0.35f, 0.35f);
+    }
 
     const float CanvasW = Canvas->SizeX;
     const float CanvasH = Canvas->SizeY;
@@ -567,6 +576,73 @@ void AMassDspHUD::DrawBuildSystemHint()
     DrawText(ModeText, HintColor, TextX, TextY, GEngine->GetSmallFont(), TextScale);
 }
 
+bool AMassDspHUD::GetScreenCenterWorldRay(FVector& OutOrigin, FVector& OutDirection) const
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return false;
+
+    int32 ViewW = 0, ViewH = 0;
+    PC->GetViewportSize(ViewW, ViewH);
+    return PC->DeprojectScreenPositionToWorld(ViewW * 0.5f, ViewH * 0.5f, OutOrigin, OutDirection);
+}
+
+void AMassDspHUD::DrawDemolishTargetHint()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager || !Canvas || !Manager->IsDemolishMode()) return;
+
+    FVector RayOrigin = FVector::ZeroVector;
+    FVector RayDirection = FVector::ZeroVector;
+    if (!GetScreenCenterWorldRay(RayOrigin, RayDirection)) return;
+
+    FDemolishTargetInfo TargetInfo;
+    if (!Manager->FindDemolishTargetByRay(RayOrigin, RayDirection, 100000.f, UMassDspHotbarWidget::DemolishBuildingRadius, 260.f, TargetInfo))
+    {
+        return;
+    }
+
+    FString TargetText;
+    FLinearColor TargetColor = FLinearColor(1.f, 0.4f, 0.4f);
+    if (TargetInfo.TargetType == EDemolishTargetType::Building)
+    {
+        static const TMap<EBuildingType, FString> BuildingNames =
+        {
+            {EBuildingType::Miner, TEXT("矿机")},
+            {EBuildingType::Assembler, TEXT("合成台")},
+            {EBuildingType::Storage, TEXT("仓库")},
+            {EBuildingType::LogisticsTower, TEXT("物流塔")},
+        };
+        TargetText = FString::Printf(TEXT("拆除目标: %s"), *BuildingNames.FindRef(TargetInfo.BuildingType));
+    }
+    else if (TargetInfo.TargetType == EDemolishTargetType::Belt)
+    {
+        static const TMap<EBeltType, FString> BeltNames =
+        {
+            {EBeltType::Normal, TEXT("低速传送带")},
+            {EBeltType::Fast, TEXT("高速传送带")},
+            {EBeltType::Express, TEXT("极速传送带")},
+        };
+        TargetText = FString::Printf(TEXT("拆除目标: %s"), *BeltNames.FindRef(TargetInfo.BeltType));
+        TargetColor = FLinearColor(1.f, 0.55f, 0.3f);
+    }
+
+    if (TargetText.IsEmpty())
+    {
+        return;
+    }
+
+    constexpr float Scale = 1.35f;
+    float TextW = 0.f;
+    float TextH = 0.f;
+    GetTextSize(TargetText, TextW, TextH, GEngine->GetSmallFont(), Scale);
+
+    const float TextX = (Canvas->SizeX - TextW) * 0.5f;
+    const float TextY = Canvas->SizeY * 0.5f + 26.f;
+    DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), TextX - 14.f, TextY - 6.f, TextW + 28.f, TextH + 12.f);
+    DrawText(TargetText, FLinearColor::Black, TextX + 1.f, TextY + 1.f, GEngine->GetSmallFont(), Scale);
+    DrawText(TargetText, TargetColor, TextX, TextY, GEngine->GetSmallFont(), Scale);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  可交互建筑 HUD 提示
 // ─────────────────────────────────────────────────────────────────────────────
@@ -578,6 +654,7 @@ void AMassDspHUD::DrawInteractionHint()
 
     UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
     if (!Manager) return;
+    if (Manager->GetCurrentPlaceMode() != EBuildPlaceMode::None) return;
 
     APlayerController* PC = GetOwningPlayerController();
     if (!PC || !PC->GetPawn()) return;

@@ -47,6 +47,7 @@ public:
     void OnScrollUp();
     void OnScrollDown();
     void OnInteractKey();
+    void ToggleDemolishMode();
 
     //  建造交互运行状态（HUD Canvas 读取此处状态来绘制）
     FVector CachedHitLocation = FVector::ZeroVector;
@@ -85,6 +86,8 @@ public:
 
     static constexpr float BuildingInteractRadius = 4000.f;
     static constexpr float BuildingRotationStep = 15.f;
+    static constexpr float DemolishBeltRadius = 180.f;
+    static constexpr float DemolishBuildingRadius = 700.f;
 
 protected:
     virtual void NativeConstruct() override;
@@ -97,6 +100,7 @@ private:
     void RefreshSlotAvailability();
     void UpdateBuildPreview();
     bool GetWorldHitLocation(FVector& OutLoc) const;
+    bool GetScreenCenterWorldRay(FVector& OutOrigin, FVector& OutDirection) const;
     bool IsSlotUnlocked(const FHotbarSlotDef& Def) const;
     FText GetSlotLockedReason(const FHotbarSlotDef& Def) const;
     void ShowLockedMessage(const FText& Message) const;

@@ -76,7 +76,9 @@ private:
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
     void DrawPersistentFps();
     void DrawBuildSystemHint();
+    void DrawDemolishTargetHint();
     void DrawBuildingPreviewSlots();
     void DrawBeltSnapIndicator();
     void DrawInteractionHint();
+    bool GetScreenCenterWorldRay(FVector& OutOrigin, FVector& OutDirection) const;
 };

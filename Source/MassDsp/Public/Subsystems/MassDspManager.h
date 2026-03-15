@@ -28,6 +28,7 @@ enum class EBuildPlaceMode : uint8
     None = 0 UMETA(DisplayName = "空闲"),
     Building = 1 UMETA(DisplayName = "放置建筑"),
     Belt = 2 UMETA(DisplayName = "连接传送带"),
+    Demolish = 3 UMETA(DisplayName = "拆除"),
 };
 
 // Building实体生成数据
@@ -40,6 +41,46 @@ struct FBuildingSpawnData
     FBuildingSpawnData(const FTransform& InTransform, EBuildingType InType)
         : WorldTransform(InTransform), BuildingType(InType)
     {
+    }
+};
+
+UENUM(BlueprintType)
+enum class EDemolishTargetType : uint8
+{
+    None = 0,
+    Building = 1,
+    Belt = 2,
+};
+
+USTRUCT(BlueprintType)
+struct FDemolishTargetInfo
+{
+    GENERATED_BODY()
+
+    UPROPERTY()
+    EDemolishTargetType TargetType = EDemolishTargetType::None;
+
+    UPROPERTY()
+    FMassEntityHandle BuildingEntity;
+
+    UPROPERTY()
+    EBuildingType BuildingType = EBuildingType::None;
+
+    UPROPERTY()
+    FBeltHandle BeltHandle;
+
+    UPROPERTY()
+    EBeltType BeltType = EBeltType::None;
+
+    UPROPERTY()
+    FVector WorldLocation = FVector::ZeroVector;
+
+    UPROPERTY()
+    float ViewDistance = 0.0f;
+
+    bool IsValid() const
+    {
+        return TargetType != EDemolishTargetType::None;
     }
 };
 
@@ -376,6 +417,16 @@ public:
     void CollectBeltSaveData(FMassDspBeltSaveChunk& OutSaveData) const;
     bool RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData);
     bool RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveData);
+    bool DestroyBelt(FBeltHandle BeltHandle);
+    bool DestroyBuilding(FMassEntityHandle BuildingEntity);
+    bool TryDemolishAtLocation(const FVector& WorldPos, float BeltSearchRadius = 200.f, float BuildingSearchRadius = 600.f);
+    bool FindDemolishTargetByRay(
+        const FVector& RayOrigin,
+        const FVector& RayDirection,
+        float MaxDistance,
+        float BuildingRadius,
+        float BeltRadius,
+        FDemolishTargetInfo& OutTarget);
 
     // ──────────────────────────── 建造预览接口 ────────────────────────────
 
@@ -395,6 +446,12 @@ public:
 
     /** 开始传送带连接预览，设置当前要放置的传送带类型 */
     void BeginPreviewBelt(EBeltType BeltType, EBeltSplineType SplineType = EBeltSplineType::Default);
+
+    /** 进入拆除模式，左键拆除目标，右键或再次按键退出。 */
+    void BeginDemolishMode();
+
+    /** 取消拆除模式。 */
+    void CancelDemolishMode();
 
     /**
      * 尝试在 WorldPos 附近自动吸附槽口
@@ -433,6 +490,7 @@ public:
     EBuildPlaceMode GetCurrentPlaceMode() const { return CurrentPlaceMode; }
     bool IsPreviewingBuilding() const { return CurrentPlaceMode == EBuildPlaceMode::Building; }
     bool IsPreviewingBelt() const { return CurrentPlaceMode == EBuildPlaceMode::Belt; }
+    bool IsDemolishMode() const { return CurrentPlaceMode == EBuildPlaceMode::Demolish; }
     bool BeltHasStartSlot() const { return bBeltHasStart; }
     EBuildingType GetPreviewBuildingType() const { return PreviewBuildingType; }
     EBeltType GetPreviewBeltType() const { return PreviewBeltType; }
@@ -523,11 +581,18 @@ private:
     /** 将建筑 (Entity, Location) 插入对应哈希格 */
     void RegisterBuildingInGrid(FMassEntityHandle Entity, const FVector& Location);
 
+    /** 将建筑从对应哈希格移除。 */
+    void UnregisterBuildingFromGrid(FMassEntityHandle Entity, const FVector& Location);
+
     /**
      * 收集与以 Center 为中心、半径为 Radius 的 AABB 相交的所有格子内的建筑实体。
      * 因每个建筑只注册到一个格（其原点所在格），结果集内无重复项。
      */
     void QueryBuildingGridRadius(const FVector& Center, float Radius, TArray<FMassEntityHandle>& OutEntities) const;
+
+    bool FindNearestBelt(const FVector& WorldPos, float SearchRadius, FBeltHandle& OutHandle, FVector* OutClosestPoint = nullptr);
+
+    void ReleaseChunkPMC(FBeltChunk& Chunk);
 
     // 按需懒创建指定物品类型的 ISM 组件
     UInstancedStaticMeshComponent* GetOrCreateIsmForItemType(EItemType ItemType);
