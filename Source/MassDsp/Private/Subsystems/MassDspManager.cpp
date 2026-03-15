@@ -28,6 +28,7 @@
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Save/MassDspSaveData.h"
+#include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspTechTreeSubsystem.h"
 
 namespace
@@ -1810,6 +1811,13 @@ bool UMassDspManager::DestroyBuilding(FMassEntityHandle BuildingEntity)
     if (!EntityManager.IsEntityValid(BuildingEntity))
     {
         return false;
+    }
+
+    const EBuildingType BuildingType = BuildingEntityTypeRegistry.FindRef(BuildingEntity);
+
+    if (UMassDspLogisticsSubsystem* LogisticsSubsystem = GetWorld()->GetSubsystem<UMassDspLogisticsSubsystem>())
+    {
+        LogisticsSubsystem->HandleBuildingDemolished(BuildingEntity, BuildingType);
     }
 
     FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BuildingEntity);

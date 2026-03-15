@@ -162,6 +162,7 @@ public:
 
     void CollectSaveData(FMassDspLogisticsSaveChunk& OutSaveData) const;
     bool RestoreSaveData(const FMassDspLogisticsSaveChunk& InSaveData);
+    void HandleBuildingDemolished(FMassEntityHandle BuildingEntity, EBuildingType BuildingType);
 
     // 
     //   设备生命周期（设备创建/销毁时调用）
@@ -311,6 +312,9 @@ private:
     /** 冷却结束处理：提交归属塔请求 + 开始返航或转 Idle */
     void HandleCooldownEnded(int32 DroneIdx);
 
+    /** 取消当前任务并从当前位置返航；若已在家则直接转 Idle。 */
+    void StartDroneReturnHome(int32 DroneIdx);
+
     /** 返航到家：转 Idle，加入空闲池，通知塔匹配 */
     void HandleDroneArrivedHome(int32 DroneIdx);
 
@@ -330,6 +334,12 @@ private:
     int32 AllocateDroneISMInstance(const FVector& InitialLocation);
 
     void RebuildDroneISMInstances();
+
+    void RebuildDroneSpatialGrid();
+
+    void SyncDronePresentationState();
+
+    void DestroyDroneInternal(FDroneHandle Handle, bool bSyncPresentation);
 
     void FreeDroneISMInstance(int32 InstanceIndex);
 

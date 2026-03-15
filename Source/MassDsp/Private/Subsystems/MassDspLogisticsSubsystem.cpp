@@ -468,6 +468,199 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
     return Result;
 }
 
+void UMassDspLogisticsSubsystem::HandleBuildingDemolished(FMassEntityHandle BuildingEntity, EBuildingType BuildingType)
+{
+    if (!BuildingEntity.IsValid())
+    {
+        return;
+    }
+
+    TArray<int32> RequestIdsToRemove;
+    TArray<int32> TaskIdsToRemove;
+    TArray<int32> OwnedDroneIndicesToDestroy;
+    TArray<int32> DroneIndicesToReturnHome;
+    TSet<int32> TaskIdsToRemoveSet;
+    TSet<FMassEntityHandle> ImpactedTowerEntities;
+
+    for (int32 RequestId = 0; RequestId < AllRequests.GetMaxIndex(); ++RequestId)
+    {
+        if (!AllRequests.IsValidIndex(RequestId))
+        {
+            continue;
+        }
+
+        const FLogisticsRequest& Request = AllRequests[RequestId];
+        if (Request.SourceEntity == BuildingEntity || Request.PreferredTowerEntity == BuildingEntity)
+        {
+            RequestIdsToRemove.Add(RequestId);
+            if (Request.PreferredTowerEntity.IsValid())
+            {
+                ImpactedTowerEntities.Add(Request.PreferredTowerEntity);
+            }
+        }
+    }
+
+    for (int32 TaskId = 0; TaskId < AllTasks.GetMaxIndex(); ++TaskId)
+    {
+        if (!AllTasks.IsValidIndex(TaskId))
+        {
+            continue;
+        }
+
+        const FLogisticsTask& Task = AllTasks[TaskId];
+        if (Task.PickupEntity == BuildingEntity ||
+            Task.DeliveryEntity == BuildingEntity ||
+            Task.SupplyTowerEntity == BuildingEntity ||
+            Task.DemandTowerEntity == BuildingEntity)
+        {
+            TaskIdsToRemove.AddUnique(TaskId);
+            TaskIdsToRemoveSet.Add(TaskId);
+            if (Task.DeviceType == ELogisticsDeviceType::Drone && DronePool.IsValidIndex(Task.DevicePoolIndex))
+            {
+                const FDroneData& AssignedDrone = DronePool[Task.DevicePoolIndex];
+                if (AssignedDrone.AffiliatedTowerEntity == BuildingEntity)
+                {
+                    OwnedDroneIndicesToDestroy.AddUnique(Task.DevicePoolIndex);
+                }
+                else
+                {
+                    DroneIndicesToReturnHome.AddUnique(Task.DevicePoolIndex);
+                }
+            }
+            if (Task.SupplyTowerEntity.IsValid())
+            {
+                ImpactedTowerEntities.Add(Task.SupplyTowerEntity);
+            }
+            if (Task.DemandTowerEntity.IsValid())
+            {
+                ImpactedTowerEntities.Add(Task.DemandTowerEntity);
+            }
+        }
+    }
+
+    for (auto It = DronePool.CreateIterator(); It; ++It)
+    {
+        const int32 DroneIndex = It.GetIndex();
+        const FDroneData& Drone = *It;
+        if (Drone.AffiliatedTowerEntity == BuildingEntity)
+        {
+            if (Drone.CurrentTaskId >= 0)
+            {
+                TaskIdsToRemove.AddUnique(Drone.CurrentTaskId);
+                TaskIdsToRemoveSet.Add(Drone.CurrentTaskId);
+            }
+            OwnedDroneIndicesToDestroy.Add(DroneIndex);
+        }
+    }
+
+    for (auto It = DronePool.CreateIterator(); It; ++It)
+    {
+        const int32 DroneIndex = It.GetIndex();
+        const FDroneData& Drone = *It;
+        if (Drone.AffiliatedTowerEntity == BuildingEntity)
+        {
+            continue;
+        }
+
+        if (OwnedDroneIndicesToDestroy.Contains(DroneIndex) || DroneIndicesToReturnHome.Contains(DroneIndex))
+        {
+            continue;
+        }
+
+        if ((Drone.CurrentTaskId >= 0 && TaskIdsToRemoveSet.Contains(Drone.CurrentTaskId)) ||
+            Drone.PickupEntity == BuildingEntity ||
+            Drone.DeliveryEntity == BuildingEntity)
+        {
+            if (Drone.CurrentTaskId >= 0)
+            {
+                TaskIdsToRemove.AddUnique(Drone.CurrentTaskId);
+                TaskIdsToRemoveSet.Add(Drone.CurrentTaskId);
+            }
+            DroneIndicesToReturnHome.AddUnique(DroneIndex);
+        }
+    }
+
+    ImpactedTowerEntities.Add(BuildingEntity);
+    for (const FMassEntityHandle TowerEntity : ImpactedTowerEntities)
+    {
+        FLogisticsTowerRuntimeData* RuntimeData = TowerRuntimeData.Find(TowerEntity);
+        if (!RuntimeData)
+        {
+            continue;
+        }
+
+        for (const int32 RequestId : RequestIdsToRemove)
+        {
+            RuntimeData->PendingRequestIds.Remove(RequestId);
+            if (RuntimeData->CachedReqId == RequestId)
+            {
+                RuntimeData->CachedReqId = INDEX_NONE;
+            }
+        }
+
+        for (const int32 TaskId : TaskIdsToRemove)
+        {
+            RuntimeData->ActiveTaskIds.Remove(TaskId);
+        }
+
+        if (RuntimeData->CachedReqId == INDEX_NONE && !RuntimeData->PendingRequestIds.IsEmpty())
+        {
+            RuntimeData->CachedReqId = RuntimeData->PendingRequestIds[0];
+        }
+    }
+
+    DirtyTowerSet.Remove(BuildingEntity);
+    DirtyTowerQueue.Remove(BuildingEntity);
+    TowerRuntimeData.Remove(BuildingEntity);
+
+    for (const int32 RequestId : RequestIdsToRemove)
+    {
+        if (AllRequests.IsValidIndex(RequestId))
+        {
+            AllRequests.RemoveAt(RequestId);
+        }
+    }
+
+    for (const int32 TaskId : TaskIdsToRemove)
+    {
+        if (AllTasks.IsValidIndex(TaskId))
+        {
+            AllTasks.RemoveAt(TaskId);
+        }
+    }
+
+    for (const int32 DroneIndex : DroneIndicesToReturnHome)
+    {
+        if (!DronePool.IsValidIndex(DroneIndex))
+        {
+            continue;
+        }
+
+        StartDroneReturnHome(DroneIndex);
+    }
+
+    OwnedDroneIndicesToDestroy.Sort(TGreater<int32>());
+    for (const int32 DroneIndex : OwnedDroneIndicesToDestroy)
+    {
+        if (!DronePool.IsValidIndex(DroneIndex))
+        {
+            continue;
+        }
+
+        const int32 Generation = DronePool[DroneIndex].Generation;
+        DestroyDroneInternal(FDroneHandle{DroneIndex, Generation}, false);
+    }
+
+    SyncDronePresentationState();
+
+    if (BuildingType == EBuildingType::LogisticsTower)
+    {
+        UE_LOG(LogTemp, Log,
+               TEXT("[Logistics] Tower demolished: cleaned runtime state | Requests=%d Tasks=%d DestroyedOwnedDrones=%d ReturnedDrones=%d"),
+               RequestIdsToRemove.Num(), TaskIdsToRemove.Num(), OwnedDroneIndicesToDestroy.Num(), DroneIndicesToReturnHome.Num());
+    }
+}
+
 void UMassDspLogisticsSubsystem::CollectSaveData(FMassDspLogisticsSaveChunk& OutSaveData) const
 {
     OutSaveData.Version = 1;
@@ -836,15 +1029,9 @@ bool UMassDspLogisticsSubsystem::RestoreSaveData(const FMassDspLogisticsSaveChun
         }
     }
 
-    DroneGridCells.Reset();
+    RebuildDroneSpatialGrid();
     for (auto DroneIt = DronePool.CreateIterator(); DroneIt; ++DroneIt)
     {
-        const int32 DronePoolIndex = DroneIt.GetIndex();
-        const FVector CurrentLocation = GetDroneCurrentLocation(*DroneIt);
-        const int32 CellX = FMath::FloorToInt(CurrentLocation.X / FGameConst::DroneGridCellSize);
-        const int32 CellY = FMath::FloorToInt(CurrentLocation.Y / FGameConst::DroneGridCellSize);
-        DroneGridCells.FindOrAdd(MakeDroneCellKey(CellX, CellY)).AddUnique(DronePoolIndex);
-
         WriteDroneCustomData(*DroneIt, CurrentGameTime);
         DroneIt->bCustomDataDirty = false;
     }
@@ -955,20 +1142,60 @@ FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
         IdleDroneIndexSet.Add(Idx);
     }
 
+    const int32 CellX = FMath::FloorToInt(InitialLocation.X / FGameConst::DroneGridCellSize);
+    const int32 CellY = FMath::FloorToInt(InitialLocation.Y / FGameConst::DroneGridCellSize);
+    DroneGridCells.FindOrAdd(MakeDroneCellKey(CellX, CellY)).AddUnique(Idx);
+
     return FDroneHandle{Idx, DronePool[Idx].Generation};
 }
 
 void UMassDspLogisticsSubsystem::DestroyDrone(FDroneHandle Handle)
 {
+    DestroyDroneInternal(Handle, true);
+}
+
+void UMassDspLogisticsSubsystem::DestroyDroneInternal(FDroneHandle Handle, bool bSyncPresentation)
+{
     if (!Handle.IsValid() || !DronePool.IsValidIndex(Handle.Index)) return;
     FDroneData& Drone = DronePool[Handle.Index];
     if (Drone.Generation != Handle.Generation) return; // 悬空句柄
 
-    FreeDroneISMInstance(Drone.ISMInstanceIndex);
+    if (Drone.AffiliatedTowerEntity.IsValid())
+    {
+        if (FLogisticsTowerRuntimeData* RuntimeData = TowerRuntimeData.Find(Drone.AffiliatedTowerEntity))
+        {
+            RuntimeData->AffiliatedDroneHandles.RemoveAll([&Handle](const FDroneHandle& ExistingHandle)
+            {
+                return ExistingHandle.Index == Handle.Index && ExistingHandle.Generation == Handle.Generation;
+            });
+        }
+    }
+
+    const FVector CurrentLocation = GetDroneCurrentLocation(Drone);
+    const int32 ISMInstanceIndex = Drone.ISMInstanceIndex;
     IdleDroneIndices.RemoveSwap(Handle.Index);
     IdleDroneIndexSet.Remove(Handle.Index);
     Drone.Generation++; // 使旧句柄失效
     DronePool.RemoveAt(Handle.Index);
+
+    if (!bSyncPresentation)
+    {
+        return;
+    }
+
+    FreeDroneISMInstance(ISMInstanceIndex);
+
+    const int32 CellX = FMath::FloorToInt(CurrentLocation.X / FGameConst::DroneGridCellSize);
+    const int32 CellY = FMath::FloorToInt(CurrentLocation.Y / FGameConst::DroneGridCellSize);
+    if (TArray<int32>* Cell = DroneGridCells.Find(MakeDroneCellKey(CellX, CellY)))
+    {
+        Cell->Remove(Handle.Index);
+    }
+
+    if (DroneISM)
+    {
+        DroneISM->MarkRenderStateDirty();
+    }
 }
 
 //
@@ -1004,6 +1231,29 @@ void UMassDspLogisticsSubsystem::ResetRuntimeState()
     DirtyTowerSet.Reset();
     DirtyTowerQueue.Reset();
     CleanupFrameCounter = 0;
+}
+
+void UMassDspLogisticsSubsystem::RebuildDroneSpatialGrid()
+{
+    DroneGridCells.Reset();
+    for (auto DroneIt = DronePool.CreateIterator(); DroneIt; ++DroneIt)
+    {
+        const int32 DronePoolIndex = DroneIt.GetIndex();
+        const FVector CurrentLocation = GetDroneCurrentLocation(*DroneIt);
+        const int32 CellX = FMath::FloorToInt(CurrentLocation.X / FGameConst::DroneGridCellSize);
+        const int32 CellY = FMath::FloorToInt(CurrentLocation.Y / FGameConst::DroneGridCellSize);
+        DroneGridCells.FindOrAdd(MakeDroneCellKey(CellX, CellY)).AddUnique(DronePoolIndex);
+    }
+}
+
+void UMassDspLogisticsSubsystem::SyncDronePresentationState()
+{
+    RebuildDroneSpatialGrid();
+
+    if (DroneISM)
+    {
+        RebuildDroneISMInstances();
+    }
 }
 
 // 
@@ -1812,8 +2062,10 @@ void UMassDspLogisticsSubsystem::RebuildDroneISMInstances()
     for (auto It = DronePool.CreateIterator(); It; ++It)
     {
         FDroneData& Drone = *It;
-        const FVector CurrentLocation = GetDroneCurrentLocation(Drone);
-        Drone.ISMInstanceIndex = AllocateDroneISMInstance(CurrentLocation);
+        const FVector InstanceAnchor = !Drone.HomeLocation.IsNearlyZero()
+            ? Drone.HomeLocation
+            : GetDroneCurrentLocation(Drone);
+        Drone.ISMInstanceIndex = AllocateDroneISMInstance(InstanceAnchor);
         if (Drone.ISMInstanceIndex >= 0)
         {
             WriteDroneCustomData(Drone, GameTime);
@@ -1831,6 +2083,7 @@ void UMassDspLogisticsSubsystem::FreeDroneISMInstance(int32 InstanceIndex)
     // Bug 渲染 #3 修复：RemoveInstance 会把最后一个实例 swap 到 InstanceIndex 位置，
     // 必须先更新对应无人机的 ISMInstanceIndex，否则其 Custom Data 写入会错位。
     const int32 LastISMIndex = DroneISM->GetInstanceCount() - 1;
+    FDroneData* SwappedDrone = nullptr;
     if (LastISMIndex > InstanceIndex)
     {
         // 找出 ISMInstanceIndex == LastISMIndex 的无人机，将其更新为 InstanceIndex（swap 目标）
@@ -1839,12 +2092,20 @@ void UMassDspLogisticsSubsystem::FreeDroneISMInstance(int32 InstanceIndex)
             if (It->ISMInstanceIndex == LastISMIndex)
             {
                 It->ISMInstanceIndex = InstanceIndex;
+                SwappedDrone = &(*It);
                 break;
             }
         }
     }
 
     DroneISM->RemoveInstance(InstanceIndex);
+
+    if (SwappedDrone)
+    {
+        const float GameTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+        WriteDroneCustomData(*SwappedDrone, GameTime);
+        SwappedDrone->bCustomDataDirty = false;
+    }
 }
 
 // 
@@ -2058,8 +2319,28 @@ void UMassDspLogisticsSubsystem::HandleCooldownEnded(int32 DroneIdx)
     }
 
     // ── 开始返回归属塔 ──────────────────────────────────────────────────────────
+    StartDroneReturnHome(DroneIdx);
+}
+
+void UMassDspLogisticsSubsystem::StartDroneReturnHome(int32 DroneIdx)
+{
+    if (!DronePool.IsValidIndex(DroneIdx)) return;
+    FDroneData& Drone = DronePool[DroneIdx];
+
+    Drone.CurrentTaskId = -1;
+    Drone.PickupEntity = FMassEntityHandle();
+    Drone.DeliveryEntity = FMassEntityHandle();
+    Drone.PickupLocation = FVector::ZeroVector;
+    Drone.DeliveryLocation = FVector::ZeroVector;
+    Drone.CarriedItemType = EItemType::None;
+    Drone.CarriedQuantity = 0;
+    Drone.CooldownRemaining = 0.f;
+
+    IdleDroneIndices.RemoveSwap(DroneIdx);
+    IdleDroneIndexSet.Remove(DroneIdx);
+
     const FVector HomePos = Drone.HomeLocation;
-    const FVector CurPos = Drone.P3; // 当前停留位置（上一段贝塞尔终点）
+    const FVector CurPos = GetDroneCurrentLocation(Drone);
     const float HomeDist = FVector::Dist(CurPos, HomePos);
 
     if (Drone.AffiliatedTowerEntity.IsValid() && HomeDist > 50.f)
@@ -2074,14 +2355,11 @@ void UMassDspLogisticsSubsystem::HandleCooldownEnded(int32 DroneIdx)
         Drone.ElapsedTime = 0.f;
         Drone.TotalFlightTime = HomeDist / FMath::Max(1.f, Drone.FlightSpeed);
         Drone.State = ELogisticsDeviceState::ReturningHome;
-        // P0 优化：返航贝塞尔就绪，标脏让 Phase B 写入返航段 CustomData
         Drone.bCustomDataDirty = true;
+        return;
     }
-    else
-    {
-        // 已在家或无归属塔，直接 Idle
-        HandleDroneArrivedHome(DroneIdx);
-    }
+
+    HandleDroneArrivedHome(DroneIdx);
 }
 
 // 
