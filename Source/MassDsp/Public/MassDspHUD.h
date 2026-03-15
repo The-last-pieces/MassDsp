@@ -5,6 +5,7 @@
 #include "UI/MassDspHotbarWidget.h"
 #include "MassDspHUD.generated.h"
 
+struct FMassDspAsyncSaveLoadResult;
 class UMassDspInventoryWidget;
 class UMassDspSystemStatsWidget;
 class UMassDspTechTreeWidget;
@@ -65,6 +66,8 @@ public:
     float GetAdaptiveCameraSpeed(float Height) const;
 
 private:
+    void HandleAsyncSaveFinished(const FMassDspAsyncSaveLoadResult& Result);
+    void HandleAsyncLoadFinished(const FMassDspAsyncSaveLoadResult& Result);
     void HandleInteractKey();
     void HandleQuickSaveKey();
     void HandleQuickLoadKey();

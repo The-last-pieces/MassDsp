@@ -1,5 +1,6 @@
 #include "MassDspGameInstance.h"
 
+#include "Async/Async.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Engine/Engine.h"
 #include "Kismet/GameplayStatics.h"
@@ -82,6 +83,11 @@ void UMassDspGameInstance::Init()
 
 bool UMassDspGameInstance::SaveGameToSlot(const FString& SlotName, int32 UserIndex)
 {
+    if (IsSaveLoadRequestInFlight())
+    {
+        return false;
+    }
+
     UMassDspSaveGame* SaveGameObject = Cast<UMassDspSaveGame>(UGameplayStatics::CreateSaveGameObject(UMassDspSaveGame::StaticClass()));
     if (!SaveGameObject)
     {
@@ -98,6 +104,11 @@ bool UMassDspGameInstance::SaveGameToSlot(const FString& SlotName, int32 UserInd
 
 bool UMassDspGameInstance::LoadGameFromSlot(const FString& SlotName, int32 UserIndex)
 {
+    if (IsSaveLoadRequestInFlight())
+    {
+        return false;
+    }
+
     USaveGame* RawSaveGame = UGameplayStatics::LoadGameFromSlot(SlotName, UserIndex);
     UMassDspSaveGame* SaveGameObject = Cast<UMassDspSaveGame>(RawSaveGame);
     if (!SaveGameObject)
@@ -116,6 +127,257 @@ bool UMassDspGameInstance::LoadGameFromSlot(const FString& SlotName, int32 UserI
 bool UMassDspGameInstance::DoesSaveExist(const FString& SlotName, int32 UserIndex) const
 {
     return UGameplayStatics::DoesSaveGameExist(SlotName, UserIndex);
+}
+
+bool UMassDspGameInstance::SaveGameToSlotAsync(const FString& SlotName, int32 UserIndex)
+{
+    if (!TryBeginAsyncOperation(EMassDspAsyncSaveLoadOperation::Save, SlotName, UserIndex))
+    {
+        return false;
+    }
+
+    UMassDspSaveGame* SaveGameObject = Cast<UMassDspSaveGame>(UGameplayStatics::CreateSaveGameObject(UMassDspSaveGame::StaticClass()));
+    if (!SaveGameObject)
+    {
+        CompleteAsyncOperation(EMassDspAsyncSaveLoadOperation::Save, SlotName, UserIndex, false);
+        return false;
+    }
+
+    const double CollectStartSeconds = FPlatformTime::Seconds();
+    if (!CollectCurrentState(*SaveGameObject))
+    {
+        CompleteAsyncOperation(EMassDspAsyncSaveLoadOperation::Save, SlotName, UserIndex, false);
+        return false;
+    }
+    ActiveCollectMs = (FPlatformTime::Seconds() - CollectStartSeconds) * 1000.0;
+
+    SaveGameObject->AddToRoot();
+
+    TWeakObjectPtr<UMassDspGameInstance> WeakThis(this);
+    Async(EAsyncExecution::ThreadPool, [WeakThis, SaveGameObject, SlotName, UserIndex]()
+    {
+        TArray<uint8> SaveDataBuffer;
+        const double SerializeStartSeconds = FPlatformTime::Seconds();
+        const bool bSerialized = UGameplayStatics::SaveGameToMemory(SaveGameObject, SaveDataBuffer);
+        const double SerializeMs = (FPlatformTime::Seconds() - SerializeStartSeconds) * 1000.0;
+
+        const double IoStartSeconds = FPlatformTime::Seconds();
+        const bool bSaved = bSerialized && UGameplayStatics::SaveDataToSlot(SaveDataBuffer, SlotName, UserIndex);
+        const double IoMs = (FPlatformTime::Seconds() - IoStartSeconds) * 1000.0;
+
+        const int64 DataBytes = SaveDataBuffer.Num();
+
+        AsyncTask(ENamedThreads::GameThread, [WeakThis, SaveGameObject, SlotName, UserIndex, bSaved, SerializeMs, IoMs, DataBytes]()
+        {
+            SaveGameObject->RemoveFromRoot();
+
+            if (WeakThis.IsValid())
+            {
+                WeakThis->HandleAsyncSaveFinished(SlotName, UserIndex, bSaved, SerializeMs, IoMs, DataBytes);
+            }
+        });
+    });
+
+    return true;
+}
+
+bool UMassDspGameInstance::LoadGameFromSlotAsync(const FString& SlotName, int32 UserIndex)
+{
+    if (!DoesSaveExist(SlotName, UserIndex))
+    {
+        return false;
+    }
+
+    if (!TryBeginAsyncOperation(EMassDspAsyncSaveLoadOperation::Load, SlotName, UserIndex))
+    {
+        return false;
+    }
+
+    TWeakObjectPtr<UMassDspGameInstance> WeakThis(this);
+    Async(EAsyncExecution::ThreadPool, [WeakThis, SlotName, UserIndex]()
+    {
+        TArray<uint8> SaveDataBuffer;
+        const double IoStartSeconds = FPlatformTime::Seconds();
+        const bool bSucceeded = UGameplayStatics::LoadDataFromSlot(SaveDataBuffer, SlotName, UserIndex);
+        const double IoMs = (FPlatformTime::Seconds() - IoStartSeconds) * 1000.0;
+        const int64 DataBytes = SaveDataBuffer.Num();
+
+        UMassDspSaveGame* LoadedSaveGame = nullptr;
+        double DeserializeMs = 0.0;
+        double UpgradeMs = 0.0;
+        bool bPreparedForRestore = false;
+
+        if (bSucceeded)
+        {
+            const double DeserializeStartSeconds = FPlatformTime::Seconds();
+            LoadedSaveGame = Cast<UMassDspSaveGame>(UGameplayStatics::LoadGameFromMemory(SaveDataBuffer));
+            DeserializeMs = (FPlatformTime::Seconds() - DeserializeStartSeconds) * 1000.0;
+
+            if (LoadedSaveGame && WeakThis.IsValid())
+            {
+                const double UpgradeStartSeconds = FPlatformTime::Seconds();
+                bPreparedForRestore = WeakThis->UpgradeSaveGameToCurrentVersion(*LoadedSaveGame);
+                UpgradeMs = (FPlatformTime::Seconds() - UpgradeStartSeconds) * 1000.0;
+            }
+        }
+
+        AsyncTask(ENamedThreads::GameThread, [WeakThis, SlotName, UserIndex, bPreparedForRestore, LoadedSaveGame, IoMs, DeserializeMs, UpgradeMs, DataBytes]()
+        {
+            if (WeakThis.IsValid())
+            {
+                WeakThis->HandleAsyncLoadFinished(SlotName, UserIndex, bPreparedForRestore, LoadedSaveGame, IoMs, DeserializeMs, UpgradeMs, DataBytes);
+            }
+        });
+    });
+
+    return true;
+}
+
+bool UMassDspGameInstance::IsSaveLoadRequestInFlight() const
+{
+    return ActiveAsyncOperation != EMassDspAsyncSaveLoadOperation::None;
+}
+
+bool UMassDspGameInstance::IsAsyncSaving() const
+{
+    return ActiveAsyncOperation == EMassDspAsyncSaveLoadOperation::Save;
+}
+
+bool UMassDspGameInstance::IsAsyncLoading() const
+{
+    return ActiveAsyncOperation == EMassDspAsyncSaveLoadOperation::Load;
+}
+
+FString UMassDspGameInstance::GetActiveSaveLoadOperationName() const
+{
+    switch (ActiveAsyncOperation)
+    {
+    case EMassDspAsyncSaveLoadOperation::Save:
+        return TEXT("saving");
+    case EMassDspAsyncSaveLoadOperation::Load:
+        return TEXT("loading");
+    default:
+        return TEXT("idle");
+    }
+}
+
+bool UMassDspGameInstance::TryBeginAsyncOperation(EMassDspAsyncSaveLoadOperation Operation, const FString& SlotName, int32 UserIndex)
+{
+    if (IsSaveLoadRequestInFlight())
+    {
+        return false;
+    }
+
+    ActiveAsyncOperation = Operation;
+    ActiveAsyncSlotName = SlotName;
+    ActiveAsyncUserIndex = UserIndex;
+    ActiveAsyncStartSeconds = FPlatformTime::Seconds();
+    return true;
+}
+
+FMassDspAsyncSaveLoadResult UMassDspGameInstance::CompleteAsyncOperation(
+    EMassDspAsyncSaveLoadOperation Operation,
+    const FString& SlotName,
+    int32 UserIndex,
+    bool bSucceeded,
+    const FMassDspAsyncSaveLoadResult* PhaseStats)
+{
+    FMassDspAsyncSaveLoadResult Result;
+    Result.Operation = Operation;
+    Result.SlotName = SlotName;
+    Result.UserIndex = UserIndex;
+    Result.bSucceeded = bSucceeded;
+    Result.ElapsedMs = (FPlatformTime::Seconds() - ActiveAsyncStartSeconds) * 1000.0;
+    Result.CollectMs = ActiveCollectMs;
+
+    if (PhaseStats)
+    {
+        Result.SerializeMs = PhaseStats->SerializeMs;
+        Result.IoMs = PhaseStats->IoMs;
+        Result.DeserializeMs = PhaseStats->DeserializeMs;
+        Result.UpgradeMs = PhaseStats->UpgradeMs;
+        Result.RestoreMs = PhaseStats->RestoreMs;
+        Result.DataBytes = PhaseStats->DataBytes;
+    }
+
+    ActiveAsyncOperation = EMassDspAsyncSaveLoadOperation::None;
+    ActiveAsyncSlotName.Reset();
+    ActiveAsyncUserIndex = 0;
+    ActiveAsyncStartSeconds = 0.0;
+    ActiveCollectMs = 0.0;
+    return Result;
+}
+
+void UMassDspGameInstance::LogAsyncSaveLoadBreakdown(const FMassDspAsyncSaveLoadResult& Result) const
+{
+    const TCHAR* OperationName = Result.Operation == EMassDspAsyncSaveLoadOperation::Save ? TEXT("Save") : TEXT("Load");
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[SaveDebug] %s Breakdown: slot=%s user=%d success=%s total=%.2f ms collect=%.2f ms serialize=%.2f ms io=%.2f ms deserialize=%.2f ms upgrade=%.2f ms restore=%.2f ms bytes=%lld"),
+        OperationName,
+        *Result.SlotName,
+        Result.UserIndex,
+        Result.bSucceeded ? TEXT("true") : TEXT("false"),
+        Result.ElapsedMs,
+        Result.CollectMs,
+        Result.SerializeMs,
+        Result.IoMs,
+        Result.DeserializeMs,
+        Result.UpgradeMs,
+        Result.RestoreMs,
+        Result.DataBytes);
+}
+
+void UMassDspGameInstance::HandleAsyncSaveFinished(const FString& SlotName, int32 UserIndex, bool bSucceeded, double SerializeMs, double IoMs, int64 DataBytes)
+{
+    FMassDspAsyncSaveLoadResult PhaseStats;
+    PhaseStats.SerializeMs = SerializeMs;
+    PhaseStats.IoMs = IoMs;
+    PhaseStats.DataBytes = DataBytes;
+
+    const FMassDspAsyncSaveLoadResult Result = CompleteAsyncOperation(
+        EMassDspAsyncSaveLoadOperation::Save,
+        SlotName,
+        UserIndex,
+        bSucceeded,
+        &PhaseStats);
+    LogAsyncSaveLoadBreakdown(Result);
+    AsyncSaveFinishedEvent.Broadcast(Result);
+}
+
+void UMassDspGameInstance::HandleAsyncLoadFinished(
+    const FString& SlotName,
+    int32 UserIndex,
+    bool bSucceeded,
+    UMassDspSaveGame* LoadedSaveGame,
+    double IoMs,
+    double DeserializeMs,
+    double UpgradeMs,
+    int64 DataBytes)
+{
+    bool bRestoreSucceeded = false;
+    FMassDspAsyncSaveLoadResult PhaseStats;
+    PhaseStats.IoMs = IoMs;
+    PhaseStats.DeserializeMs = DeserializeMs;
+    PhaseStats.UpgradeMs = UpgradeMs;
+    PhaseStats.DataBytes = DataBytes;
+
+    if (bSucceeded && LoadedSaveGame)
+    {
+        const double RestoreStartSeconds = FPlatformTime::Seconds();
+        bRestoreSucceeded = RestoreCurrentState(*LoadedSaveGame);
+        PhaseStats.RestoreMs = (FPlatformTime::Seconds() - RestoreStartSeconds) * 1000.0;
+    }
+
+    const FMassDspAsyncSaveLoadResult Result = CompleteAsyncOperation(
+        EMassDspAsyncSaveLoadOperation::Load,
+        SlotName,
+        UserIndex,
+        bRestoreSucceeded,
+        &PhaseStats);
+    LogAsyncSaveLoadBreakdown(Result);
+    AsyncLoadFinishedEvent.Broadcast(Result);
 }
 
 bool UMassDspGameInstance::CollectCurrentState(UMassDspSaveGame& OutSaveGame) const

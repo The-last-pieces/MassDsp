@@ -29,6 +29,12 @@ void AMassDspHUD::BeginPlay()
 {
     Super::BeginPlay();
 
+    if (UMassDspGameInstance* GameInstance = GetGameInstance<UMassDspGameInstance>())
+    {
+        GameInstance->OnAsyncSaveFinished().AddUObject(this, &AMassDspHUD::HandleAsyncSaveFinished);
+        GameInstance->OnAsyncLoadFinished().AddUObject(this, &AMassDspHUD::HandleAsyncLoadFinished);
+    }
+
     APlayerController* PC = GetOwningPlayerController();
     if (!PC) return;
 
@@ -130,24 +136,21 @@ void AMassDspHUD::HandleQuickSaveKey()
         return;
     }
 
-    const double StartSeconds = FPlatformTime::Seconds();
-    const bool bSucceeded = GameInstance->SaveGameToSlot(UMassDspGameInstance::DebugQuickSaveSlotName, 0);
-    const double ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
-    const FString Message = FString::Printf(
-        TEXT("[SaveDebug] F5 QuickSave %s: %s (%.2f ms)"),
-        bSucceeded ? TEXT("ok") : TEXT("failed"),
-        UMassDspGameInstance::DebugQuickSaveSlotName,
-        ElapsedMs);
-
-    if (bSucceeded)
+    if (!GameInstance->SaveGameToSlotAsync(UMassDspGameInstance::DebugQuickSaveSlotName, 0))
     {
-        UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
-    }
-    else
-    {
+        const FString Message = GameInstance->IsSaveLoadRequestInFlight()
+            ? FString::Printf(TEXT("[SaveDebug] F5 QuickSave rejected: %s in progress"), *GameInstance->GetActiveSaveLoadOperationName())
+            : FString::Printf(TEXT("[SaveDebug] F5 QuickSave failed to start: %s"), UMassDspGameInstance::DebugQuickSaveSlotName);
         UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
+        ShowSaveDebugMessage(Message, FColor::Red);
+        return;
     }
-    ShowSaveDebugMessage(Message, bSucceeded ? FColor::Green : FColor::Red);
+
+    const FString Message = FString::Printf(
+        TEXT("[SaveDebug] F5 QuickSave started: %s"),
+        UMassDspGameInstance::DebugQuickSaveSlotName);
+    UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
+    ShowSaveDebugMessage(Message, FColor::Yellow);
 }
 
 void AMassDspHUD::HandleQuickLoadKey()
@@ -170,16 +173,32 @@ void AMassDspHUD::HandleQuickLoadKey()
         return;
     }
 
-    const double StartSeconds = FPlatformTime::Seconds();
-    const bool bSucceeded = GameInstance->LoadGameFromSlot(UMassDspGameInstance::DebugQuickSaveSlotName, 0);
-    const double ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
-    const FString Message = FString::Printf(
-        TEXT("[SaveDebug] F9 QuickLoad %s: %s (%.2f ms)"),
-        bSucceeded ? TEXT("ok") : TEXT("failed"),
-        UMassDspGameInstance::DebugQuickSaveSlotName,
-        ElapsedMs);
+    if (!GameInstance->LoadGameFromSlotAsync(UMassDspGameInstance::DebugQuickSaveSlotName, 0))
+    {
+        const FString Message = GameInstance->IsSaveLoadRequestInFlight()
+            ? FString::Printf(TEXT("[SaveDebug] F9 QuickLoad rejected: %s in progress"), *GameInstance->GetActiveSaveLoadOperationName())
+            : FString::Printf(TEXT("[SaveDebug] F9 QuickLoad failed to start: %s"), UMassDspGameInstance::DebugQuickSaveSlotName);
+        UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
+        ShowSaveDebugMessage(Message, FColor::Red);
+        return;
+    }
 
-    if (bSucceeded)
+    const FString Message = FString::Printf(
+        TEXT("[SaveDebug] F9 QuickLoad started: %s"),
+        UMassDspGameInstance::DebugQuickSaveSlotName);
+    UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
+    ShowSaveDebugMessage(Message, FColor::Yellow);
+}
+
+void AMassDspHUD::HandleAsyncSaveFinished(const FMassDspAsyncSaveLoadResult& Result)
+{
+    const FString Message = FString::Printf(
+        TEXT("[SaveDebug] F5 QuickSave %s: %s (%.2f ms)"),
+        Result.bSucceeded ? TEXT("ok") : TEXT("failed"),
+        *Result.SlotName,
+        Result.ElapsedMs);
+
+    if (Result.bSucceeded)
     {
         UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
     }
@@ -187,7 +206,28 @@ void AMassDspHUD::HandleQuickLoadKey()
     {
         UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
     }
-    ShowSaveDebugMessage(Message, bSucceeded ? FColor::Green : FColor::Red);
+
+    ShowSaveDebugMessage(Message, Result.bSucceeded ? FColor::Green : FColor::Red);
+}
+
+void AMassDspHUD::HandleAsyncLoadFinished(const FMassDspAsyncSaveLoadResult& Result)
+{
+    const FString Message = FString::Printf(
+        TEXT("[SaveDebug] F9 QuickLoad %s: %s (%.2f ms)"),
+        Result.bSucceeded ? TEXT("ok") : TEXT("failed"),
+        *Result.SlotName,
+        Result.ElapsedMs);
+
+    if (Result.bSucceeded)
+    {
+        UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("%s"), *Message);
+    }
+
+    ShowSaveDebugMessage(Message, Result.bSucceeded ? FColor::Green : FColor::Red);
 }
 
 void AMassDspHUD::ToggleInventoryWidget()
