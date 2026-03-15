@@ -12,7 +12,11 @@
 
 #include "MassDspLogisticsSubsystem.generated.h"
 
+class AActor;
+class AMassDspGameMode;
+class USceneComponent;
 class UMassDspManager;
+struct FMassDspLogisticsSaveChunk;
 
 /**
  * 物流调度子系统（Demo 阶段：仅实现无人机，Vehicle/Train 暂未实现）
@@ -87,6 +91,10 @@ public:
     /** 无人机 ISM（10w+ 实例，由 MeshConfig 资产通过蓝图赋值） */
     UPROPERTY()
     UInstancedStaticMeshComponent* DroneISM = nullptr;
+    UPROPERTY()
+    AActor* DroneISMHostActor = nullptr;
+    UPROPERTY()
+    USceneComponent* DroneISMHostRoot = nullptr;
 
     /**
      * 初始化 ISM 组件（由蓝图或关卡初始化逻辑调用一次）
@@ -152,6 +160,9 @@ public:
      */
     FTowerDroneStatus QueryTowerDroneStatus(FMassEntityHandle TowerEntity) const;
 
+    void CollectSaveData(FMassDspLogisticsSaveChunk& OutSaveData) const;
+    bool RestoreSaveData(const FMassDspLogisticsSaveChunk& InSaveData);
+
     // 
     //   设备生命周期（设备创建/销毁时调用）
     // 
@@ -180,6 +191,10 @@ public:
     // 
 
 private:
+    AMassDspGameMode* ResolveGameMode() const;
+    bool EnsureDroneISMInitialized();
+    void EnsureDefaultDispatchStrategies();
+
     /** 无人机到达取货点（State 变为 AtPickup） */
     void OnDroneArrivedAtPickup(int32 DronePoolIndex);
     /** 无人机到达交货点，执行物品转移（State 变为 Cooldown  Idle） */
@@ -314,9 +329,13 @@ private:
     /** 在 DroneIdleHISM 中分配 Idle 实例（BucketIndex=-1 新建无人机时调用）。 */
     int32 AllocateDroneISMInstance(const FVector& InitialLocation);
 
+    void RebuildDroneISMInstances();
+
     void FreeDroneISMInstance(int32 InstanceIndex);
 
     /** 执行物品转移：取货建筑.TryProvide  设备携带  交货建筑.TryConsume */
     bool ExecuteItemTransfer(FMassEntityHandle PickupEntity, FMassEntityHandle DeliveryEntity,
                              EItemType& InOutItemType, int32& InOutQuantity);
+
+    void ResetRuntimeState();
 };

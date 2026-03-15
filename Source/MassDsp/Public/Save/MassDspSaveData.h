@@ -352,12 +352,195 @@ struct MASSDSP_API FMassDspBeltSaveChunk
 };
 
 USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspLogisticsRequestSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 Type = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 SourceBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    EItemType ItemType = EItemType::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 Quantity = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 Priority = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 PreferredTowerBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float RequestTime = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float ExpiryDuration = 0.0f;
+};
+
+USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspLogisticsTaskSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 SupplyRequestIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 DemandRequestIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 DeviceType = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 DeviceIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 State = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector PickupLocation = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector DeliveryLocation = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 PickupBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 DeliveryBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 TransferQuantity = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float CreatedTime = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 SupplyTowerBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 DemandTowerBuildingIndex = INDEX_NONE;
+};
+
+USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspDroneSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 Generation = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 State = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 CurrentTaskIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector P0 = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector P1 = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector P2 = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector P3 = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float TotalFlightTime = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float ElapsedTime = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float FlightSpeed = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float CooldownDuration = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float CooldownRemaining = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 PickupBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 DeliveryBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector PickupLocation = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector DeliveryLocation = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    EItemType CarriedItemType = EItemType::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 CarriedQuantity = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 CarryCapacity = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 AffiliatedTowerBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector HomeLocation = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float IdlePhaseOffset = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float DispatchTime = 0.0f;
+};
+
+USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspLogisticsTowerRuntimeSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 TowerBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<int32> PendingRequestIndices;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<int32> ActiveTaskIndices;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<int32> AffiliatedDroneIndices;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 CachedRequestIndex = INDEX_NONE;
+};
+
+USTRUCT(BlueprintType)
 struct MASSDSP_API FMassDspLogisticsSaveChunk
 {
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     int32 Version = 1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspLogisticsRequestSaveData> Requests;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspLogisticsTaskSaveData> Tasks;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspDroneSaveData> Drones;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspLogisticsTowerRuntimeSaveData> Towers;
 };
 
 UCLASS(BlueprintType)

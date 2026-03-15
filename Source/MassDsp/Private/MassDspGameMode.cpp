@@ -385,52 +385,6 @@ void AMassDspGameMode::TestCase2() const
         }
     }
 
-    // ── ISM 宿主 Actor ──────────────────────────────────────────────────────
-    if (GameConfig->DroneMesh && GameConfig->DroneMaterial)
-    {
-        FActorSpawnParameters ISMHostParams;
-        ISMHostParams.Name = TEXT("DroneISMHostActor");
-        ISMHostParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-        AActor* ISMHost = World->SpawnActor<AActor>(AActor::StaticClass(),
-                                                    FVector::ZeroVector, FRotator::ZeroRotator, ISMHostParams);
-        check(ISMHost);
-
-        USceneComponent* ISMHostRoot = NewObject<USceneComponent>(ISMHost, TEXT("ISMHostRoot"));
-        ISMHost->SetRootComponent(ISMHostRoot);
-        ISMHostRoot->RegisterComponent();
-
-        UInstancedStaticMeshComponent* DroneISM =
-            NewObject<UInstancedStaticMeshComponent>(ISMHost, TEXT("DroneISMComponent"));
-        DroneISM->SetStaticMesh(GameConfig->DroneMesh);
-        DroneISM->SetMobility(EComponentMobility::Movable);
-        DroneISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-        DroneISM->SetCastShadow(false);
-        DroneISM->AttachToComponent(ISMHostRoot, FAttachmentTransformRules::KeepRelativeTransform);
-        ISMHost->AddInstanceComponent(DroneISM);
-        DroneISM->RegisterComponent();
-
-        // ── 无人机 WPO 材质 ────────────────────────────────────────────────────
-        if (GameConfig->DroneMaterial)
-        {
-            DroneISM->SetMaterial(0, GameConfig->DroneMaterial);
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[Logistics] GameConfig.DroneMaterial 未配置，无人机材质缺失"));
-        }
-
-        LogisticsSub->SetupISMComponents(DroneISM);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Logistics] DroneMesh 或 DroneMaterial 未配置，无人机不会显示"));
-    }
-
-    // ── 注册无人机分派策略 ──────────────────────────────────────────────────
-    LogisticsSub->RegisterDispatchStrategy(
-        ELogisticsDeviceType::Drone,
-        MakeUnique<FDroneDispatchStrategy>(LogisticsSub));
-
     // ── 每个供应塔创建 DronesPerTower 架无人机 ─────────────────────────────
     int32 TotalDrones = 0;
     for (int32 i = 0; i < NumSupplyTowers; ++i)

@@ -7,6 +7,7 @@
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Save/MassDspSaveData.h"
 #include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspTechTreeSubsystem.h"
 
 namespace
@@ -126,9 +127,10 @@ bool UMassDspGameInstance::CollectCurrentState(UMassDspSaveGame& OutSaveGame) co
     }
 
     UMassDspManager* Manager = World->GetSubsystem<UMassDspManager>();
+    UMassDspLogisticsSubsystem* Logistics = World->GetSubsystem<UMassDspLogisticsSubsystem>();
     UMassDspTechTreeSubsystem* TechTree = World->GetSubsystem<UMassDspTechTreeSubsystem>();
     UMassDspPlayerInventoryComponent* PlayerInventory = ResolvePlayerInventory(World);
-    if (!Manager || !TechTree || !PlayerInventory)
+    if (!Manager || !Logistics || !TechTree || !PlayerInventory)
     {
         return false;
     }
@@ -139,6 +141,7 @@ bool UMassDspGameInstance::CollectCurrentState(UMassDspSaveGame& OutSaveGame) co
 
     Manager->CollectBuildingSaveData(OutSaveGame.Buildings);
     Manager->CollectBeltSaveData(OutSaveGame.Belts);
+    Logistics->CollectSaveData(OutSaveGame.Logistics);
 
     OutSaveGame.PlayerInventory.MaxInventoryItems = PlayerInventory->GetCapacity();
     OutSaveGame.PlayerInventory.ItemStacks.Reset();
@@ -180,9 +183,10 @@ bool UMassDspGameInstance::RestoreCurrentState(const UMassDspSaveGame& InSaveGam
     }
 
     UMassDspManager* Manager = World->GetSubsystem<UMassDspManager>();
+    UMassDspLogisticsSubsystem* Logistics = World->GetSubsystem<UMassDspLogisticsSubsystem>();
     UMassDspTechTreeSubsystem* TechTree = World->GetSubsystem<UMassDspTechTreeSubsystem>();
     UMassDspPlayerInventoryComponent* PlayerInventory = ResolvePlayerInventory(World);
-    if (!Manager || !TechTree || !PlayerInventory)
+    if (!Manager || !Logistics || !TechTree || !PlayerInventory)
     {
         return false;
     }
@@ -193,6 +197,11 @@ bool UMassDspGameInstance::RestoreCurrentState(const UMassDspSaveGame& InSaveGam
     }
 
     if (!Manager->RestoreBeltSaveData(InSaveGame.Belts))
+    {
+        return false;
+    }
+
+    if (!Logistics->RestoreSaveData(InSaveGame.Logistics))
     {
         return false;
     }

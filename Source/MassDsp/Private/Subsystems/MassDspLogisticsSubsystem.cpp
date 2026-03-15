@@ -6,8 +6,12 @@
 #include "Subsystems/MassDspManager.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspLogisticsTowerFragment.h"
+#include "Logistics/MassDspDroneStrategy.h"
+#include "Save/MassDspSaveData.h"
 #include "Async/ParallelFor.h"      // ParallelFor
+#include "Components/SceneComponent.h"
 #include "Misc/ScopeLock.h"         // FScopeLock / FCriticalSection
+#include "MassDspGameMode.h"
 
 // 安全获取 FMassEntityManager 指针（启动阶段 UMassEntitySubsystem 可能尚未就绪）
 static FMassEntityManager* GetEntityManagerSafe(UWorld* World)
@@ -15,6 +19,50 @@ static FMassEntityManager* GetEntityManagerSafe(UWorld* World)
     if (!World) return nullptr;
     UMassEntitySubsystem* Sub = World->GetSubsystem<UMassEntitySubsystem>();
     return Sub ? &Sub->GetMutableEntityManager() : nullptr;
+}
+
+namespace
+{
+    static int32 ResolveBuildingSaveIndex(
+        const TMap<FMassEntityHandle, int32>& BuildingIndexByEntity,
+        FMassEntityHandle Entity)
+    {
+        if (const int32* FoundIndex = BuildingIndexByEntity.Find(Entity))
+        {
+            return *FoundIndex;
+        }
+        return INDEX_NONE;
+    }
+
+    static FMassEntityHandle ResolveBuildingEntity(
+        const TArray<FMassEntityHandle>& BuildingEntities,
+        int32 BuildingIndex)
+    {
+        return BuildingEntities.IsValidIndex(BuildingIndex) ? BuildingEntities[BuildingIndex] : FMassEntityHandle();
+    }
+
+    static bool IsTerminalTaskState(ELogisticsTaskState State)
+    {
+        return State == ELogisticsTaskState::Completed ||
+               State == ELogisticsTaskState::Failed ||
+               State == ELogisticsTaskState::Cancelled;
+    }
+
+    static FVector GetDroneCurrentLocation(const FDroneData& Drone)
+    {
+        if (Drone.State == ELogisticsDeviceState::Idle)
+        {
+            return Drone.HomeLocation;
+        }
+
+        if (Drone.State == ELogisticsDeviceState::Cooldown || Drone.TotalFlightTime <= SMALL_NUMBER)
+        {
+            return Drone.P3;
+        }
+
+        const float TimeRatio = FMath::Clamp(Drone.ElapsedTime / Drone.TotalFlightTime, 0.0f, 1.0f);
+        return Drone.EvalBezier(TimeRatio);
+    }
 }
 
 // 
@@ -29,6 +77,9 @@ void UMassDspLogisticsSubsystem::Initialize(FSubsystemCollectionBase& Collection
     IdleDroneIndices.Reserve(1024);
     IdleDroneIndexSet.Reserve(1024);
     DirtyTowerQueue.Reserve(256);
+
+    EnsureDefaultDispatchStrategies();
+    EnsureDroneISMInitialized();
 }
 
 void UMassDspLogisticsSubsystem::Deinitialize()
@@ -67,6 +118,84 @@ void UMassDspLogisticsSubsystem::SetupISMComponents(
         DroneISM->BoundsScale = 100.f;
         // 禁用距离剥稽，配送任务范围可能超出默认导欠剥稽距离
         DroneISM->SetCullDistance(0.f);
+
+        RebuildDroneISMInstances();
+    }
+}
+
+AMassDspGameMode* UMassDspLogisticsSubsystem::ResolveGameMode() const
+{
+    return GetWorld() ? Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()) : nullptr;
+}
+
+bool UMassDspLogisticsSubsystem::EnsureDroneISMInitialized()
+{
+    if (DroneISM)
+    {
+        return true;
+    }
+
+    UWorld* World = GetWorld();
+    AMassDspGameMode* GameMode = ResolveGameMode();
+    if (!World || !GameMode || !GameMode->GameConfig)
+    {
+        return false;
+    }
+
+    if (!GameMode->GameConfig->DroneMesh || !GameMode->GameConfig->DroneMaterial)
+    {
+        return false;
+    }
+
+    if (!DroneISMHostActor)
+    {
+        FActorSpawnParameters HostParams;
+        HostParams.Name = TEXT("DroneISMHostActor_Auto");
+        HostParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        DroneISMHostActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, HostParams);
+        if (!DroneISMHostActor)
+        {
+            return false;
+        }
+
+        DroneISMHostRoot = NewObject<USceneComponent>(DroneISMHostActor, TEXT("DroneISMHostRoot"));
+        if (!DroneISMHostRoot)
+        {
+            DroneISMHostActor->Destroy();
+            DroneISMHostActor = nullptr;
+            return false;
+        }
+
+        DroneISMHostActor->SetRootComponent(DroneISMHostRoot);
+        DroneISMHostRoot->RegisterComponent();
+    }
+
+    UInstancedStaticMeshComponent* CreatedISM = NewObject<UInstancedStaticMeshComponent>(DroneISMHostActor, TEXT("DroneISMComponent_Auto"));
+    if (!CreatedISM)
+    {
+        return false;
+    }
+
+    CreatedISM->SetStaticMesh(GameMode->GameConfig->DroneMesh);
+    CreatedISM->SetMobility(EComponentMobility::Movable);
+    CreatedISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    CreatedISM->SetCastShadow(false);
+    CreatedISM->AttachToComponent(DroneISMHostRoot, FAttachmentTransformRules::KeepRelativeTransform);
+    DroneISMHostActor->AddInstanceComponent(CreatedISM);
+    CreatedISM->RegisterComponent();
+    CreatedISM->SetMaterial(0, GameMode->GameConfig->DroneMaterial);
+
+    SetupISMComponents(CreatedISM);
+    return DroneISM != nullptr;
+}
+
+void UMassDspLogisticsSubsystem::EnsureDefaultDispatchStrategies()
+{
+    if (!DispatchStrategies.Contains(ELogisticsDeviceType::Drone))
+    {
+        DispatchStrategies.Emplace(
+            ELogisticsDeviceType::Drone,
+            MakeUnique<FDroneDispatchStrategy>(this));
     }
 }
 
@@ -339,6 +468,396 @@ FTowerDroneStatus UMassDspLogisticsSubsystem::QueryTowerDroneStatus(FMassEntityH
     return Result;
 }
 
+void UMassDspLogisticsSubsystem::CollectSaveData(FMassDspLogisticsSaveChunk& OutSaveData) const
+{
+    OutSaveData.Version = 1;
+    OutSaveData.Requests.Reset();
+    OutSaveData.Tasks.Reset();
+    OutSaveData.Drones.Reset();
+    OutSaveData.Towers.Reset();
+
+    const UMassDspManager* Manager = const_cast<UMassDspLogisticsSubsystem*>(this)->GetDspManager();
+    if (!Manager)
+    {
+        return;
+    }
+
+    TMap<FMassEntityHandle, int32> BuildingIndexByEntity;
+    BuildingIndexByEntity.Reserve(Manager->SpawnedBuildingEntities.Num());
+    for (int32 BuildingIndex = 0; BuildingIndex < Manager->SpawnedBuildingEntities.Num(); ++BuildingIndex)
+    {
+        BuildingIndexByEntity.Add(Manager->SpawnedBuildingEntities[BuildingIndex], BuildingIndex);
+    }
+
+    TMap<int32, int32> DroneSaveIndexByPoolIndex;
+    for (auto DroneIt = DronePool.CreateConstIterator(); DroneIt; ++DroneIt)
+    {
+        const int32 DronePoolIndex = DroneIt.GetIndex();
+        const FDroneData& Drone = *DroneIt;
+
+        FMassDspDroneSaveData SavedDrone;
+        SavedDrone.Generation = Drone.Generation;
+        SavedDrone.State = static_cast<uint8>(Drone.State);
+        SavedDrone.CurrentTaskIndex = Drone.CurrentTaskId;
+        SavedDrone.P0 = Drone.P0;
+        SavedDrone.P1 = Drone.P1;
+        SavedDrone.P2 = Drone.P2;
+        SavedDrone.P3 = Drone.P3;
+        SavedDrone.TotalFlightTime = Drone.TotalFlightTime;
+        SavedDrone.ElapsedTime = Drone.ElapsedTime;
+        SavedDrone.FlightSpeed = Drone.FlightSpeed;
+        SavedDrone.CooldownDuration = Drone.CooldownDuration;
+        SavedDrone.CooldownRemaining = Drone.CooldownRemaining;
+        SavedDrone.PickupBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Drone.PickupEntity);
+        SavedDrone.DeliveryBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Drone.DeliveryEntity);
+        SavedDrone.PickupLocation = Drone.PickupLocation;
+        SavedDrone.DeliveryLocation = Drone.DeliveryLocation;
+        SavedDrone.CarriedItemType = Drone.CarriedItemType;
+        SavedDrone.CarriedQuantity = Drone.CarriedQuantity;
+        SavedDrone.CarryCapacity = Drone.CarryCapacity;
+        SavedDrone.AffiliatedTowerBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Drone.AffiliatedTowerEntity);
+        SavedDrone.HomeLocation = Drone.HomeLocation;
+        SavedDrone.IdlePhaseOffset = Drone.IdlePhaseOffset;
+        SavedDrone.DispatchTime = Drone.DispatchTime;
+
+        const int32 SaveIndex = OutSaveData.Drones.Add(MoveTemp(SavedDrone));
+        DroneSaveIndexByPoolIndex.Add(DronePoolIndex, SaveIndex);
+    }
+
+    TMap<int32, int32> RequestSaveIndexByRequestId;
+    for (auto RequestIt = AllRequests.CreateConstIterator(); RequestIt; ++RequestIt)
+    {
+        const int32 RequestId = RequestIt.GetIndex();
+        const FLogisticsRequest& Request = *RequestIt;
+
+        FMassDspLogisticsRequestSaveData SavedRequest;
+        SavedRequest.Type = static_cast<uint8>(Request.Type);
+        SavedRequest.SourceBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Request.SourceEntity);
+        SavedRequest.ItemType = Request.ItemType;
+        SavedRequest.Quantity = Request.Quantity;
+        SavedRequest.Priority = static_cast<uint8>(Request.Priority);
+        SavedRequest.PreferredTowerBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Request.PreferredTowerEntity);
+        SavedRequest.RequestTime = Request.RequestTime;
+        SavedRequest.ExpiryDuration = Request.ExpiryDuration;
+
+        const int32 SaveIndex = OutSaveData.Requests.Add(MoveTemp(SavedRequest));
+        RequestSaveIndexByRequestId.Add(RequestId, SaveIndex);
+    }
+
+    TMap<int32, int32> TaskSaveIndexByTaskId;
+    for (auto TaskIt = AllTasks.CreateConstIterator(); TaskIt; ++TaskIt)
+    {
+        const int32 TaskId = TaskIt.GetIndex();
+        const FLogisticsTask& Task = *TaskIt;
+        if (IsTerminalTaskState(Task.State))
+        {
+            continue;
+        }
+
+        FMassDspLogisticsTaskSaveData SavedTask;
+        SavedTask.SupplyRequestIndex = RequestSaveIndexByRequestId.Contains(Task.SupplyRequestId)
+            ? RequestSaveIndexByRequestId.FindRef(Task.SupplyRequestId)
+            : INDEX_NONE;
+        SavedTask.DemandRequestIndex = RequestSaveIndexByRequestId.Contains(Task.DemandRequestId)
+            ? RequestSaveIndexByRequestId.FindRef(Task.DemandRequestId)
+            : INDEX_NONE;
+        SavedTask.DeviceType = static_cast<uint8>(Task.DeviceType);
+        SavedTask.DeviceIndex = DroneSaveIndexByPoolIndex.Contains(Task.DevicePoolIndex)
+            ? DroneSaveIndexByPoolIndex.FindRef(Task.DevicePoolIndex)
+            : INDEX_NONE;
+        SavedTask.State = static_cast<uint8>(Task.State);
+        SavedTask.PickupLocation = Task.PickupLocation;
+        SavedTask.DeliveryLocation = Task.DeliveryLocation;
+        SavedTask.PickupBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Task.PickupEntity);
+        SavedTask.DeliveryBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Task.DeliveryEntity);
+        SavedTask.TransferQuantity = Task.TransferQuantity;
+        SavedTask.CreatedTime = Task.CreatedTime;
+        SavedTask.SupplyTowerBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Task.SupplyTowerEntity);
+        SavedTask.DemandTowerBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, Task.DemandTowerEntity);
+
+        const int32 SaveIndex = OutSaveData.Tasks.Add(MoveTemp(SavedTask));
+        TaskSaveIndexByTaskId.Add(TaskId, SaveIndex);
+    }
+
+    for (FMassDspDroneSaveData& SavedDrone : OutSaveData.Drones)
+    {
+        SavedDrone.CurrentTaskIndex = TaskSaveIndexByTaskId.Contains(SavedDrone.CurrentTaskIndex)
+            ? TaskSaveIndexByTaskId.FindRef(SavedDrone.CurrentTaskIndex)
+            : INDEX_NONE;
+    }
+
+    for (const auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
+    {
+        const int32 TowerBuildingIndex = ResolveBuildingSaveIndex(BuildingIndexByEntity, TowerEntity);
+        if (TowerBuildingIndex == INDEX_NONE)
+        {
+            continue;
+        }
+
+        FMassDspLogisticsTowerRuntimeSaveData SavedTower;
+        SavedTower.TowerBuildingIndex = TowerBuildingIndex;
+
+        for (const int32 RequestId : RuntimeData.PendingRequestIds)
+        {
+            if (RequestSaveIndexByRequestId.Contains(RequestId))
+            {
+                SavedTower.PendingRequestIndices.Add(RequestSaveIndexByRequestId.FindRef(RequestId));
+            }
+        }
+
+        for (const int32 TaskId : RuntimeData.ActiveTaskIds)
+        {
+            if (TaskSaveIndexByTaskId.Contains(TaskId))
+            {
+                SavedTower.ActiveTaskIndices.Add(TaskSaveIndexByTaskId.FindRef(TaskId));
+            }
+        }
+
+        for (const FDroneHandle& DroneHandle : RuntimeData.AffiliatedDroneHandles)
+        {
+            if (DroneSaveIndexByPoolIndex.Contains(DroneHandle.Index))
+            {
+                SavedTower.AffiliatedDroneIndices.Add(DroneSaveIndexByPoolIndex.FindRef(DroneHandle.Index));
+            }
+        }
+
+        SavedTower.CachedRequestIndex = RequestSaveIndexByRequestId.Contains(RuntimeData.CachedReqId)
+            ? RequestSaveIndexByRequestId.FindRef(RuntimeData.CachedReqId)
+            : INDEX_NONE;
+
+        OutSaveData.Towers.Add(MoveTemp(SavedTower));
+    }
+}
+
+bool UMassDspLogisticsSubsystem::RestoreSaveData(const FMassDspLogisticsSaveChunk& InSaveData)
+{
+    UMassDspManager* Manager = GetDspManager();
+    if (!Manager)
+    {
+        return false;
+    }
+
+    EnsureDefaultDispatchStrategies();
+    EnsureDroneISMInitialized();
+
+    ResetRuntimeState();
+
+    const TArray<FMassEntityHandle>& BuildingEntities = Manager->SpawnedBuildingEntities;
+    const float CurrentGameTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+
+    TArray<int32> DronePoolIndexBySaveIndex;
+    DronePoolIndexBySaveIndex.SetNum(InSaveData.Drones.Num());
+    for (int32 DroneSaveIndex = 0; DroneSaveIndex < InSaveData.Drones.Num(); ++DroneSaveIndex)
+    {
+        const FMassDspDroneSaveData& SavedDrone = InSaveData.Drones[DroneSaveIndex];
+        const FMassEntityHandle TowerEntity = ResolveBuildingEntity(BuildingEntities, SavedDrone.AffiliatedTowerBuildingIndex);
+        const FVector SpawnLocation = !SavedDrone.HomeLocation.IsNearlyZero() ? SavedDrone.HomeLocation : SavedDrone.P3;
+        const FDroneHandle NewHandle = CreateDrone(
+            TowerEntity,
+            SpawnLocation,
+            SavedDrone.FlightSpeed > 0.0f ? SavedDrone.FlightSpeed : FGameConst::DefaultDroneFlightSpeed,
+            FMath::Max(1, SavedDrone.CarryCapacity));
+        if (!NewHandle.IsValid() || !DronePool.IsValidIndex(NewHandle.Index))
+        {
+            return false;
+        }
+
+        FDroneData& Drone = DronePool[NewHandle.Index];
+        Drone.Generation = SavedDrone.Generation;
+        Drone.State = static_cast<ELogisticsDeviceState>(SavedDrone.State);
+        Drone.CurrentTaskId = INDEX_NONE;
+        Drone.P0 = SavedDrone.P0;
+        Drone.P1 = SavedDrone.P1;
+        Drone.P2 = SavedDrone.P2;
+        Drone.P3 = SavedDrone.P3;
+        Drone.TotalFlightTime = SavedDrone.TotalFlightTime;
+        Drone.ElapsedTime = SavedDrone.ElapsedTime;
+        Drone.FlightSpeed = SavedDrone.FlightSpeed > 0.0f ? SavedDrone.FlightSpeed : FGameConst::DefaultDroneFlightSpeed;
+        Drone.CooldownDuration = SavedDrone.CooldownDuration;
+        Drone.CooldownRemaining = SavedDrone.CooldownRemaining;
+        Drone.PickupEntity = ResolveBuildingEntity(BuildingEntities, SavedDrone.PickupBuildingIndex);
+        Drone.DeliveryEntity = ResolveBuildingEntity(BuildingEntities, SavedDrone.DeliveryBuildingIndex);
+        Drone.PickupLocation = SavedDrone.PickupLocation;
+        Drone.DeliveryLocation = SavedDrone.DeliveryLocation;
+        Drone.CarriedItemType = SavedDrone.CarriedItemType;
+        Drone.CarriedQuantity = SavedDrone.CarriedQuantity;
+        Drone.CarryCapacity = FMath::Max(1, SavedDrone.CarryCapacity);
+        Drone.AffiliatedTowerEntity = TowerEntity;
+        Drone.HomeLocation = SpawnLocation;
+        Drone.IdlePhaseOffset = SavedDrone.IdlePhaseOffset;
+        Drone.DispatchTime = SavedDrone.DispatchTime;
+        Drone.bCustomDataDirty = true;
+
+        if (Drone.State != ELogisticsDeviceState::Idle)
+        {
+            IdleDroneIndices.RemoveSwap(NewHandle.Index);
+            IdleDroneIndexSet.Remove(NewHandle.Index);
+        }
+
+        DronePoolIndexBySaveIndex[DroneSaveIndex] = NewHandle.Index;
+    }
+
+    TArray<int32> RequestIdBySaveIndex;
+    RequestIdBySaveIndex.SetNum(InSaveData.Requests.Num());
+    for (int32 RequestSaveIndex = 0; RequestSaveIndex < InSaveData.Requests.Num(); ++RequestSaveIndex)
+    {
+        const FMassDspLogisticsRequestSaveData& SavedRequest = InSaveData.Requests[RequestSaveIndex];
+        FLogisticsRequest Request;
+        Request.Type = static_cast<ELogisticsRequestType>(SavedRequest.Type);
+        Request.SourceEntity = ResolveBuildingEntity(BuildingEntities, SavedRequest.SourceBuildingIndex);
+        Request.ItemType = SavedRequest.ItemType;
+        Request.Quantity = FMath::Max(1, SavedRequest.Quantity);
+        Request.Priority = static_cast<ELogisticsRequestPriority>(SavedRequest.Priority);
+        Request.PreferredTowerEntity = ResolveBuildingEntity(BuildingEntities, SavedRequest.PreferredTowerBuildingIndex);
+        Request.RequestTime = SavedRequest.RequestTime;
+        Request.ExpiryDuration = SavedRequest.ExpiryDuration;
+
+        const int32 RequestId = AllRequests.Add(Request);
+        AllRequests[RequestId].RequestId = RequestId;
+        RequestIdBySaveIndex[RequestSaveIndex] = RequestId;
+    }
+
+    TArray<int32> TaskIdBySaveIndex;
+    TaskIdBySaveIndex.SetNum(InSaveData.Tasks.Num());
+    for (int32 TaskSaveIndex = 0; TaskSaveIndex < InSaveData.Tasks.Num(); ++TaskSaveIndex)
+    {
+        const FMassDspLogisticsTaskSaveData& SavedTask = InSaveData.Tasks[TaskSaveIndex];
+        FLogisticsTask Task;
+        Task.SupplyRequestId = RequestIdBySaveIndex.IsValidIndex(SavedTask.SupplyRequestIndex)
+            ? RequestIdBySaveIndex[SavedTask.SupplyRequestIndex]
+            : INDEX_NONE;
+        Task.DemandRequestId = RequestIdBySaveIndex.IsValidIndex(SavedTask.DemandRequestIndex)
+            ? RequestIdBySaveIndex[SavedTask.DemandRequestIndex]
+            : INDEX_NONE;
+        Task.DeviceType = static_cast<ELogisticsDeviceType>(SavedTask.DeviceType);
+        Task.DevicePoolIndex = DronePoolIndexBySaveIndex.IsValidIndex(SavedTask.DeviceIndex)
+            ? DronePoolIndexBySaveIndex[SavedTask.DeviceIndex]
+            : INDEX_NONE;
+        Task.State = static_cast<ELogisticsTaskState>(SavedTask.State);
+        Task.PickupLocation = SavedTask.PickupLocation;
+        Task.DeliveryLocation = SavedTask.DeliveryLocation;
+        Task.PickupEntity = ResolveBuildingEntity(BuildingEntities, SavedTask.PickupBuildingIndex);
+        Task.DeliveryEntity = ResolveBuildingEntity(BuildingEntities, SavedTask.DeliveryBuildingIndex);
+        Task.TransferQuantity = SavedTask.TransferQuantity;
+        Task.CreatedTime = SavedTask.CreatedTime;
+        Task.SupplyTowerEntity = ResolveBuildingEntity(BuildingEntities, SavedTask.SupplyTowerBuildingIndex);
+        Task.DemandTowerEntity = ResolveBuildingEntity(BuildingEntities, SavedTask.DemandTowerBuildingIndex);
+
+        const int32 TaskId = AllTasks.Add(Task);
+        AllTasks[TaskId].TaskId = TaskId;
+        TaskIdBySaveIndex[TaskSaveIndex] = TaskId;
+    }
+
+    for (int32 DroneSaveIndex = 0; DroneSaveIndex < InSaveData.Drones.Num(); ++DroneSaveIndex)
+    {
+        const int32 DronePoolIndex = DronePoolIndexBySaveIndex[DroneSaveIndex];
+        if (!DronePool.IsValidIndex(DronePoolIndex))
+        {
+            return false;
+        }
+
+        const FMassDspDroneSaveData& SavedDrone = InSaveData.Drones[DroneSaveIndex];
+        FDroneData& Drone = DronePool[DronePoolIndex];
+        Drone.CurrentTaskId = TaskIdBySaveIndex.IsValidIndex(SavedDrone.CurrentTaskIndex)
+            ? TaskIdBySaveIndex[SavedDrone.CurrentTaskIndex]
+            : INDEX_NONE;
+    }
+
+    TowerRuntimeData.Reset();
+    for (const FMassDspLogisticsTowerRuntimeSaveData& SavedTower : InSaveData.Towers)
+    {
+        const FMassEntityHandle TowerEntity = ResolveBuildingEntity(BuildingEntities, SavedTower.TowerBuildingIndex);
+        if (!TowerEntity.IsValid())
+        {
+            continue;
+        }
+
+        FLogisticsTowerRuntimeData& RuntimeData = TowerRuntimeData.FindOrAdd(TowerEntity);
+
+        for (const int32 SaveRequestIndex : SavedTower.PendingRequestIndices)
+        {
+            if (RequestIdBySaveIndex.IsValidIndex(SaveRequestIndex))
+            {
+                RuntimeData.PendingRequestIds.AddUnique(RequestIdBySaveIndex[SaveRequestIndex]);
+            }
+        }
+
+        for (const int32 SaveTaskIndex : SavedTower.ActiveTaskIndices)
+        {
+            if (TaskIdBySaveIndex.IsValidIndex(SaveTaskIndex))
+            {
+                RuntimeData.ActiveTaskIds.AddUnique(TaskIdBySaveIndex[SaveTaskIndex]);
+            }
+        }
+
+        for (const int32 SaveDroneIndex : SavedTower.AffiliatedDroneIndices)
+        {
+            if (!DronePoolIndexBySaveIndex.IsValidIndex(SaveDroneIndex))
+            {
+                continue;
+            }
+
+            const int32 DronePoolIndex = DronePoolIndexBySaveIndex[SaveDroneIndex];
+            if (!DronePool.IsValidIndex(DronePoolIndex))
+            {
+                continue;
+            }
+
+            RuntimeData.AffiliatedDroneHandles.AddUnique(FDroneHandle{DronePoolIndex, DronePool[DronePoolIndex].Generation});
+        }
+
+        RuntimeData.CachedReqId = RequestIdBySaveIndex.IsValidIndex(SavedTower.CachedRequestIndex)
+            ? RequestIdBySaveIndex[SavedTower.CachedRequestIndex]
+            : INDEX_NONE;
+    }
+
+    DirtyTowerQueue.Reset();
+    DirtyTowerSet.Reset();
+    FMassEntityManager* EntityManagerPtr = GetEntityManagerSafe(GetWorld());
+    for (auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
+    {
+        if (RuntimeData.CachedReqId == INDEX_NONE && !RuntimeData.PendingRequestIds.IsEmpty())
+        {
+            RuntimeData.CachedReqId = RuntimeData.PendingRequestIds[0];
+        }
+
+        if (EntityManagerPtr)
+        {
+            if (FMassDspLogisticsTowerFragment* TowerFragment = EntityManagerPtr->GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(TowerEntity))
+            {
+                TowerFragment->bDirty = !RuntimeData.PendingRequestIds.IsEmpty();
+            }
+        }
+
+        if (!RuntimeData.PendingRequestIds.IsEmpty())
+        {
+            DirtyTowerSet.Add(TowerEntity);
+            DirtyTowerQueue.Add(TowerEntity);
+        }
+    }
+
+    DroneGridCells.Reset();
+    for (auto DroneIt = DronePool.CreateIterator(); DroneIt; ++DroneIt)
+    {
+        const int32 DronePoolIndex = DroneIt.GetIndex();
+        const FVector CurrentLocation = GetDroneCurrentLocation(*DroneIt);
+        const int32 CellX = FMath::FloorToInt(CurrentLocation.X / FGameConst::DroneGridCellSize);
+        const int32 CellY = FMath::FloorToInt(CurrentLocation.Y / FGameConst::DroneGridCellSize);
+        DroneGridCells.FindOrAdd(MakeDroneCellKey(CellX, CellY)).AddUnique(DronePoolIndex);
+
+        WriteDroneCustomData(*DroneIt, CurrentGameTime);
+        DroneIt->bCustomDataDirty = false;
+    }
+
+    if (DroneISM)
+    {
+        DroneISM->MarkRenderStateDirty();
+    }
+
+    CleanupFrameCounter = 0;
+    return true;
+}
+
 int32 UMassDspLogisticsSubsystem::ComputeInTransitToEntity(FMassEntityHandle DemandEntity) const
 {
     // 统计「最终会送达该实体」的在途货物总量：
@@ -395,6 +914,9 @@ int32 UMassDspLogisticsSubsystem::ComputeInTransitFromEntity(FMassEntityHandle S
 FDroneHandle UMassDspLogisticsSubsystem::CreateDrone(
     FMassEntityHandle AffiliatedTowerEntity, const FVector& InitialLocation, float FlightSpeed, int32 CarryCapacity)
 {
+    EnsureDefaultDispatchStrategies();
+    EnsureDroneISMInitialized();
+
     FDroneData Data;
     Data.AffiliatedTowerEntity = AffiliatedTowerEntity;
     Data.FlightSpeed = FlightSpeed;
@@ -456,7 +978,32 @@ void UMassDspLogisticsSubsystem::DestroyDrone(FDroneHandle Handle)
 void UMassDspLogisticsSubsystem::RegisterDispatchStrategy(
     ELogisticsDeviceType Type, TUniquePtr<FLogisticsDeviceDispatchStrategy> Strategy)
 {
+    if (!Strategy)
+    {
+        return;
+    }
+
+    EnsureDroneISMInitialized();
     DispatchStrategies.Emplace(Type, MoveTemp(Strategy));
+}
+
+void UMassDspLogisticsSubsystem::ResetRuntimeState()
+{
+    if (DroneISM)
+    {
+        DroneISM->ClearInstances();
+    }
+
+    DronePool.Empty();
+    IdleDroneIndices.Reset();
+    IdleDroneIndexSet.Reset();
+    DroneGridCells.Reset();
+    AllRequests.Empty();
+    AllTasks.Empty();
+    TowerRuntimeData.Reset();
+    DirtyTowerSet.Reset();
+    DirtyTowerQueue.Reset();
+    CleanupFrameCounter = 0;
 }
 
 // 
@@ -1243,7 +1790,6 @@ int32 UMassDspLogisticsSubsystem::AllocateDroneISMInstance(const FVector& Initia
 {
     if (!DroneISM)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[Logistics] AllocateDroneISMInstance: DroneISM is null!"));
         return -1;
     }
     const int32 Idx = DroneISM->AddInstance(
@@ -1251,6 +1797,31 @@ int32 UMassDspLogisticsSubsystem::AllocateDroneISMInstance(const FVector& Initia
     UE_LOG(LogTemp, Verbose, TEXT("[Logistics] ISM instance allocated: idx=%d total=%d"),
            Idx, DroneISM->GetInstanceCount());
     return Idx;
+}
+
+void UMassDspLogisticsSubsystem::RebuildDroneISMInstances()
+{
+    if (!DroneISM)
+    {
+        return;
+    }
+
+    DroneISM->ClearInstances();
+
+    const float GameTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+    for (auto It = DronePool.CreateIterator(); It; ++It)
+    {
+        FDroneData& Drone = *It;
+        const FVector CurrentLocation = GetDroneCurrentLocation(Drone);
+        Drone.ISMInstanceIndex = AllocateDroneISMInstance(CurrentLocation);
+        if (Drone.ISMInstanceIndex >= 0)
+        {
+            WriteDroneCustomData(Drone, GameTime);
+            Drone.bCustomDataDirty = false;
+        }
+    }
+
+    DroneISM->MarkRenderStateDirty();
 }
 
 void UMassDspLogisticsSubsystem::FreeDroneISMInstance(int32 InstanceIndex)
