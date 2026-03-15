@@ -24,6 +24,11 @@ struct MASSDSP_API FBeltItemCache
 // 传送带逻辑数据（替代 FBeltEntityArray）
 struct MASSDSP_API FBeltData
 {
+    FMassEntityHandle StartBuildingEntity;
+    FMassEntityHandle EndBuildingEntity;
+    int32 StartSlotIndex = INDEX_NONE;
+    int32 EndSlotIndex = INDEX_NONE;
+
     // TODO 考虑特化数据结构,弃用Deque
     // 物品缓存：[0] = 出口端(Tail)，[Last] = 入口端(Front)
     TDeque<FBeltItemCache> ItemCache;

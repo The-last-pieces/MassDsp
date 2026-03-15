@@ -887,6 +887,9 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
 
     FMassEntityManager& EntityManager = GetWorld()->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
 
+    const int32 StartSlotIndexForRuntime = StartSlotIndex;
+    const int32 EndSlotIndexForRuntime = EndSlotIndex;
+
     FBuildingSlotState *StartSlot = nullptr, *EndSlot = nullptr;
 
     if (FMassDspBuildingSlotsFragment* MinerSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(SBuilding))
@@ -963,6 +966,14 @@ FBeltHandle UMassDspManager::CreateAndLinkBeltForSlot(
     if (!BeltHandle.IsValid()) return FBeltHandle();
 
     const FBeltTrajectory& Trajectory = BeltTrajectories[BeltHandle.Index];
+
+    if (FBeltData* BeltData = BeltEntityRegistry.Find(BeltHandle))
+    {
+        BeltData->StartBuildingEntity = SBuilding;
+        BeltData->EndBuildingEntity = EBuilding;
+        BeltData->StartSlotIndex = StartSlotIndexForRuntime;
+        BeltData->EndSlotIndex = EndSlotIndexForRuntime;
+    }
 
     StartSlot->ConnectedLaneHandle = EndSlot->ConnectedLaneHandle = BeltHandle;
     StartSlot->BeltSpeed = EndSlot->BeltSpeed = Trajectory.Speed;
@@ -1698,6 +1709,18 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
 
 bool UMassDspManager::DestroyBelt(FBeltHandle BeltHandle)
 {
+    TSet<FIntPoint> AffectedChunkKeys;
+    if (!DestroyBeltInternal(BeltHandle, AffectedChunkKeys))
+    {
+        return false;
+    }
+
+    FinalizeBeltMutations(AffectedChunkKeys);
+    return true;
+}
+
+bool UMassDspManager::DestroyBeltInternal(FBeltHandle BeltHandle, TSet<FIntPoint>& OutAffectedChunkKeys)
+{
     if (!BeltHandle.IsValid())
     {
         return false;
@@ -1716,32 +1739,32 @@ bool UMassDspManager::DestroyBelt(FBeltHandle BeltHandle)
     }
 
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-    for (const FMassEntityHandle Entity : SpawnedBuildingEntities)
+    if (BeltData->StartBuildingEntity.IsValid())
     {
-        if (!EntityManager.IsEntityValid(Entity))
+        if (FBuildingSlotState* StartSlot = ResolveBuildingSlot(
+            EntityManager,
+            BeltData->StartBuildingEntity,
+            BeltData->StartSlotIndex,
+            EBuildingSlotType::Output))
         {
-            continue;
-        }
-
-        FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Entity);
-        if (!SlotsFragment)
-        {
-            continue;
-        }
-
-        for (FBuildingSlotState& Slot : SlotsFragment->GetOutputSlots())
-        {
-            if (Slot.ConnectedLaneHandle == BeltHandle)
+            if (FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BeltData->StartBuildingEntity))
             {
-                DisconnectSlotHandle(Slot, SlotsFragment->ConnectedOutputCount);
+                DisconnectSlotHandle(*StartSlot, SlotsFragment->ConnectedOutputCount);
             }
         }
+    }
 
-        for (FBuildingSlotState& Slot : SlotsFragment->GetInputSlots())
+    if (BeltData->EndBuildingEntity.IsValid())
+    {
+        if (FBuildingSlotState* EndSlot = ResolveBuildingSlot(
+            EntityManager,
+            BeltData->EndBuildingEntity,
+            BeltData->EndSlotIndex,
+            EBuildingSlotType::Input))
         {
-            if (Slot.ConnectedLaneHandle == BeltHandle)
+            if (FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BeltData->EndBuildingEntity))
             {
-                DisconnectSlotHandle(Slot, SlotsFragment->ConnectedInputCount);
+                DisconnectSlotHandle(*EndSlot, SlotsFragment->ConnectedInputCount);
             }
         }
     }
@@ -1749,6 +1772,7 @@ bool UMassDspManager::DestroyBelt(FBeltHandle BeltHandle)
     if (BeltTrajectories.IsValidIndex(BeltHandle.Index))
     {
         const FIntPoint ChunkKey = GetChunkKey(BeltTrajectories[BeltHandle.Index].RepresentativePosition);
+        OutAffectedChunkKeys.Add(ChunkKey);
         if (FBeltChunk* Chunk = BeltChunks.Find(ChunkKey))
         {
             Chunk->BeltTrajectoryIndices.Remove(BeltHandle.Index);
@@ -1778,8 +1802,13 @@ bool UMassDspManager::DestroyBelt(FBeltHandle BeltHandle)
 
     BeltData->ItemCache.Empty();
     BeltEntityRegistry.Remove(BeltHandle);
-    CachedTransformsByType.Reset();
 
+    return true;
+}
+
+void UMassDspManager::FinalizeBeltMutations(const TSet<FIntPoint>& AffectedChunkKeys)
+{
+    CachedTransformsByType.Reset();
     for (auto& [ItemType, ISM] : ItemISMPool)
     {
         if (ISM && ISM->GetInstanceCount() > 0)
@@ -1790,8 +1819,15 @@ bool UMassDspManager::DestroyBelt(FBeltHandle BeltHandle)
     }
 
     RebuildBeltSoA();
-    FlushBeltMesh();
-    return true;
+
+    for (const FIntPoint& ChunkKey : AffectedChunkKeys)
+    {
+        if (FBeltChunk* Chunk = BeltChunks.Find(ChunkKey))
+        {
+            Chunk->bMeshDirty = true;
+            FlushChunk(ChunkKey, *Chunk, FVector::ZeroVector);
+        }
+    }
 }
 
 bool UMassDspManager::DestroyBuilding(FMassEntityHandle BuildingEntity)
@@ -1820,30 +1856,27 @@ bool UMassDspManager::DestroyBuilding(FMassEntityHandle BuildingEntity)
         LogisticsSubsystem->HandleBuildingDemolished(BuildingEntity, BuildingType);
     }
 
-    FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(BuildingEntity);
     TArray<FBeltHandle> ConnectedBelts;
-    if (SlotsFragment)
+    for (const TPair<FBeltHandle, FBeltData>& Pair : BeltEntityRegistry)
     {
-        for (const FBuildingSlotState& Slot : SlotsFragment->GetOutputSlots())
+        const FBeltData& BeltData = Pair.Value;
+        if (BeltData.StartBuildingEntity == BuildingEntity || BeltData.EndBuildingEntity == BuildingEntity)
         {
-            if (Slot.ConnectedLaneHandle.IsValid())
-            {
-                ConnectedBelts.AddUnique(Slot.ConnectedLaneHandle);
-            }
-        }
-
-        for (const FBuildingSlotState& Slot : SlotsFragment->GetInputSlots())
-        {
-            if (Slot.ConnectedLaneHandle.IsValid())
-            {
-                ConnectedBelts.AddUnique(Slot.ConnectedLaneHandle);
-            }
+            ConnectedBelts.AddUnique(Pair.Key);
         }
     }
 
+    TSet<FIntPoint> AffectedChunkKeys;
+
+    bool bAnyBeltDestroyed = false;
     for (const FBeltHandle ConnectedBelt : ConnectedBelts)
     {
-        DestroyBelt(ConnectedBelt);
+        bAnyBeltDestroyed |= DestroyBeltInternal(ConnectedBelt, AffectedChunkKeys);
+    }
+
+    if (bAnyBeltDestroyed)
+    {
+        FinalizeBeltMutations(AffectedChunkKeys);
     }
 
     FVector BuildingLocation = FVector::ZeroVector;
@@ -2143,6 +2176,10 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
             return false;
         }
 
+        BeltData->StartBuildingEntity = StartBuilding;
+        BeltData->EndBuildingEntity = EndBuilding;
+        BeltData->StartSlotIndex = SavedBelt.StartSlotIndex;
+        BeltData->EndSlotIndex = SavedBelt.EndSlotIndex;
         BeltData->BeltLength = SavedBelt.BeltLength > 0.0f ? SavedBelt.BeltLength : BeltData->BeltLength;
         BeltData->BeltSpeed = SavedBelt.BeltSpeed > 0.0f ? SavedBelt.BeltSpeed : BeltData->BeltSpeed;
         BeltData->TotalMove = SavedBelt.TotalMove;
@@ -2175,7 +2212,16 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
 
 void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FVector& CameraPos)
 {
-    if (Chunk.BeltTrajectoryIndices.IsEmpty()) return;
+    Chunk.BeltTrajectoryIndices.RemoveAll([this](int32 TrajIdx)
+    {
+        return !BeltTrajectories.IsValidIndex(TrajIdx) || !BeltRebuildData.IsValidIndex(TrajIdx);
+    });
+
+    if (Chunk.BeltTrajectoryIndices.IsEmpty())
+    {
+        ReleaseChunkPMC(Chunk);
+        return;
+    }
 
     // 计算 Chunk 中心（世界 XY，Z 使用相机 Z 以计算 3D 距离）
     const FVector ChunkCenter(
@@ -2258,6 +2304,7 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
     // --- 提交到 PMC（每 BeltType 一个 Section）---
     TryGetGameMode();
     Chunk.PMC->ClearAllMeshSections();
+    Chunk.PMC->MarkRenderStateDirty();
     for (auto& [BeltType, MeshData] : ChunkMeshData)
     {
         if (MeshData.Vertices.IsEmpty()) continue;
@@ -2296,6 +2343,12 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
                 }
             }
         }
+    }
+
+    if (ChunkMeshData.IsEmpty())
+    {
+        ReleaseChunkPMC(Chunk);
+        return;
     }
 
     Chunk.CurrentMeshLOD = TargetLOD;

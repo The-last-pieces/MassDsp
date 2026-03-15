@@ -594,6 +594,10 @@ private:
 
     void ReleaseChunkPMC(FBeltChunk& Chunk);
 
+    bool DestroyBeltInternal(FBeltHandle BeltHandle, TSet<FIntPoint>& OutAffectedChunkKeys);
+
+    void FinalizeBeltMutations(const TSet<FIntPoint>& AffectedChunkKeys);
+
     // 按需懒创建指定物品类型的 ISM 组件
     UInstancedStaticMeshComponent* GetOrCreateIsmForItemType(EItemType ItemType);
 
