@@ -16,6 +16,8 @@ class MASSDSP_API UMassDspItemSlotButton : public UButton
 public:
     UMassDspItemSlotButton(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
+    void BindClickForwarder();
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|UI")
     int32 SlotIndex = INDEX_NONE;
 
@@ -26,8 +28,6 @@ public:
     FMassDspItemSlotClickedSignature OnItemSlotClicked;
 
 private:
-    virtual void PostInitProperties() override;
-
     UFUNCTION()
     void HandleButtonClicked();
 };

@@ -42,6 +42,7 @@
 #include "UI/MassDspInventoryWidget.h"
 #include "UI/MassDspItemSlotButton.h"
 #include "UI/MassDspSystemStatsWidget.h"
+#include "UI/MassDspTechTreeWidget.h"
 
 // UMG Editor
 #include "WidgetBlueprint.h"
@@ -63,6 +64,7 @@
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
+#include "Components/ScrollBox.h"
 #include "Components/SizeBox.h"
 
 void FUMaterialGeneratorUtils::CreateAllProceduralAssets()
@@ -1089,6 +1091,33 @@ static void BuildSystemStatsLayout(UWidgetBlueprint* WBP)
     B.Text(FName("TextBlock_ItemDelta_3"), TEXT(""), IX, 638.f, IW, 26.f, WidgetColors::TextValue, 13);
 }
 
+static void BuildTechTreeLayout(UWidgetBlueprint* WBP)
+{
+    constexpr float CW = 1040.f, CH = 720.f;
+
+    FWidgetBuilder B;
+    B.Tree = WBP->WidgetTree;
+    B.Root = B.Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_0"));
+    B.Tree->RootWidget = B.Root;
+    B.OX = -CW * 0.5f;
+    B.OY = -CH * 0.5f;
+
+    BuildFullscreenOverlay(B);
+
+    B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
+    BuildCommonHeader(B, TEXT("科技树 / 成长系统"), CW);
+    B.Text(FName("TextBlock_Summary"), TEXT("已解锁 0 个节点。当前可先研究“基础熔炼”来解锁合成台与铁板配方。"),
+        20.f, 60.f, CW - 40.f, 22.f, WidgetColors::TextValue, 12);
+    B.Text(FName("TextBlock_Hint"), TEXT("T 关闭。当前第一版支持研究节点并解锁建筑、配方与传送带能力。"),
+        20.f, 86.f, CW - 40.f, 20.f, WidgetColors::TextLabel, 11);
+
+    UBorder* Panel = B.Rect(FName("Border_TechPanel"), 20.f, 120.f, CW - 40.f, CH - 140.f, WidgetColors::PanelBg);
+    Panel->SetPadding(FMargin(12.f));
+
+    UScrollBox* ScrollBox = B.Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), FName("ScrollBox_Nodes"));
+    B.Place(ScrollBox, 28.f, 128.f, CW - 56.f, CH - 156.f);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  公共入口
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1243,6 +1272,15 @@ static UObject* ImpBuildSystemStatsWidget(UPackage* Package, const FString& Asse
     return WBP;
 }
 
+static UObject* ImpBuildTechTreeWidget(UPackage* Package, const FString& AssetName)
+{
+    UWidgetBlueprint* WBP = MakeWidgetBP(Package, AssetName, UMassDspTechTreeWidget::StaticClass());
+    if (!WBP) return nullptr;
+    BuildTechTreeLayout(WBP);
+    CompileWidgetBP(WBP);
+    return WBP;
+}
+
 void FUMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
@@ -1254,6 +1292,7 @@ void FUMaterialGeneratorUtils::CreateBuildingWidgets()
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_LogisticsTower"), TEXT("v5"), &ImpBuildLogisticsTowerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Inventory"), TEXT("v3"), &ImpBuildInventoryWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_SystemStats"), TEXT("v2"), &ImpBuildSystemStatsWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_TechTree"), TEXT("v1"), &ImpBuildTechTreeWidget);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

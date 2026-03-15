@@ -13,6 +13,7 @@ class UMassDspBuildingWidget;
 class UMassDspHotbarWidget;
 class UMassDspInventoryWidget;
 class UMassDspSystemStatsWidget;
+class UMassDspTechTreeWidget;
 class AMassDspBuilding;
 
 struct FGameConst
@@ -122,6 +123,25 @@ enum class EBeltType : uint8
     Express = 3 UMETA(DisplayName = "极速传送带"),
 };
 
+UENUM(BlueprintType)
+enum class ETechNodeId : uint8
+{
+    None = 0 UMETA(DisplayName = "无"),
+    BasicMining = 1 UMETA(DisplayName = "基础采矿"),
+    BasicSmelting = 2 UMETA(DisplayName = "基础熔炼"),
+    LogisticsBasic = 3 UMETA(DisplayName = "基础物流"),
+    BeltFast = 4 UMETA(DisplayName = "高速传输"),
+    BeltExpress = 5 UMETA(DisplayName = "极速传输"),
+};
+
+UENUM(BlueprintType)
+enum class ETechRewardType : uint8
+{
+    UnlockBuilding = 0 UMETA(DisplayName = "解锁建筑"),
+    UnlockRecipe = 1 UMETA(DisplayName = "解锁配方"),
+    UnlockBelt = 2 UMETA(DisplayName = "解锁传送带"),
+};
+
 // 配方输入输出项
 USTRUCT(BlueprintType)
 struct FRecipeEntry
@@ -145,6 +165,51 @@ struct FRecipeEntry
     {
         return ItemType != EItemType::None && Amount > 0;
     }
+};
+
+USTRUCT(BlueprintType)
+struct FTechReward
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    ETechRewardType RewardType = ETechRewardType::UnlockBuilding;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    EBuildingType BuildingType = EBuildingType::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    ERecipeType RecipeType = ERecipeType::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    EBeltType BeltType = EBeltType::None;
+};
+
+USTRUCT(BlueprintType)
+struct FTechNodeConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    FText DisplayName;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech", meta = (MultiLine = true))
+    FText Description;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    bool bUnlockedByDefault = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    TArray<ETechNodeId> Prerequisites;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    TArray<FRecipeEntry> ResearchCost;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech", meta = (ClampMin = "0.0"))
+    float ResearchTime = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tech")
+    TArray<FTechReward> Rewards;
 };
 
 
@@ -365,6 +430,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Belts", meta = (ForceInlineRow))
     TMap<EBeltType, FBeltTypeConfig> BeltTypeConfigs;
 
+    // 所有科技树节点配置
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TechTree", meta = (ForceInlineRow))
+    TMap<ETechNodeId, FTechNodeConfig> TechNodeConfigs;
+
     // ── 传送带渲染配置 ────────────────────────────────────────────────────────
 
     // 传送带上的物品 Mass Entity 配置
@@ -383,6 +452,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
     TSubclassOf<UMassDspSystemStatsWidget> SystemStatsWidgetClass;
 
+    /** 科技树 Widget 蓝图类（可指向 BP_TechTree） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
+    TSubclassOf<UMassDspTechTreeWidget> TechTreeWidgetClass;
+
     // ── 物流 / 无人机配置 ─────────────────────────────────────────────────────
     // 无人机 ISM 网格（用于物流演示场景）
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Logistics")
@@ -399,6 +472,7 @@ public:
         InitializeRecipeKeys();
         InitializeBuildingKeys();
         InitializeBeltTypeKeys();
+        InitializeTechNodeKeys();
     }
 
     // 🔥 自动创建所有枚举的 Key
@@ -488,6 +562,77 @@ public:
         }
     }
 
+    void InitializeTechNodeKeys()
+    {
+        const UEnum* EnumPtr = StaticEnum<ETechNodeId>();
+        if (!EnumPtr) return;
+
+        for (int32 i = 0; i < EnumPtr->NumEnums() - 1; ++i)
+        {
+            const int64 EnumValue = EnumPtr->GetValueByIndex(i);
+            const ETechNodeId NodeId = static_cast<ETechNodeId>(EnumValue);
+            if (NodeId == ETechNodeId::None) continue;
+
+            if (TechNodeConfigs.Contains(NodeId))
+            {
+                continue;
+            }
+
+            FTechNodeConfig DefaultData;
+            DefaultData.DisplayName = EnumPtr->GetDisplayNameTextByValue(EnumValue);
+
+            switch (NodeId)
+            {
+            case ETechNodeId::BasicMining:
+                DefaultData.Description = FText::FromString(TEXT("解锁矿机、仓库与普通传送带，作为工厂起步能力。"));
+                DefaultData.bUnlockedByDefault = true;
+                DefaultData.Rewards = {
+                    {ETechRewardType::UnlockBuilding, EBuildingType::Miner, ERecipeType::None, EBeltType::None},
+                    {ETechRewardType::UnlockBuilding, EBuildingType::Storage, ERecipeType::None, EBeltType::None},
+                    {ETechRewardType::UnlockBelt, EBuildingType::None, ERecipeType::None, EBeltType::Normal}
+                };
+                break;
+            case ETechNodeId::BasicSmelting:
+                DefaultData.Description = FText::FromString(TEXT("解锁合成台与基础熔炼配方。"));
+                DefaultData.Prerequisites = {ETechNodeId::BasicMining};
+                DefaultData.ResearchCost = {FRecipeEntry(EItemType::IronOre, 40)};
+                DefaultData.Rewards = {
+                    {ETechRewardType::UnlockBuilding, EBuildingType::Assembler, ERecipeType::None, EBeltType::None},
+                    {ETechRewardType::UnlockRecipe, EBuildingType::None, ERecipeType::IronPlate, EBeltType::None}
+                };
+                break;
+            case ETechNodeId::LogisticsBasic:
+                DefaultData.Description = FText::FromString(TEXT("解锁物流塔，让工厂进入远程调度阶段。"));
+                DefaultData.Prerequisites = {ETechNodeId::BasicSmelting};
+                DefaultData.ResearchCost = {FRecipeEntry(EItemType::IronPlate, 80)};
+                DefaultData.Rewards = {
+                    {ETechRewardType::UnlockBuilding, EBuildingType::LogisticsTower, ERecipeType::None, EBeltType::None}
+                };
+                break;
+            case ETechNodeId::BeltFast:
+                DefaultData.Description = FText::FromString(TEXT("解锁快速传送带，提高基础物流水平。"));
+                DefaultData.Prerequisites = {ETechNodeId::BasicSmelting};
+                DefaultData.ResearchCost = {FRecipeEntry(EItemType::IronPlate, 60)};
+                DefaultData.Rewards = {
+                    {ETechRewardType::UnlockBelt, EBuildingType::None, ERecipeType::None, EBeltType::Fast}
+                };
+                break;
+            case ETechNodeId::BeltExpress:
+                DefaultData.Description = FText::FromString(TEXT("解锁极速传送带，支持更高吞吐。"));
+                DefaultData.Prerequisites = {ETechNodeId::BeltFast};
+                DefaultData.ResearchCost = {FRecipeEntry(EItemType::IronPlate, 120)};
+                DefaultData.Rewards = {
+                    {ETechRewardType::UnlockBelt, EBuildingType::None, ERecipeType::None, EBeltType::Express}
+                };
+                break;
+            default:
+                break;
+            }
+
+            TechNodeConfigs.Add(NodeId, DefaultData);
+        }
+    }
+
 #if WITH_EDITOR
     virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override
     {
@@ -541,6 +686,64 @@ public:
             }
         }
 
+        for (const auto& Pair : TechNodeConfigs)
+        {
+            const ETechNodeId NodeId = Pair.Key;
+            const FTechNodeConfig& Config = Pair.Value;
+
+            if (NodeId == ETechNodeId::None)
+            {
+                Context.AddError(FText::AsCultureInvariant(FString::Printf(TEXT("TechNodeConfigs contains invalid key: %d"), static_cast<int32>(NodeId))));
+                return EDataValidationResult::Invalid;
+            }
+
+            if (Config.DisplayName.IsEmpty())
+            {
+                Context.AddError(FText::AsCultureInvariant(FString::Printf(TEXT("TechNodeConfigs[%d] has empty DisplayName"), static_cast<int32>(NodeId))));
+                return EDataValidationResult::Invalid;
+            }
+
+            for (const ETechNodeId Prerequisite : Config.Prerequisites)
+            {
+                if (Prerequisite == ETechNodeId::None || Prerequisite == NodeId)
+                {
+                    Context.AddError(FText::AsCultureInvariant(FString::Printf(TEXT("TechNodeConfigs[%d] has invalid prerequisite"), static_cast<int32>(NodeId))));
+                    return EDataValidationResult::Invalid;
+                }
+            }
+
+            for (const FTechReward& Reward : Config.Rewards)
+            {
+                switch (Reward.RewardType)
+                {
+                case ETechRewardType::UnlockBuilding:
+                    if (Reward.BuildingType == EBuildingType::None)
+                    {
+                        Context.AddError(FText::AsCultureInvariant(
+                            FString::Printf(TEXT("TechNodeConfigs[%d] has building reward with no BuildingType"), static_cast<int32>(NodeId))));
+                        return EDataValidationResult::Invalid;
+                    }
+                    break;
+                case ETechRewardType::UnlockRecipe:
+                    if (Reward.RecipeType == ERecipeType::None)
+                    {
+                        Context.AddError(FText::AsCultureInvariant(FString::Printf(TEXT("TechNodeConfigs[%d] has recipe reward with no RecipeType"), static_cast<int32>(NodeId))));
+                        return EDataValidationResult::Invalid;
+                    }
+                    break;
+                case ETechRewardType::UnlockBelt:
+                    if (Reward.BeltType == EBeltType::None)
+                    {
+                        Context.AddError(FText::AsCultureInvariant(FString::Printf(TEXT("TechNodeConfigs[%d] has belt reward with no BeltType"), static_cast<int32>(NodeId))));
+                        return EDataValidationResult::Invalid;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+
         return EDataValidationResult::Valid;
     }
 
@@ -552,6 +755,7 @@ public:
         InitializeRecipeKeys();
         InitializeBuildingKeys();
         InitializeBeltTypeKeys();
+        InitializeTechNodeKeys();
     }
 #endif
 
@@ -574,6 +778,16 @@ public:
     const FBeltTypeConfig* GetBeltTypeConfig(EBeltType BeltType) const
     {
         return BeltTypeConfigs.Find(BeltType);
+    }
+
+    const FTechNodeConfig* GetTechNodeConfig(ETechNodeId NodeId) const
+    {
+        return TechNodeConfigs.Find(NodeId);
+    }
+
+    const TMap<ETechNodeId, FTechNodeConfig>& GetTechNodeConfigs() const
+    {
+        return TechNodeConfigs;
     }
 
     virtual FPrimaryAssetId GetPrimaryAssetId() const override

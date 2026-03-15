@@ -7,6 +7,7 @@
 #include "Actors/MassDspBuilding.h"
 #include "UI/MassDspInventoryWidget.h"
 #include "UI/MassDspSystemStatsWidget.h"
+#include "UI/MassDspTechTreeWidget.h"
 
 #include "GameFramework/PlayerController.h"
 #include "Components/InputComponent.h"
@@ -64,6 +65,7 @@ void AMassDspHUD::BeginPlay()
     InputComponent->BindKey(EKeys::F, IE_Pressed, this, &AMassDspHUD::HandleInteractKey);
     InputComponent->BindKey(EKeys::I, IE_Pressed, this, &AMassDspHUD::ToggleInventoryWidget);
     InputComponent->BindKey(EKeys::F3, IE_Pressed, this, &AMassDspHUD::ToggleSystemStatsWidget);
+    InputComponent->BindKey(EKeys::T, IE_Pressed, this, &AMassDspHUD::ToggleTechTreeWidget);
 }
 
 void AMassDspHUD::Tick(float DeltaSeconds)
@@ -78,6 +80,11 @@ void AMassDspHUD::Tick(float DeltaSeconds)
     if (SystemStatsWidget && !SystemStatsWidget->IsInViewport())
     {
         SystemStatsWidget = nullptr;
+    }
+
+    if (TechTreeWidget && !TechTreeWidget->IsInViewport())
+    {
+        TechTreeWidget = nullptr;
     }
 
     UpdateCameraMovement(DeltaSeconds);
@@ -95,6 +102,12 @@ void AMassDspHUD::HandleInteractKey()
     {
         SystemStatsWidget->CloseWidget();
         SystemStatsWidget = nullptr;
+    }
+
+    if (TechTreeWidget)
+    {
+        TechTreeWidget->CloseWidget();
+        TechTreeWidget = nullptr;
     }
 
     if (HotbarWidget)
@@ -119,6 +132,12 @@ void AMassDspHUD::ToggleInventoryWidget()
     {
         SystemStatsWidget->CloseWidget();
         SystemStatsWidget = nullptr;
+    }
+
+    if (TechTreeWidget)
+    {
+        TechTreeWidget->CloseWidget();
+        TechTreeWidget = nullptr;
     }
 
     if (HotbarWidget && HotbarWidget->CurrentBuildingWidget)
@@ -161,6 +180,12 @@ void AMassDspHUD::ToggleSystemStatsWidget()
         InventoryWidget = nullptr;
     }
 
+    if (TechTreeWidget)
+    {
+        TechTreeWidget->CloseWidget();
+        TechTreeWidget = nullptr;
+    }
+
     if (HotbarWidget && HotbarWidget->CurrentBuildingWidget)
     {
         HotbarWidget->CurrentBuildingWidget->CloseWidget();
@@ -183,6 +208,52 @@ void AMassDspHUD::ToggleSystemStatsWidget()
 
     FInputModeGameAndUI UIMode;
     UIMode.SetWidgetToFocus(SystemStatsWidget->TakeWidget());
+    UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+    PC->SetInputMode(UIMode);
+    PC->bShowMouseCursor = true;
+}
+
+void AMassDspHUD::ToggleTechTreeWidget()
+{
+    APlayerController* PC = GetOwningPlayerController();
+    if (!PC) return;
+
+    if (TechTreeWidget)
+    {
+        TechTreeWidget->CloseWidget();
+        TechTreeWidget = nullptr;
+        return;
+    }
+
+    if (InventoryWidget)
+    {
+        InventoryWidget->CloseWidget();
+        InventoryWidget = nullptr;
+    }
+
+    if (SystemStatsWidget)
+    {
+        SystemStatsWidget->CloseWidget();
+        SystemStatsWidget = nullptr;
+    }
+
+    if (HotbarWidget && HotbarWidget->CurrentBuildingWidget)
+    {
+        HotbarWidget->CurrentBuildingWidget->CloseWidget();
+        HotbarWidget->CurrentBuildingWidget = nullptr;
+    }
+
+    AMassDspGameMode* GM = GetWorld() ? Cast<AMassDspGameMode>(GetWorld()->GetAuthGameMode()) : nullptr;
+    TSubclassOf<UMassDspTechTreeWidget> TechTreeClass = GM && GM->GameConfig ? GM->GameConfig->TechTreeWidgetClass : nullptr;
+    if (!TechTreeClass) return;
+
+    TechTreeWidget = CreateWidget<UMassDspTechTreeWidget>(PC, TechTreeClass);
+    if (!TechTreeWidget) return;
+
+    TechTreeWidget->AddToViewport(12);
+
+    FInputModeGameAndUI UIMode;
+    UIMode.SetWidgetToFocus(TechTreeWidget->TakeWidget());
     UIMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
     PC->SetInputMode(UIMode);
     PC->bShowMouseCursor = true;

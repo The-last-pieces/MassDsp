@@ -94,8 +94,12 @@ private:
     void InitSlotDefs();
     void BindSlotWidgets();
     void ExecuteSlot(int32 SlotIndex);
+    void RefreshSlotAvailability();
     void UpdateBuildPreview();
     bool GetWorldHitLocation(FVector& OutLoc) const;
+    bool IsSlotUnlocked(const FHotbarSlotDef& Def) const;
+    FText GetSlotLockedReason(const FHotbarSlotDef& Def) const;
+    void ShowLockedMessage(const FText& Message) const;
     /** F 键触发：为指定建筑创建交互 Widget，若已有则先关闭 */
     void CreateBuildingWidgets(const FMassEntityHandle& Entity, EBuildingType Type);
     void SyncHighlight();
@@ -109,6 +113,8 @@ private:
 
     UPROPERTY()
     TArray<TObjectPtr<UBorder>> SlotBorders;
+
+    TArray<bool> SlotUnlockedStates;
 
     int32 LastHighlightedSlot = -1;
 

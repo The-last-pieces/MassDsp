@@ -14,6 +14,7 @@ class UMassDspManager;
 class UGameConfigData;
 class UMassDspItemSlotButton;
 class UMassDspPlayerInventoryComponent;
+class UMassDspTechTreeSubsystem;
 
 /**
  * 建筑交互 UI 基类
@@ -74,6 +75,8 @@ protected:
     UMassDspManager* GetDspManager() const;
 
     UGameConfigData* GetGameConfig() const;
+
+    UMassDspTechTreeSubsystem* GetTechTreeSubsystem() const;
 
     UMassDspPlayerInventoryComponent* GetPlayerInventory() const;
 

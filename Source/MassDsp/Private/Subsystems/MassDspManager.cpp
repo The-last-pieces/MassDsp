@@ -27,6 +27,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Subsystems/MassDspTechTreeSubsystem.h"
 
 namespace
 {
@@ -115,6 +116,7 @@ void UMassDspManager::Initialize(FSubsystemCollectionBase& Collection)
 void UMassDspManager::Deinitialize()
 {
     CancelAnyPreview();
+    CachedTechTreeSubsystem.Reset();
 
     if (BeltsContainerActor)
     {
@@ -147,6 +149,7 @@ bool UMassDspManager::SetMinerItemType(FMassEntityHandle Entity, EItemType NewIt
 bool UMassDspManager::SetAssemblerRecipe(FMassEntityHandle Entity, ERecipeType NewRecipeType)
 {
     if (!Entity.IsValid() || NewRecipeType == ERecipeType::None) return false;
+    if (!IsRecipeUnlocked(NewRecipeType)) return false;
 
     TryGetGameMode();
     if (!GameMode.IsValid() || !GameMode->GameConfig || !GameMode->GameConfig->GetRecipeConfig(NewRecipeType))
@@ -285,6 +288,66 @@ int32 UMassDspManager::TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType
     return Taken;
 }
 
+bool UMassDspManager::IsBuildingUnlocked(EBuildingType BuildingType) const
+{
+    if (UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem())
+    {
+        return TechTree->IsBuildingUnlocked(BuildingType);
+    }
+
+    return true;
+}
+
+bool UMassDspManager::IsRecipeUnlocked(ERecipeType RecipeType) const
+{
+    if (UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem())
+    {
+        return TechTree->IsRecipeUnlocked(RecipeType);
+    }
+
+    return true;
+}
+
+bool UMassDspManager::IsBeltUnlocked(EBeltType BeltType) const
+{
+    if (UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem())
+    {
+        return TechTree->IsBeltUnlocked(BeltType);
+    }
+
+    return true;
+}
+
+FText UMassDspManager::GetBuildingUnlockRequirementText(EBuildingType BuildingType) const
+{
+    if (UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem())
+    {
+        return TechTree->GetUnlockRequirementTextForBuilding(BuildingType);
+    }
+
+    return FText::GetEmpty();
+}
+
+FText UMassDspManager::GetRecipeUnlockRequirementText(ERecipeType RecipeType) const
+{
+    if (UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem())
+    {
+        return TechTree->GetUnlockRequirementTextForRecipe(RecipeType);
+    }
+
+    return FText::GetEmpty();
+}
+
+FText UMassDspManager::GetBeltUnlockRequirementText(EBeltType BeltType) const
+{
+    if (UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem())
+    {
+        return TechTree->GetUnlockRequirementTextForBelt(BeltType);
+    }
+
+    return FText::GetEmpty();
+}
+
 TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
 {
     if (!GameMode.IsValid())
@@ -293,6 +356,16 @@ TWeakObjectPtr<AMassDspGameMode> UMassDspManager::TryGetGameMode()
     }
 
     return GameMode;
+}
+
+UMassDspTechTreeSubsystem* UMassDspManager::GetTechTreeSubsystem() const
+{
+    if (!CachedTechTreeSubsystem.IsValid())
+    {
+        CachedTechTreeSubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassDspTechTreeSubsystem>() : nullptr;
+    }
+
+    return CachedTechTreeSubsystem.Get();
 }
 
 FBeltHandle UMassDspManager::CreateRuntimeBelt(const FBeltRebuildData& RebuildData, EBeltType BeltType, const FVector& CameraPos)
@@ -1967,6 +2040,12 @@ void UMassDspManager::BeginPreviewBuilding(EBuildingType BuildingType, const FTr
 {
     CancelAnyPreview();
 
+    if (!IsBuildingUnlocked(BuildingType))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BeginPreviewBuilding: building type %d is locked by tech tree"), static_cast<int32>(BuildingType));
+        return;
+    }
+
     TryGetGameMode();
     if (!GameMode.IsValid() || !GameMode->GameConfig) return;
 
@@ -2054,6 +2133,12 @@ void UMassDspManager::CancelBuildingPreview()
 void UMassDspManager::BeginPreviewBelt(EBeltType BeltType, EBeltSplineType SplineType)
 {
     CancelAnyPreview();
+
+    if (!IsBeltUnlocked(BeltType))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BeginPreviewBelt: belt type %d is locked by tech tree"), static_cast<int32>(BeltType));
+        return;
+    }
 
     PreviewBeltType = BeltType;
     PreviewBeltSplineType = SplineType;

@@ -22,6 +22,7 @@ public:
      *   /Game/Assets/UI/BP_LogisticsTower (UMassDspLogisticsTowerWidget) 物流塔
      *   /Game/Assets/UI/BP_Inventory      (UMassDspInventoryWidget) 玩家背包
      *   /Game/Assets/UI/BP_SystemStats    (UMassDspSystemStatsWidget) 系统统计调试面板
+    *   /Game/Assets/UI/BP_TechTree       (UMassDspTechTreeWidget) 科技树面板
      * 资源已存在时跳过，删除资源后重新运行可重新生成。
      */
     static void CreateBuildingWidgets();

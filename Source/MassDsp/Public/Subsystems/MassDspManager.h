@@ -17,6 +17,7 @@
 class UProceduralMeshComponent;
 class AMassDspGameMode;
 class UMassEntityConfigAsset;
+class UMassDspTechTreeSubsystem;
 
 // 建造放置模式
 UENUM(BlueprintType)
@@ -101,6 +102,8 @@ public:
     TMap<FMassEntityHandle, EBuildingType> BuildingEntityTypeRegistry;
 
     TWeakObjectPtr<AMassDspGameMode> GameMode;
+
+    mutable TWeakObjectPtr<UMassDspTechTreeSubsystem> CachedTechTreeSubsystem;
 
     // ISM 物品渲染池，按物品类型分组，一种物品一个 ISM 组件
     // 注意：只存储近处物品（距离 < NearDistanceThreshold），远处物品不放入 ISM
@@ -244,6 +247,20 @@ public:
     int32 TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity);
 
     int32 TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity);
+
+    bool IsBuildingUnlocked(EBuildingType BuildingType) const;
+
+    bool IsRecipeUnlocked(ERecipeType RecipeType) const;
+
+    bool IsBeltUnlocked(EBeltType BeltType) const;
+
+    FText GetBuildingUnlockRequirementText(EBuildingType BuildingType) const;
+
+    FText GetRecipeUnlockRequirementText(ERecipeType RecipeType) const;
+
+    FText GetBeltUnlockRequirementText(EBeltType BeltType) const;
+
+    UMassDspTechTreeSubsystem* GetTechTreeSubsystem() const;
 
     FBeltHandle CreateAndLinkBeltForSlot(
         FMassEntityHandle SBuilding, int32 StartSlotIndex,

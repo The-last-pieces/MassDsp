@@ -37,13 +37,16 @@ void UMassDspHotbarWidget::NativeConstruct()
 {
     Super::NativeConstruct();
     InitSlotDefs();
+    SlotUnlockedStates.Init(true, TotalSlots);
     BindSlotWidgets();
+    RefreshSlotAvailability();
 }
 
 void UMassDspHotbarWidget::NativeTick(const FGeometry& MyGeometry, float DeltaTime)
 {
     Super::NativeTick(MyGeometry, DeltaTime);
     UpdateBuildPreview();
+    RefreshSlotAvailability();
     SyncHighlight();
 
     // 建筑交互 Widget 被内部关闭后清零指针
@@ -113,6 +116,12 @@ void UMassDspHotbarWidget::ExecuteSlot(int32 SlotIndex)
     if (!Manager) return;
 
     const FHotbarSlotDef& Def = SlotDefs[SlotIndex];
+    if (!IsSlotUnlocked(Def))
+    {
+        ShowLockedMessage(GetSlotLockedReason(Def));
+        return;
+    }
+
     switch (Def.Action)
     {
     case EHotbarAction::PlaceBuilding:
@@ -134,6 +143,77 @@ void UMassDspHotbarWidget::ExecuteSlot(int32 SlotIndex)
         break;
     default: break;
     }
+}
+
+void UMassDspHotbarWidget::RefreshSlotAvailability()
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return;
+
+    if (SlotUnlockedStates.Num() != TotalSlots)
+    {
+        SlotUnlockedStates.Init(true, TotalSlots);
+    }
+
+    for (int32 i = 0; i < SlotDefs.Num(); ++i)
+    {
+        const bool bUnlocked = IsSlotUnlocked(SlotDefs[i]);
+        SlotUnlockedStates[i] = bUnlocked;
+
+        if (SlotButtons.IsValidIndex(i) && SlotButtons[i])
+        {
+            SlotButtons[i]->SetIsEnabled(bUnlocked || SlotDefs[i].Action == EHotbarAction::TestScene);
+        }
+
+        if (LastHighlightedSlot != i)
+        {
+            SetSlotHighlight(i, false);
+        }
+    }
+}
+
+bool UMassDspHotbarWidget::IsSlotUnlocked(const FHotbarSlotDef& Def) const
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return true;
+
+    switch (Def.Action)
+    {
+    case EHotbarAction::PlaceBuilding:
+        return Manager->IsBuildingUnlocked(Def.BuildingType);
+    case EHotbarAction::PlaceBelt:
+        return Manager->IsBeltUnlocked(Def.BeltType);
+    default:
+        return true;
+    }
+}
+
+FText UMassDspHotbarWidget::GetSlotLockedReason(const FHotbarSlotDef& Def) const
+{
+    UMassDspManager* Manager = GetWorld() ? GetWorld()->GetSubsystem<UMassDspManager>() : nullptr;
+    if (!Manager) return FText::FromString(TEXT("功能暂不可用"));
+
+    switch (Def.Action)
+    {
+    case EHotbarAction::PlaceBuilding:
+        {
+            const FText Reason = Manager->GetBuildingUnlockRequirementText(Def.BuildingType);
+            return Reason.IsEmpty() ? FText::FromString(TEXT("建筑尚未解锁")) : Reason;
+        }
+    case EHotbarAction::PlaceBelt:
+        {
+            const FText Reason = Manager->GetBeltUnlockRequirementText(Def.BeltType);
+            return Reason.IsEmpty() ? FText::FromString(TEXT("传送带尚未解锁")) : Reason;
+        }
+    default:
+        return FText::FromString(TEXT("功能暂不可用"));
+    }
+}
+
+void UMassDspHotbarWidget::ShowLockedMessage(const FText& Message) const
+{
+    if (Message.IsEmpty() || !GEngine) return;
+    GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Yellow, Message.ToString());
 }
 
 bool UMassDspHotbarWidget::GetWorldHitLocation(FVector& OutLoc) const
@@ -206,10 +286,14 @@ int32 UMassDspHotbarWidget::GetCurrentActiveSlot() const
 void UMassDspHotbarWidget::SetSlotHighlight(int32 SlotIndex, bool bActive)
 {
     if (!SlotBorders.IsValidIndex(SlotIndex) || !SlotBorders[SlotIndex]) return;
+
+    const bool bUnlocked = SlotUnlockedStates.IsValidIndex(SlotIndex) ? SlotUnlockedStates[SlotIndex] : true;
     SlotBorders[SlotIndex]->SetBrushColor(
-        bActive
-            ? FLinearColor(0.15f, 0.45f, 1.f, 0.92f)
-            : FLinearColor(0.05f, 0.05f, 0.05f, 0.82f));
+        !bUnlocked
+            ? FLinearColor(0.18f, 0.18f, 0.18f, 0.55f)
+            : (bActive
+                ? FLinearColor(0.15f, 0.45f, 1.f, 0.92f)
+                : FLinearColor(0.05f, 0.05f, 0.05f, 0.82f)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

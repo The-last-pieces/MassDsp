@@ -5,15 +5,10 @@ UMassDspItemSlotButton::UMassDspItemSlotButton(const FObjectInitializer& ObjectI
 {
 }
 
-void UMassDspItemSlotButton::PostInitProperties()
+void UMassDspItemSlotButton::BindClickForwarder()
 {
-    Super::PostInitProperties();
-
-    if (!HasAnyFlags(RF_ClassDefaultObject))
-    {
-        OnClicked.RemoveAll(this);
-        OnClicked.AddDynamic(this, &UMassDspItemSlotButton::HandleButtonClicked);
-    }
+    OnClicked.RemoveDynamic(this, &UMassDspItemSlotButton::HandleButtonClicked);
+    OnClicked.AddDynamic(this, &UMassDspItemSlotButton::HandleButtonClicked);
 }
 
 void UMassDspItemSlotButton::HandleButtonClicked()

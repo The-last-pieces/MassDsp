@@ -61,6 +61,7 @@ void MassDspItemGridUtils::CollectGridSlots(UUserWidget* Owner, const FString& P
         {
             SlotRefs.Button->SlotIndex = SlotIndex;
             SlotRefs.Button->SlotGroup = SlotGroup;
+            SlotRefs.Button->BindClickForwarder();
         }
 
         OutSlots.Add(SlotRefs);

@@ -6,6 +6,7 @@
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspTechTreeSubsystem.h"
 
 // 
 
@@ -158,6 +159,7 @@ void UMassDspAssemblerWidget::ChangeRecipe(int32 Direction)
 {
     const FMassDspAssemblerFragment* Fragment = GetFragment();
     UMassDspManager* Manager = GetDspManager();
+    UMassDspTechTreeSubsystem* TechTree = GetTechTreeSubsystem();
     UGameConfigData* GameConfig = GetGameConfig();
     if (!Fragment || !Manager || !GameConfig) return;
 
@@ -169,7 +171,7 @@ void UMassDspAssemblerWidget::ChangeRecipe(int32 Direction)
     {
         const ERecipeType RecipeType = static_cast<ERecipeType>(Enum->GetValueByIndex(Index));
         if (RecipeType == ERecipeType::None) continue;
-        if (GameConfig->GetRecipeConfig(RecipeType))
+        if (GameConfig->GetRecipeConfig(RecipeType) && (!TechTree || TechTree->IsRecipeUnlocked(RecipeType)))
         {
             Recipes.Add(RecipeType);
         }

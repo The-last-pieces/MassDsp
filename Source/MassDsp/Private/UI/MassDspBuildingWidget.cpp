@@ -11,6 +11,7 @@
 #include "MassEntitySubsystem.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspTechTreeSubsystem.h"
 #include "UI/MassDspItemGridUtils.h"
 #include "UI/MassDspItemSlotButton.h"
 
@@ -35,7 +36,7 @@ void UMassDspBuildingWidget::NativeConstruct()
     {
         if (GridSlot.Button)
         {
-            GridSlot.Button->OnItemSlotClicked.RemoveAll(this);
+            GridSlot.Button->OnItemSlotClicked.RemoveDynamic(this, &UMassDspBuildingWidget::OnItemSlotClicked);
             GridSlot.Button->OnItemSlotClicked.AddDynamic(this, &UMassDspBuildingWidget::OnItemSlotClicked);
         }
     }
@@ -44,7 +45,7 @@ void UMassDspBuildingWidget::NativeConstruct()
     {
         if (GridSlot.Button)
         {
-            GridSlot.Button->OnItemSlotClicked.RemoveAll(this);
+            GridSlot.Button->OnItemSlotClicked.RemoveDynamic(this, &UMassDspBuildingWidget::OnItemSlotClicked);
             GridSlot.Button->OnItemSlotClicked.AddDynamic(this, &UMassDspBuildingWidget::OnItemSlotClicked);
         }
     }
@@ -142,6 +143,11 @@ UGameConfigData* UMassDspBuildingWidget::GetGameConfig() const
     const UWorld* World = GetWorld();
     const AMassDspGameMode* GM = World ? Cast<AMassDspGameMode>(World->GetAuthGameMode()) : nullptr;
     return GM ? GM->GameConfig.Get() : nullptr;
+}
+
+UMassDspTechTreeSubsystem* UMassDspBuildingWidget::GetTechTreeSubsystem() const
+{
+    return GetWorld() ? GetWorld()->GetSubsystem<UMassDspTechTreeSubsystem>() : nullptr;
 }
 
 UMassDspPlayerInventoryComponent* UMassDspBuildingWidget::GetPlayerInventory() const
