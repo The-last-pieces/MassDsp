@@ -202,12 +202,153 @@ struct MASSDSP_API FMassDspBuildingSaveData
 };
 
 USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspBeltItemSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float Offset = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    EItemType ItemType = EItemType::None;
+};
+
+USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspDubinsPathSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 WordType = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float SegLen0 = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float SegLen1 = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float SegLen2 = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float TotalLength = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float TurningRadius = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector2D StartPos = FVector2D::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float StartHeading = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector2D EndPos = FVector2D::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float EndHeading = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float StartZ = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float EndZ = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    bool bHasStartExtend = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector StartExtendPos = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    bool bHasEndExtend = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector EndExtendPos = FVector::ZeroVector;
+};
+
+USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspHermiteRebuildSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector A = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector B = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector C = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FVector D = FVector::ZeroVector;
+};
+
+USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspBeltEntrySaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 StartBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 StartSlotIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 EndBuildingIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 EndSlotIndex = INDEX_NONE;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    EBeltType BeltType = EBeltType::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    uint8 RebuildType = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FMassDspDubinsPathSaveData DubinsData;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FMassDspHermiteRebuildSaveData HermiteData;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float BeltLength = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float BeltSpeed = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float TotalMove = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 BlockedCount = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float GroupFrontOffset = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 ItemCacheStartIndex = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 ItemCacheCount = 0;
+};
+
+USTRUCT(BlueprintType)
 struct MASSDSP_API FMassDspBeltSaveChunk
 {
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     int32 Version = 1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspBeltEntrySaveData> Belts;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspBeltItemSaveData> FlatItemCache;
 };
 
 USTRUCT(BlueprintType)

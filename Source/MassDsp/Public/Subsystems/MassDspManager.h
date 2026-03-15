@@ -19,6 +19,7 @@ class AMassDspGameMode;
 class UMassEntityConfigAsset;
 class UMassDspTechTreeSubsystem;
 struct FMassDspBuildingSaveData;
+struct FMassDspBeltSaveChunk;
 
 // 建造放置模式
 UENUM(BlueprintType)
@@ -372,7 +373,9 @@ public:
     // 新增：批量创建Building Entity（关卡初始化用）
     TArray<FMassEntityHandle> BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList);
     void CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& OutSaveData) const;
+    void CollectBeltSaveData(FMassDspBeltSaveChunk& OutSaveData) const;
     bool RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData);
+    bool RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveData);
 
     // ──────────────────────────── 建造预览接口 ────────────────────────────
 

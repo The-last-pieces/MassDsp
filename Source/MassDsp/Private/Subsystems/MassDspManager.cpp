@@ -49,6 +49,138 @@ namespace
         return nullptr;
     }
 
+    struct FBeltEndpointSaveRef
+    {
+        int32 BuildingIndex = INDEX_NONE;
+        int32 SlotIndex = INDEX_NONE;
+
+        bool IsValid() const
+        {
+            return BuildingIndex != INDEX_NONE && SlotIndex != INDEX_NONE;
+        }
+    };
+
+    static FMassDspDubinsPathSaveData ToDubinsSaveData(const FDubinsPathData& InData)
+    {
+        FMassDspDubinsPathSaveData OutData;
+        OutData.WordType = static_cast<uint8>(InData.WordType);
+        OutData.SegLen0 = InData.SegLen[0];
+        OutData.SegLen1 = InData.SegLen[1];
+        OutData.SegLen2 = InData.SegLen[2];
+        OutData.TotalLength = InData.TotalLength;
+        OutData.TurningRadius = InData.TurningRadius;
+        OutData.StartPos = InData.StartPos;
+        OutData.StartHeading = InData.StartHeading;
+        OutData.EndPos = InData.EndPos;
+        OutData.EndHeading = InData.EndHeading;
+        OutData.StartZ = InData.StartZ;
+        OutData.EndZ = InData.EndZ;
+        OutData.bHasStartExtend = InData.bHasStartExtend;
+        OutData.StartExtendPos = InData.StartExtendPos;
+        OutData.bHasEndExtend = InData.bHasEndExtend;
+        OutData.EndExtendPos = InData.EndExtendPos;
+        return OutData;
+    }
+
+    static FDubinsPathData FromDubinsSaveData(const FMassDspDubinsPathSaveData& InData)
+    {
+        FDubinsPathData OutData;
+        OutData.WordType = static_cast<EDubinsWordType>(InData.WordType);
+        OutData.SegLen[0] = InData.SegLen0;
+        OutData.SegLen[1] = InData.SegLen1;
+        OutData.SegLen[2] = InData.SegLen2;
+        OutData.TotalLength = InData.TotalLength;
+        OutData.TurningRadius = InData.TurningRadius;
+        OutData.StartPos = InData.StartPos;
+        OutData.StartHeading = InData.StartHeading;
+        OutData.EndPos = InData.EndPos;
+        OutData.EndHeading = InData.EndHeading;
+        OutData.StartZ = InData.StartZ;
+        OutData.EndZ = InData.EndZ;
+        OutData.bHasStartExtend = InData.bHasStartExtend;
+        OutData.StartExtendPos = InData.StartExtendPos;
+        OutData.bHasEndExtend = InData.bHasEndExtend;
+        OutData.EndExtendPos = InData.EndExtendPos;
+        return OutData;
+    }
+
+    static FMassDspHermiteRebuildSaveData ToHermiteSaveData(const FHermiteRebuildData& InData)
+    {
+        FMassDspHermiteRebuildSaveData OutData;
+        OutData.A = InData.A;
+        OutData.B = InData.B;
+        OutData.C = InData.C;
+        OutData.D = InData.D;
+        return OutData;
+    }
+
+    static FHermiteRebuildData FromHermiteSaveData(const FMassDspHermiteRebuildSaveData& InData)
+    {
+        FHermiteRebuildData OutData;
+        OutData.A = InData.A;
+        OutData.B = InData.B;
+        OutData.C = InData.C;
+        OutData.D = InData.D;
+        return OutData;
+    }
+
+    static FBuildingSlotState* ResolveBuildingSlot(
+        FMassEntityManager& EntityManager,
+        FMassEntityHandle Building,
+        int32 SlotIndex,
+        EBuildingSlotType SlotType)
+    {
+        if (SlotIndex < 0)
+        {
+            return nullptr;
+        }
+
+        FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Building);
+        if (!SlotsFragment)
+        {
+            return nullptr;
+        }
+
+        TArrayView<FBuildingSlotState> Slots = SlotType == EBuildingSlotType::Output
+            ? SlotsFragment->GetOutputSlots()
+            : SlotsFragment->GetInputSlots();
+        return Slots.IsValidIndex(SlotIndex) ? &Slots[SlotIndex] : nullptr;
+    }
+
+    static void ResetBuildingSlotConnections(FMassEntityManager& EntityManager, const TArray<FMassEntityHandle>& BuildingEntities)
+    {
+        for (const FMassEntityHandle Entity : BuildingEntities)
+        {
+            if (!EntityManager.IsEntityValid(Entity))
+            {
+                continue;
+            }
+
+            FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Entity);
+            if (!SlotsFragment)
+            {
+                continue;
+            }
+
+            SlotsFragment->ConnectedOutputCount = 0;
+            SlotsFragment->ConnectedInputCount = 0;
+
+            for (FBuildingSlotState& Slot : SlotsFragment->GetOutputSlots())
+            {
+                Slot.ConnectedLaneHandle = FBeltHandle();
+                Slot.BeltSpeed = 0.0f;
+                Slot.ReadyAtTime = 0.0f;
+            }
+
+            for (FBuildingSlotState& Slot : SlotsFragment->GetInputSlots())
+            {
+                Slot.ConnectedLaneHandle = FBeltHandle();
+                Slot.BeltSpeed = 0.0f;
+                Slot.ReadyAtTime = 0.0f;
+            }
+        }
+    }
+
     int32 StoreIntoAssembler(FMassDspAssemblerFragment& Assembler, const FRecipeDataForFragment& Recipe, EItemType ItemType, int32 Quantity)
     {
         int32 Stored = 0;
@@ -1270,6 +1402,118 @@ void UMassDspManager::CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& 
     }
 }
 
+void UMassDspManager::CollectBeltSaveData(FMassDspBeltSaveChunk& OutSaveData) const
+{
+    OutSaveData.Version = 1;
+    OutSaveData.Belts.Reset();
+    OutSaveData.FlatItemCache.Reset();
+
+    if (BeltEntityRegistry.IsEmpty())
+    {
+        return;
+    }
+
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    TMap<FMassEntityHandle, int32> BuildingIndexByEntity;
+    TMap<FBeltHandle, FBeltEndpointSaveRef> StartRefs;
+    TMap<FBeltHandle, FBeltEndpointSaveRef> EndRefs;
+
+    for (int32 BuildingIndex = 0; BuildingIndex < SpawnedBuildingEntities.Num(); ++BuildingIndex)
+    {
+        const FMassEntityHandle Entity = SpawnedBuildingEntities[BuildingIndex];
+        if (!EntityManager.IsEntityValid(Entity))
+        {
+            continue;
+        }
+
+        BuildingIndexByEntity.Add(Entity, BuildingIndex);
+
+        FMassDspBuildingSlotsFragment* SlotsFragment = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(Entity);
+        if (!SlotsFragment)
+        {
+            continue;
+        }
+
+        TArrayView<FBuildingSlotState> OutputSlots = SlotsFragment->GetOutputSlots();
+        for (int32 SlotIndex = 0; SlotIndex < OutputSlots.Num(); ++SlotIndex)
+        {
+            const FBeltHandle Handle = OutputSlots[SlotIndex].ConnectedLaneHandle;
+            if (!Handle.IsValid())
+            {
+                continue;
+            }
+
+            FBeltEndpointSaveRef Ref;
+            Ref.BuildingIndex = BuildingIndex;
+            Ref.SlotIndex = SlotIndex;
+            StartRefs.Add(Handle, Ref);
+        }
+
+        TArrayView<FBuildingSlotState> InputSlots = SlotsFragment->GetInputSlots();
+        for (int32 SlotIndex = 0; SlotIndex < InputSlots.Num(); ++SlotIndex)
+        {
+            const FBeltHandle Handle = InputSlots[SlotIndex].ConnectedLaneHandle;
+            if (!Handle.IsValid())
+            {
+                continue;
+            }
+
+            FBeltEndpointSaveRef Ref;
+            Ref.BuildingIndex = BuildingIndex;
+            Ref.SlotIndex = SlotIndex;
+            EndRefs.Add(Handle, Ref);
+        }
+    }
+
+    for (const auto& [Handle, BeltData] : BeltEntityRegistry)
+    {
+        const FBeltEndpointSaveRef* StartRef = StartRefs.Find(Handle);
+        const FBeltEndpointSaveRef* EndRef = EndRefs.Find(Handle);
+        if (!StartRef || !EndRef || !StartRef->IsValid() || !EndRef->IsValid())
+        {
+            continue;
+        }
+
+        FMassDspBeltEntrySaveData Entry;
+        Entry.StartBuildingIndex = StartRef->BuildingIndex;
+        Entry.StartSlotIndex = StartRef->SlotIndex;
+        Entry.EndBuildingIndex = EndRef->BuildingIndex;
+        Entry.EndSlotIndex = EndRef->SlotIndex;
+        Entry.BeltLength = BeltData.BeltLength;
+        Entry.BeltSpeed = BeltData.BeltSpeed;
+        Entry.TotalMove = BeltData.TotalMove;
+        Entry.BlockedCount = BeltData.BlockedCount;
+        Entry.GroupFrontOffset = BeltData.GroupFrontOffset;
+
+        if (BeltRebuildData.IsValidIndex(Handle.Index))
+        {
+            const FBeltRebuildData& RebuildData = BeltRebuildData[Handle.Index];
+            Entry.BeltType = RebuildData.BeltType;
+            Entry.RebuildType = static_cast<uint8>(RebuildData.RebuildType);
+            Entry.DubinsData = ToDubinsSaveData(RebuildData.DubinsData);
+            Entry.HermiteData = ToHermiteSaveData(RebuildData.HermiteData);
+        }
+
+        Entry.ItemCacheStartIndex = OutSaveData.FlatItemCache.Num();
+        for (const FBeltItemCache& Item : BeltData.ItemCache)
+        {
+            FMassDspBeltItemSaveData SavedItem;
+            SavedItem.Offset = Item.Offset;
+            SavedItem.ItemType = Item.ItemType;
+            OutSaveData.FlatItemCache.Add(SavedItem);
+        }
+        Entry.ItemCacheCount = OutSaveData.FlatItemCache.Num() - Entry.ItemCacheStartIndex;
+
+        OutSaveData.Belts.Add(MoveTemp(Entry));
+    }
+}
+
 bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData)
 {
     UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
@@ -1403,6 +1647,152 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
         }
     }
 
+    return true;
+}
+
+bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveData)
+{
+    UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+    if (!EntitySubsystem)
+    {
+        return false;
+    }
+
+    FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+    ResetBuildingSlotConnections(EntityManager, SpawnedBuildingEntities);
+
+    for (auto& [ChunkKey, Chunk] : BeltChunks)
+    {
+        if (!Chunk.PMC)
+        {
+            continue;
+        }
+
+        Chunk.PMC->ClearAllMeshSections();
+        if (FreePMCPool.Num() < MaxFreePMCPoolSize)
+        {
+            FreePMCPool.Add(Chunk.PMC);
+        }
+        else
+        {
+            Chunk.PMC->DestroyComponent();
+        }
+        Chunk.PMC = nullptr;
+        Chunk.CurrentMeshLOD = -1;
+        Chunk.bMeshDirty = false;
+    }
+
+    BeltChunks.Reset();
+    PendingFlushQueue.Reset();
+    PendingFlushSet.Reset();
+    SpatialGrid.Reset();
+    BeltEntityRegistry.Reset();
+    BeltTrajectories.Empty();
+    BeltRebuildData.Empty();
+    Belt_TotalMove.Reset();
+    Belt_Speed.Reset();
+    Belt_Ptrs.Reset();
+    Belt_RepPos.Reset();
+    Belt_BoundRadius.Reset();
+    Belt_TrajIndex.Reset();
+    Belt_CachedCount = -1;
+    CachedTransformsByType.Reset();
+
+    for (auto& [ItemType, ISM] : ItemISMPool)
+    {
+        if (ISM)
+        {
+            ISM->ClearInstances();
+        }
+    }
+
+    if (InSaveData.Belts.IsEmpty())
+    {
+        return true;
+    }
+
+    for (const FMassDspBeltEntrySaveData& SavedBelt : InSaveData.Belts)
+    {
+        if (!SpawnedBuildingEntities.IsValidIndex(SavedBelt.StartBuildingIndex) ||
+            !SpawnedBuildingEntities.IsValidIndex(SavedBelt.EndBuildingIndex))
+        {
+            return false;
+        }
+
+        if (SavedBelt.ItemCacheStartIndex < 0 || SavedBelt.ItemCacheCount < 0 ||
+            SavedBelt.ItemCacheStartIndex + SavedBelt.ItemCacheCount > InSaveData.FlatItemCache.Num())
+        {
+            return false;
+        }
+
+        const FMassEntityHandle StartBuilding = SpawnedBuildingEntities[SavedBelt.StartBuildingIndex];
+        const FMassEntityHandle EndBuilding = SpawnedBuildingEntities[SavedBelt.EndBuildingIndex];
+        if (!EntityManager.IsEntityValid(StartBuilding) || !EntityManager.IsEntityValid(EndBuilding))
+        {
+            return false;
+        }
+
+        FMassDspBuildingSlotsFragment* StartSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(StartBuilding);
+        FMassDspBuildingSlotsFragment* EndSlots = EntityManager.GetFragmentDataPtr<FMassDspBuildingSlotsFragment>(EndBuilding);
+        FBuildingSlotState* StartSlot = ResolveBuildingSlot(EntityManager, StartBuilding, SavedBelt.StartSlotIndex, EBuildingSlotType::Output);
+        FBuildingSlotState* EndSlot = ResolveBuildingSlot(EntityManager, EndBuilding, SavedBelt.EndSlotIndex, EBuildingSlotType::Input);
+        if (!StartSlots || !EndSlots || !StartSlot || !EndSlot)
+        {
+            return false;
+        }
+
+        if (StartSlot->ConnectedLaneHandle.IsValid() || EndSlot->ConnectedLaneHandle.IsValid())
+        {
+            return false;
+        }
+
+        FBeltRebuildData RebuildData;
+        RebuildData.BeltType = SavedBelt.BeltType;
+        RebuildData.RebuildType = SavedBelt.RebuildType == static_cast<uint8>(EBeltRebuildType::Hermite)
+            ? EBeltRebuildType::Hermite
+            : EBeltRebuildType::Dubins;
+        RebuildData.DubinsData = FromDubinsSaveData(SavedBelt.DubinsData);
+        RebuildData.HermiteData = FromHermiteSaveData(SavedBelt.HermiteData);
+
+        const FBeltHandle NewHandle = CreateRuntimeBelt(RebuildData, SavedBelt.BeltType);
+        if (!NewHandle.IsValid())
+        {
+            return false;
+        }
+
+        FBeltData* BeltData = BeltEntityRegistry.Find(NewHandle);
+        if (!BeltData)
+        {
+            return false;
+        }
+
+        BeltData->BeltLength = SavedBelt.BeltLength > 0.0f ? SavedBelt.BeltLength : BeltData->BeltLength;
+        BeltData->BeltSpeed = SavedBelt.BeltSpeed > 0.0f ? SavedBelt.BeltSpeed : BeltData->BeltSpeed;
+        BeltData->TotalMove = SavedBelt.TotalMove;
+        BeltData->GroupFrontOffset = SavedBelt.GroupFrontOffset;
+        BeltData->BlockedCount = FMath::Clamp(SavedBelt.BlockedCount, 0, SavedBelt.ItemCacheCount);
+        BeltData->ItemCache.Empty();
+
+        for (int32 ItemIndex = 0; ItemIndex < SavedBelt.ItemCacheCount; ++ItemIndex)
+        {
+            const FMassDspBeltItemSaveData& SavedItem = InSaveData.FlatItemCache[SavedBelt.ItemCacheStartIndex + ItemIndex];
+            FBeltItemCache RestoredItem;
+            RestoredItem.Offset = SavedItem.Offset;
+            RestoredItem.ItemType = SavedItem.ItemType;
+            BeltData->ItemCache.PushLast(RestoredItem);
+        }
+
+        StartSlot->ConnectedLaneHandle = NewHandle;
+        EndSlot->ConnectedLaneHandle = NewHandle;
+        StartSlot->BeltSpeed = BeltData->BeltSpeed;
+        EndSlot->BeltSpeed = BeltData->BeltSpeed;
+        StartSlot->ReadyAtTime = 0.0f;
+        EndSlot->ReadyAtTime = 0.0f;
+        StartSlots->MarkOutputConnected();
+        EndSlots->MarkInputConnected();
+    }
+
+    RebuildBeltSoA();
     return true;
 }
 

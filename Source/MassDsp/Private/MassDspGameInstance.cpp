@@ -138,6 +138,7 @@ bool UMassDspGameInstance::CollectCurrentState(UMassDspSaveGame& OutSaveGame) co
     OutSaveGame.Header.SavedAtUtc = FDateTime::UtcNow();
 
     Manager->CollectBuildingSaveData(OutSaveGame.Buildings);
+    Manager->CollectBeltSaveData(OutSaveGame.Belts);
 
     OutSaveGame.PlayerInventory.MaxInventoryItems = PlayerInventory->GetCapacity();
     OutSaveGame.PlayerInventory.ItemStacks.Reset();
@@ -187,6 +188,11 @@ bool UMassDspGameInstance::RestoreCurrentState(const UMassDspSaveGame& InSaveGam
     }
 
     if (!Manager->RestoreBuildingSaveData(InSaveGame.Buildings))
+    {
+        return false;
+    }
+
+    if (!Manager->RestoreBeltSaveData(InSaveGame.Belts))
     {
         return false;
     }
