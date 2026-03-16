@@ -6,6 +6,7 @@
 #include "Fragments/MassDspAssemblerFragment.h"
 #include "MassDspGameMode.h"
 #include "Subsystems/MassDspManager.h"
+#include "Subsystems/MassDspDebugStatsSubsystem.h"
 #include "MassExecutionContext.h"
 #include "MassCommonTypes.h"
 
@@ -64,6 +65,11 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     // 将 IsValid 检查提升到 Execute 顶层一次，避免在每个实体的 ProcessSlots 里重复检查
     if (!DspManager.IsValid()) return;
 
+    UMassDspDebugStatsSubsystem* StatsSubsystem = DebugStatsSubsystem.IsValid()
+        ? DebugStatsSubsystem.Get()
+        : World->GetSubsystem<UMassDspDebugStatsSubsystem>();
+    DebugStatsSubsystem = StatsSubsystem;
+
     const AMassDspGameMode* GameMode = Cast<AMassDspGameMode>(World->GetAuthGameMode());
     const UGameConfigData* GameConfig = GameMode ? GameMode->GameConfig.Get() : nullptr;
 
@@ -71,10 +77,10 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
 
     // ── Pass 1: TickExecute + 输出槽（Provide）──────────────────────────────
     // 每条传送带只有 1 个 Provide 方 → 各线程写不同 FBeltData，ParallelFor 安全
-    ProcessBuildingOutputs<FMassDspMinerFragment>(MinerQuery, Context, WorldTime, GameConfig);
-    ProcessBuildingOutputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig);
-    ProcessBuildingOutputs<FMassDspWarehouseFragment>(WarehouseQuery, Context, WorldTime, GameConfig);
-    ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingOutputs<FMassDspMinerFragment>(MinerQuery, Context, WorldTime, GameConfig, StatsSubsystem);
+    ProcessBuildingOutputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig, StatsSubsystem);
+    ProcessBuildingOutputs<FMassDspWarehouseFragment>(WarehouseQuery, Context, WorldTime, GameConfig, StatsSubsystem);
+    ProcessBuildingOutputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig, StatsSubsystem);
 
     // ── Pass 2: 输入槽（Consume）────────────────────────────────────────────
     // 每条传送带只有 1 个 Consume 方 → 各线程写不同 FBeltData，ParallelFor 安全
@@ -89,9 +95,9 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
 //  Pass 1 驱动：TickExecute + 输出槽（Provide）
 // ─────────────────────────────────────────────────────────────────────────────
 template <class TT> requires IsDspBuildFragment<TT>
-void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig) const
+void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig, UMassDspDebugStatsSubsystem* StatsSubsystem) const
 {
-    Query.ParallelForEachEntityChunk(Context, [this, WorldTime, GameConfig](FMassExecutionContext& InContext)
+    Query.ParallelForEachEntityChunk(Context, [this, WorldTime, GameConfig, StatsSubsystem](FMassExecutionContext& InContext)
     {
         const int32 NumEntities = InContext.GetNumEntities();
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
@@ -105,7 +111,37 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
                 const FRecipeConfigData* RecipeConfig = GameConfig->GetRecipeConfig(BuildingFragments[i].ActiveRecipeType);
                 if (!RecipeConfig) continue;
                 const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(BuildingFragments[i].ActiveRecipeType);
+                int32 InputCountsBefore[FGameConst::SlotMaxCount - 1] = {};
+                int32 OutputCountsBefore[FGameConst::SlotMaxCount - 1] = {};
+                for (int32 BufferIndex = 0; BufferIndex < FGameConst::SlotMaxCount - 1; ++BufferIndex)
+                {
+                    InputCountsBefore[BufferIndex] = BuildingFragments[i].InputBuffers[BufferIndex].Amount;
+                    OutputCountsBefore[BufferIndex] = BuildingFragments[i].OutputBuffers[BufferIndex].Amount;
+                }
+
                 BuildingFragments[i].TickExecute(WorldTime, Recipe);
+
+                if (StatsSubsystem)
+                {
+                    for (int32 InputIndex = 0; InputIndex < Recipe.InputsCount; ++InputIndex)
+                    {
+                        const int32 ConsumedCount = FMath::Max(0, InputCountsBefore[InputIndex] - BuildingFragments[i].InputBuffers[InputIndex].Amount);
+                        if (ConsumedCount > 0)
+                        {
+                            StatsSubsystem->RecordConsumedItem(Recipe.Inputs[InputIndex].ItemType, ConsumedCount);
+                        }
+                    }
+
+                    for (int32 OutputIndex = 0; OutputIndex < Recipe.OutputsCount; ++OutputIndex)
+                    {
+                        const int32 ProducedCount = FMath::Max(0, BuildingFragments[i].OutputBuffers[OutputIndex].Amount - OutputCountsBefore[OutputIndex]);
+                        if (ProducedCount > 0)
+                        {
+                            StatsSubsystem->RecordProducedItem(Recipe.Outputs[OutputIndex].ItemType, ProducedCount);
+                        }
+                    }
+                }
+
                 ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
             }
         }
@@ -113,7 +149,16 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
         {
             for (int32 i = 0; i < NumEntities; ++i)
             {
+                const int32 InventoryBefore = BuildingFragments[i].InventoryCount;
                 BuildingFragments[i].TickExecute(WorldTime);
+                if (StatsSubsystem)
+                {
+                    const int32 ProducedCount = FMath::Max(0, BuildingFragments[i].InventoryCount - InventoryBefore);
+                    if (ProducedCount > 0)
+                    {
+                        StatsSubsystem->RecordProducedItem(BuildingFragments[i].StoredItemType, ProducedCount);
+                    }
+                }
                 ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime);
             }
         }

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameConst.h"
+#include "HAL/CriticalSection.h"
 
 #include "MassDspDebugStatsSubsystem.generated.h"
 
@@ -17,7 +18,13 @@ struct MASSDSP_API FMassDspItemDeltaStat
     EItemType ItemType = EItemType::None;
 
     UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
-    float DeltaPerSecond = 0.f;
+    float ProductionPerSecond = 0.f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    float ConsumptionPerSecond = 0.f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    float NetGrowthPerSecond = 0.f;
 
     UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
     int32 CurrentCount = 0;
@@ -83,10 +90,7 @@ struct MASSDSP_API FMassDspDebugStatsSnapshot
     FString BottleneckSummary;
 
     UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
-    FString BusiestTowerSummary;
-
-    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
-    TArray<FMassDspItemDeltaStat> TopItemDeltas;
+    TArray<FMassDspItemDeltaStat> ItemStats;
 
     UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
     float SampleIntervalSeconds = 0.f;
@@ -109,6 +113,8 @@ public:
 
     const FMassDspDebugStatsSnapshot& GetSnapshot() const { return CachedSnapshot; }
     void ForceRefresh();
+    void RecordProducedItem(EItemType ItemType, int32 Quantity = 1);
+    void RecordConsumedItem(EItemType ItemType, int32 Quantity = 1);
 
 protected:
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
@@ -116,6 +122,7 @@ protected:
 private:
     void RebuildSnapshot(float SampleDeltaTime);
     void AccumulateItemCount(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
+    void AccumulateItemEvent(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
     FString BuildBottleneckSummary(const FMassDspDebugStatsSnapshot& Snapshot) const;
 
     float GetDeltaSmoothingAlpha(float SampleDeltaTime) const;
@@ -129,11 +136,19 @@ private:
 
     FMassDspDebugStatsSnapshot CachedSnapshot;
     TArray<int32> PreviousItemTotals;
-    TArray<float> SmoothedItemDeltaRates;
+    TArray<float> SmoothedItemProductionRates;
+    TArray<float> SmoothedItemConsumptionRates;
+    TArray<float> SmoothedItemNetGrowthRates;
+    TArray<int32> PendingProducedItemCounts;
+    TArray<int32> PendingConsumedItemCounts;
+    mutable FCriticalSection PendingItemEventMutex;
 
     TWeakObjectPtr<UMassDspManager> CachedManager;
     TWeakObjectPtr<UMassDspLogisticsSubsystem> CachedLogistics;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.5"))
-    float DeltaSmoothingWindowSeconds = 4.0f;
+    float DeltaSmoothingWindowSeconds = 30.0f;
+
+    UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0"))
+    int32 MaxDisplayedItemStats = 0;
 };

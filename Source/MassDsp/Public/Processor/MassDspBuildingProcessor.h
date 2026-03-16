@@ -8,6 +8,7 @@
 
 class AMassDspBuilding;
 class UMassDspManager;
+class UMassDspDebugStatsSubsystem;
 class AMassDspGameMode;
 class UGameConfigData;
 struct FMassDspBuildingSlotsFragment;
@@ -46,11 +47,12 @@ private:
 
     // 缓存子系统引用
     TWeakObjectPtr<UMassDspManager> DspManager;
+    TWeakObjectPtr<UMassDspDebugStatsSubsystem> DebugStatsSubsystem;
 
     // ── Pass-1: TickExecute + 输出槽（Provide）─────────────────────────────
     // 每条传送带仅 1 个 Provide 方，各线程写不同 FBeltData，无竞争
     template <class TT> requires IsDspBuildFragment<TT>
-    void ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig) const;
+    void ProcessBuildingOutputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig, UMassDspDebugStatsSubsystem* StatsSubsystem) const;
 
     // ── Pass-2: 输入槽（Consume）──────────────────────────────────────────
     // 每条传送带仅 1 个 Consume 方，Pass-1 全部结束后才开始，天然无锁

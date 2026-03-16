@@ -6,7 +6,9 @@
 #include "MassDspSystemStatsWidget.generated.h"
 
 class UButton;
+class UListView;
 class UTextBlock;
+class UMassDspSystemStatsRowData;
 
 UCLASS(Blueprintable)
 class MASSDSP_API UMassDspSystemStatsWidget : public UUserWidget
@@ -22,6 +24,8 @@ protected:
 
 private:
     void RefreshStats();
+    void ResetListItems();
+    void AddStatRow(const FText& Title, const FText& Value, const FText& Details);
 
     UFUNCTION()
     void OnCloseButtonClicked();
@@ -42,24 +46,10 @@ private:
     TObjectPtr<UTextBlock> TextBlock_Title;
 
     UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_Performance;
+    TObjectPtr<UListView> ListView_Stats;
 
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_WorldScale;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_Logistics;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_Bottleneck;
-
-    UPROPERTY(meta = (BindWidgetOptional))
-    TObjectPtr<UTextBlock> TextBlock_BusiestTower;
-
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_ItemDelta_0;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_ItemDelta_1;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_ItemDelta_2;
-    UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TextBlock_ItemDelta_3;
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<UMassDspSystemStatsRowData>> RowItems;
 
     float RefreshAccum = 0.f;
 };

@@ -1,10 +1,13 @@
 #include "UI/MassDspSystemStatsWidget.h"
 
 #include "Components/Button.h"
+#include "Components/ListView.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/PlayerController.h"
 #include "MassDspHUD.h"
 #include "Subsystems/MassDspDebugStatsSubsystem.h"
+#include "UI/MassDspSystemStatsRowData.h"
+#include "UI/MassDspSystemStatsRowWidget.h"
 
 void UMassDspSystemStatsWidget::NativeConstruct()
 {
@@ -23,6 +26,12 @@ void UMassDspSystemStatsWidget::NativeConstruct()
     if (TextBlock_Title)
     {
         TextBlock_Title->SetText(FText::FromString(TEXT("系统统计 / 调试面板")));
+    }
+
+    if (ListView_Stats)
+    {
+        // TODO 蓝图里手动绑一下 EntryWidgetClass = BP_SystemStatsRow
+        ListView_Stats->ClearListItems();
     }
 
     RefreshAccum = RefreshInterval;
@@ -60,83 +69,91 @@ void UMassDspSystemStatsWidget::RefreshStats()
     if (!HUD || !Stats) return;
 
     const FMassDspDebugStatsSnapshot& Snapshot = Stats->GetSnapshot();
+    ResetListItems();
 
-    if (TextBlock_Performance)
-    {
-        TextBlock_Performance->SetText(FText::FromString(FString::Printf(
-            TEXT("FPS\n当前 %.1f | 平均 %.1f | 1%% Low %.1f | 采样 %.2fs"),
+    AddStatRow(
+        FText::FromString(TEXT("性能概览")),
+        FText::FromString(FString::Printf(
+            TEXT("当前 %.1f FPS | 平均 %.1f FPS | 1%% Low %.1f FPS"),
             World && World->GetDeltaSeconds() > 0.f ? 1.f / World->GetDeltaSeconds() : 0.f,
             HUD->AverageFPS,
-            HUD->OnePercentLowFPS,
-            Snapshot.SampleIntervalSeconds)));
-    }
+            HUD->OnePercentLowFPS)),
+        FText::FromString(FString::Printf(TEXT("采样窗口 %.2fs"), Snapshot.SampleIntervalSeconds)));
 
-    if (TextBlock_WorldScale)
-    {
-        TextBlock_WorldScale->SetText(FText::FromString(FString::Printf(
-            TEXT("世界规模\n建筑 %d  [矿机 %d / 合成 %d / 仓库 %d / 物流塔 %d]\n传送带 %d | 带上物品 %d | 理论吞吐 %.1f 物品/秒"),
-            Snapshot.TotalBuildings,
+    AddStatRow(
+        FText::FromString(TEXT("世界规模")),
+        FText::FromString(FString::Printf(TEXT("建筑 %d | 传送带 %d | 带上物品 %d"), Snapshot.TotalBuildings, Snapshot.TotalBelts, Snapshot.TotalBeltItems)),
+        FText::FromString(FString::Printf(
+            TEXT("矿机 %d | 合成台 %d | 仓库 %d | 物流塔 %d | 理论吞吐 %.1f 物品/秒"),
             Snapshot.MinerCount,
             Snapshot.AssemblerCount,
             Snapshot.StorageCount,
             Snapshot.LogisticsTowerCount,
-            Snapshot.TotalBelts,
-            Snapshot.TotalBeltItems,
             Snapshot.EstimatedBeltThroughputPerSecond)));
-    }
 
-    if (TextBlock_Logistics)
-    {
-        TextBlock_Logistics->SetText(FText::FromString(FString::Printf(
-            TEXT("物流态势\n无人机 %d | 空闲 %d | 活跃任务 %d | 待处理请求 %d\n阻塞带 %d | 缺料合成台 %d | 满载节点 %d"),
-            Snapshot.TotalDrones,
-            Snapshot.IdleDrones,
-            Snapshot.ActiveTasks,
-            Snapshot.PendingRequests,
+    AddStatRow(
+        FText::FromString(TEXT("物流态势")),
+        FText::FromString(FString::Printf(TEXT("无人机 %d | 空闲 %d | 活跃任务 %d | 待处理请求 %d"), Snapshot.TotalDrones, Snapshot.IdleDrones, Snapshot.ActiveTasks, Snapshot.PendingRequests)),
+        FText::FromString(FString::Printf(
+            TEXT("阻塞带 %d | 缺料合成台 %d | 满载节点 %d"),
             Snapshot.BlockedBelts,
             Snapshot.StarvedAssemblers,
             Snapshot.FullMinerNodes + Snapshot.FullStorageNodes + Snapshot.FullLogisticsTowers)));
-    }
 
-    if (TextBlock_Bottleneck)
-    {
-        TextBlock_Bottleneck->SetText(FText::FromString(FString::Printf(TEXT("瓶颈摘要\n%s"), *Snapshot.BottleneckSummary)));
-    }
+    AddStatRow(
+        FText::FromString(TEXT("瓶颈摘要")),
+        FText::FromString(Snapshot.BottleneckSummary),
+        FText::FromString(TEXT("优先关注上方物流和库存态势指标")));
 
-    if (TextBlock_BusiestTower)
-    {
-        TextBlock_BusiestTower->SetText(FText::FromString(FString::Printf(TEXT("最忙物流塔\n%s"), *Snapshot.BusiestTowerSummary)));
-    }
-
-    UTextBlock* DeltaBlocks[4] = {
-        TextBlock_ItemDelta_0,
-        TextBlock_ItemDelta_1,
-        TextBlock_ItemDelta_2,
-        TextBlock_ItemDelta_3,
-    };
     const UEnum* ItemEnum = StaticEnum<EItemType>();
-    for (int32 Index = 0; Index < UE_ARRAY_COUNT(DeltaBlocks); ++Index)
+    for (const FMassDspItemDeltaStat& Delta : Snapshot.ItemStats)
     {
-        UTextBlock* TextBlock = DeltaBlocks[Index];
-        if (!TextBlock) continue;
-
-        if (Snapshot.TopItemDeltas.IsValidIndex(Index))
-        {
-            const FMassDspItemDeltaStat& Delta = Snapshot.TopItemDeltas[Index];
-            const FString ItemName = ItemEnum
-                ? ItemEnum->GetDisplayNameTextByValue(static_cast<int64>(Delta.ItemType)).ToString()
-                : TEXT("Unknown");
-            TextBlock->SetText(FText::FromString(FString::Printf(
-                TEXT("%s  %+.1f /s  [现存 %d]"),
-                *ItemName,
-                Delta.DeltaPerSecond,
-                Delta.CurrentCount)));
-        }
-        else
-        {
-            TextBlock->SetText(FText::FromString(Index == 0 ? TEXT("暂无显著物品变化") : TEXT("")));
-        }
+        const FString ItemName = ItemEnum
+                                     ? ItemEnum->GetDisplayNameTextByValue(static_cast<int64>(Delta.ItemType)).ToString()
+                                     : TEXT("Unknown");
+        AddStatRow(
+            FText::FromString(FString::Printf(TEXT("物品指标 · %s"), *ItemName)),
+            FText::FromString(FString::Printf(
+                TEXT("净增长 %+.2f /s | 现存 %d"),
+                Delta.NetGrowthPerSecond,
+                Delta.CurrentCount)),
+            FText::FromString(FString::Printf(
+                TEXT("生产 %.2f /s | 消耗 %.2f /s"),
+                Delta.ProductionPerSecond,
+                Delta.ConsumptionPerSecond)));
     }
+
+    if (Snapshot.ItemStats.IsEmpty())
+    {
+        AddStatRow(
+            FText::FromString(TEXT("物品指标")),
+            FText::FromString(TEXT("暂无有效物品变化")),
+            FText::FromString(TEXT("等待采样窗口积累更多生产/消耗数据")));
+    }
+}
+
+void UMassDspSystemStatsWidget::ResetListItems()
+{
+    RowItems.Reset();
+    if (ListView_Stats)
+    {
+        ListView_Stats->ClearListItems();
+    }
+}
+
+void UMassDspSystemStatsWidget::AddStatRow(const FText& Title, const FText& Value, const FText& Details)
+{
+    if (!ListView_Stats)
+    {
+        return;
+    }
+
+    UMassDspSystemStatsRowData* RowData = NewObject<UMassDspSystemStatsRowData>(this);
+    RowData->Title = Title;
+    RowData->Value = Value;
+    RowData->Details = Details;
+    RowItems.Add(RowData);
+    ListView_Stats->AddItem(RowData);
 }
 
 void UMassDspSystemStatsWidget::OnCloseButtonClicked()

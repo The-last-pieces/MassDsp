@@ -4,32 +4,40 @@
 #include "MassEntityManager.h"
 #include "MassDspBeltTypes.h"
 #include "Fragments/MassDspAssemblerFragment.h"
-#include "Fragments/MassDspLogisticsTowerFragment.h"
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspWarehouseFragment.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspManager.h"
 
+#include "Misc/ScopeLock.h"
+
 namespace
 {
-constexpr int32 MaxTrackedItemTypes = 256;
-constexpr int32 MaxTopDeltaItems = 4;
+    constexpr int32 MaxTrackedItemTypes = 256;
 }
 
 void UMassDspDebugStatsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
     PreviousItemTotals.Init(0, MaxTrackedItemTypes);
-    SmoothedItemDeltaRates.Init(0.f, MaxTrackedItemTypes);
-    CachedSnapshot.TopItemDeltas.Reserve(MaxTopDeltaItems);
+    SmoothedItemProductionRates.Init(0.f, MaxTrackedItemTypes);
+    SmoothedItemConsumptionRates.Init(0.f, MaxTrackedItemTypes);
+    SmoothedItemNetGrowthRates.Init(0.f, MaxTrackedItemTypes);
+    PendingProducedItemCounts.Init(0, MaxTrackedItemTypes);
+    PendingConsumedItemCounts.Init(0, MaxTrackedItemTypes);
+    CachedSnapshot.ItemStats.Reserve(MaxTrackedItemTypes);
 }
 
 void UMassDspDebugStatsSubsystem::Deinitialize()
 {
     CachedSnapshot = FMassDspDebugStatsSnapshot();
     PreviousItemTotals.Empty();
-    SmoothedItemDeltaRates.Empty();
+    SmoothedItemProductionRates.Empty();
+    SmoothedItemConsumptionRates.Empty();
+    SmoothedItemNetGrowthRates.Empty();
+    PendingProducedItemCounts.Empty();
+    PendingConsumedItemCounts.Empty();
     CachedManager.Reset();
     CachedLogistics.Reset();
     bHasValidDeltaHistory = false;
@@ -56,6 +64,18 @@ void UMassDspDebugStatsSubsystem::ForceRefresh()
     RebuildSnapshot(FMath::Max(TimeSinceLastRefresh, UpdateInterval));
     UpdateAccum = 0.f;
     TimeSinceLastRefresh = 0.f;
+}
+
+void UMassDspDebugStatsSubsystem::RecordProducedItem(EItemType ItemType, int32 Quantity)
+{
+    FScopeLock ScopeLock(&PendingItemEventMutex);
+    AccumulateItemEvent(PendingProducedItemCounts, ItemType, Quantity);
+}
+
+void UMassDspDebugStatsSubsystem::RecordConsumedItem(EItemType ItemType, int32 Quantity)
+{
+    FScopeLock ScopeLock(&PendingItemEventMutex);
+    AccumulateItemEvent(PendingConsumedItemCounts, ItemType, Quantity);
 }
 
 void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
@@ -86,6 +106,18 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
 
     TArray<int32> CurrentItemTotals;
     CurrentItemTotals.Init(0, MaxTrackedItemTypes);
+    TArray<int32> ProducedItemCounts;
+    TArray<int32> ConsumedItemCounts;
+    ProducedItemCounts.Init(0, MaxTrackedItemTypes);
+    ConsumedItemCounts.Init(0, MaxTrackedItemTypes);
+
+    {
+        FScopeLock ScopeLock(&PendingItemEventMutex);
+        ProducedItemCounts = PendingProducedItemCounts;
+        ConsumedItemCounts = PendingConsumedItemCounts;
+        PendingProducedItemCounts.Init(0, MaxTrackedItemTypes);
+        PendingConsumedItemCounts.Init(0, MaxTrackedItemTypes);
+    }
 
     for (const TPair<FBeltHandle, FBeltData>& Pair : Manager->BeltEntityRegistry)
     {
@@ -103,7 +135,6 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
         }
     }
 
-    int32 BusiestTowerScore = -1;
     for (const FMassEntityHandle& Entity : Manager->SpawnedBuildingEntities)
     {
         if (!EntityManager.IsEntityValid(Entity)) continue;
@@ -184,36 +215,6 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
                 AccumulateItemCount(CurrentItemTotals, Entry.ItemType, Entry.Amount);
             }
         }
-
-        if (Type == EBuildingType::LogisticsTower)
-        {
-            // const FTowerDroneStatus TowerStatus = Logistics->QueryTowerDroneStatus(Entity);
-            // const FMassDspLogisticsTowerFragment* Tower = EntityManager.GetFragmentDataPtr<FMassDspLogisticsTowerFragment>(Entity);
-            // const FMassDspStorageFragment* Storage = EntityManager.GetFragmentDataPtr<FMassDspStorageFragment>(Entity);
-            // const int32 Pending = TowerStatus.SupplyRequests + TowerStatus.DemandRequests;
-            // const int32 Score = TowerStatus.ActiveTasks * 1000 + Pending * 100 + TowerStatus.Incoming * 10 + TowerStatus.OwnedDeployed;
-            // if (Score > BusiestTowerScore)
-            // {
-            //     BusiestTowerScore = Score;
-            //     const FString ModeText = Tower
-            //         ? StaticEnum<ELogisticsTowerMode>()->GetDisplayNameTextByValue(static_cast<int64>(Tower->TowerMode)).ToString()
-            //         : TEXT("未知");
-            //     const FString ItemText = Tower && Tower->ItemType != EItemType::None
-            //         ? StaticEnum<EItemType>()->GetDisplayNameTextByValue(static_cast<int64>(Tower->ItemType)).ToString()
-            //         : TEXT("未配置");
-            //     const FString InventoryText = Storage
-            //         ? FString::Printf(TEXT("%d/%d"), Storage->InventoryCount, Storage->MaxInventory)
-            //         : TEXT("-");
-            //     Snapshot.BusiestTowerSummary = FString::Printf(
-            //         TEXT("物流塔 [%s] 物品:%s | 任务:%d | 请求:%d | 来航:%d | 库存:%s"),
-            //         *ModeText,
-            //         *ItemText,
-            //         TowerStatus.ActiveTasks,
-            //         Pending,
-            //         TowerStatus.Incoming,
-            //         *InventoryText);
-            // }
-        }
     }
 
     Snapshot.TotalDrones = Logistics->GetTotalDroneCount();
@@ -224,7 +225,9 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
     struct FSortableDelta
     {
         EItemType ItemType = EItemType::None;
-        float DeltaPerSecond = 0.f;
+        float ProductionPerSecond = 0.f;
+        float ConsumptionPerSecond = 0.f;
+        float NetGrowthPerSecond = 0.f;
         int32 CurrentCount = 0;
     };
 
@@ -239,50 +242,71 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
         const EItemType ItemType = static_cast<EItemType>(ItemIndex);
         if (ItemType == EItemType::None) continue;
 
-        const float InstantRate = static_cast<float>(DeltaCount) / SampleDeltaTime;
-        if (SmoothedItemDeltaRates.IsValidIndex(ItemIndex))
+        const float InstantProductionRate = static_cast<float>(ProducedItemCounts[ItemIndex]) / SampleDeltaTime;
+        const float InstantConsumptionRate = static_cast<float>(ConsumedItemCounts[ItemIndex]) / SampleDeltaTime;
+        const float InstantNetGrowthRate = static_cast<float>(DeltaCount) / SampleDeltaTime;
+
+        if (SmoothedItemProductionRates.IsValidIndex(ItemIndex))
         {
             if (!bHasValidDeltaHistory)
             {
-                SmoothedItemDeltaRates[ItemIndex] = InstantRate;
+                SmoothedItemProductionRates[ItemIndex] = InstantProductionRate;
+                SmoothedItemConsumptionRates[ItemIndex] = InstantConsumptionRate;
+                SmoothedItemNetGrowthRates[ItemIndex] = InstantNetGrowthRate;
             }
             else
             {
-                SmoothedItemDeltaRates[ItemIndex] = FMath::Lerp(SmoothedItemDeltaRates[ItemIndex], InstantRate, SmoothingAlpha);
+                SmoothedItemProductionRates[ItemIndex] = FMath::Lerp(SmoothedItemProductionRates[ItemIndex], InstantProductionRate, SmoothingAlpha);
+                SmoothedItemConsumptionRates[ItemIndex] = FMath::Lerp(SmoothedItemConsumptionRates[ItemIndex], InstantConsumptionRate, SmoothingAlpha);
+                SmoothedItemNetGrowthRates[ItemIndex] = FMath::Lerp(SmoothedItemNetGrowthRates[ItemIndex], InstantNetGrowthRate, SmoothingAlpha);
             }
         }
 
-        const float SmoothedRate = SmoothedItemDeltaRates.IsValidIndex(ItemIndex) ? SmoothedItemDeltaRates[ItemIndex] : InstantRate;
-        if (CurrentCount <= 0 && FMath::Abs(SmoothedRate) < 0.01f) continue;
+        const float SmoothedProductionRate = SmoothedItemProductionRates.IsValidIndex(ItemIndex) ? SmoothedItemProductionRates[ItemIndex] : InstantProductionRate;
+        const float SmoothedConsumptionRate = SmoothedItemConsumptionRates.IsValidIndex(ItemIndex) ? SmoothedItemConsumptionRates[ItemIndex] : InstantConsumptionRate;
+        const float SmoothedNetGrowthRate = SmoothedItemNetGrowthRates.IsValidIndex(ItemIndex) ? SmoothedItemNetGrowthRates[ItemIndex] : InstantNetGrowthRate;
+        if (CurrentCount <= 0
+            && FMath::Abs(SmoothedProductionRate) < 0.01f
+            && FMath::Abs(SmoothedConsumptionRate) < 0.01f
+            && FMath::Abs(SmoothedNetGrowthRate) < 0.01f)
+        {
+            continue;
+        }
 
         FSortableDelta Entry;
         Entry.ItemType = ItemType;
         Entry.CurrentCount = CurrentCount;
-        Entry.DeltaPerSecond = SmoothedRate;
+        Entry.ProductionPerSecond = SmoothedProductionRate;
+        Entry.ConsumptionPerSecond = SmoothedConsumptionRate;
+        Entry.NetGrowthPerSecond = SmoothedNetGrowthRate;
         SortedDeltas.Add(Entry);
     }
 
     SortedDeltas.Sort([](const FSortableDelta& A, const FSortableDelta& B)
     {
-        return FMath::Abs(A.DeltaPerSecond) > FMath::Abs(B.DeltaPerSecond);
+        if (!FMath::IsNearlyEqual(A.NetGrowthPerSecond, B.NetGrowthPerSecond))
+        {
+            return A.NetGrowthPerSecond > B.NetGrowthPerSecond;
+        }
+        return A.CurrentCount > B.CurrentCount;
     });
 
-    const int32 DeltaCount = FMath::Min(MaxTopDeltaItems, SortedDeltas.Num());
-    Snapshot.TopItemDeltas.Reset(DeltaCount);
-    for (int32 Index = 0; Index < DeltaCount; ++Index)
+    const int32 DisplayCount = MaxDisplayedItemStats > 0
+                                   ? FMath::Min(MaxDisplayedItemStats, SortedDeltas.Num())
+                                   : SortedDeltas.Num();
+    Snapshot.ItemStats.Reset(DisplayCount);
+    for (int32 Index = 0; Index < DisplayCount; ++Index)
     {
         FMassDspItemDeltaStat Delta;
         Delta.ItemType = SortedDeltas[Index].ItemType;
-        Delta.DeltaPerSecond = SortedDeltas[Index].DeltaPerSecond;
+        Delta.ProductionPerSecond = SortedDeltas[Index].ProductionPerSecond;
+        Delta.ConsumptionPerSecond = SortedDeltas[Index].ConsumptionPerSecond;
+        Delta.NetGrowthPerSecond = SortedDeltas[Index].NetGrowthPerSecond;
         Delta.CurrentCount = SortedDeltas[Index].CurrentCount;
-        Snapshot.TopItemDeltas.Add(Delta);
+        Snapshot.ItemStats.Add(Delta);
     }
 
     Snapshot.BottleneckSummary = BuildBottleneckSummary(Snapshot);
-    if (Snapshot.BusiestTowerSummary.IsEmpty())
-    {
-        Snapshot.BusiestTowerSummary = TEXT("暂无活跃物流塔");
-    }
 
     PreviousItemTotals = MoveTemp(CurrentItemTotals);
     bHasValidDeltaHistory = true;
@@ -290,6 +314,15 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
 }
 
 void UMassDspDebugStatsSubsystem::AccumulateItemCount(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const
+{
+    if (ItemType == EItemType::None || Quantity <= 0) return;
+
+    const int32 ItemIndex = static_cast<int32>(static_cast<uint8>(ItemType));
+    if (!TotalsByItem.IsValidIndex(ItemIndex)) return;
+    TotalsByItem[ItemIndex] += Quantity;
+}
+
+void UMassDspDebugStatsSubsystem::AccumulateItemEvent(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const
 {
     if (ItemType == EItemType::None || Quantity <= 0) return;
 
