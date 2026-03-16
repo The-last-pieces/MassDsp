@@ -44,8 +44,8 @@ namespace
     static bool IsTerminalTaskState(ELogisticsTaskState State)
     {
         return State == ELogisticsTaskState::Completed ||
-               State == ELogisticsTaskState::Failed ||
-               State == ELogisticsTaskState::Cancelled;
+            State == ELogisticsTaskState::Failed ||
+            State == ELogisticsTaskState::Cancelled;
     }
 
     static FVector GetDroneCurrentLocation(const FDroneData& Drone)
@@ -177,9 +177,14 @@ bool UMassDspLogisticsSubsystem::EnsureDroneISMInitialized()
     }
 
     CreatedISM->SetStaticMesh(GameMode->GameConfig->DroneMesh);
-    CreatedISM->SetMobility(EComponentMobility::Movable);
+    CreatedISM->SetMobility(EComponentMobility::Stationary);
     CreatedISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     CreatedISM->SetCastShadow(false);
+    CreatedISM->SetReceivesDecals(false);
+    CreatedISM->SetCanEverAffectNavigation(false);
+    CreatedISM->bAffectDynamicIndirectLighting = false;
+    CreatedISM->bAffectDistanceFieldLighting = false;
+    CreatedISM->SetVisibleInRayTracing(false);
     CreatedISM->AttachToComponent(DroneISMHostRoot, FAttachmentTransformRules::KeepRelativeTransform);
     DroneISMHostActor->AddInstanceComponent(CreatedISM);
     CreatedISM->RegisterComponent();
@@ -749,15 +754,15 @@ void UMassDspLogisticsSubsystem::CollectSaveData(FMassDspLogisticsSaveChunk& Out
 
         FMassDspLogisticsTaskSaveData SavedTask;
         SavedTask.SupplyRequestIndex = RequestSaveIndexByRequestId.Contains(Task.SupplyRequestId)
-            ? RequestSaveIndexByRequestId.FindRef(Task.SupplyRequestId)
-            : INDEX_NONE;
+                                           ? RequestSaveIndexByRequestId.FindRef(Task.SupplyRequestId)
+                                           : INDEX_NONE;
         SavedTask.DemandRequestIndex = RequestSaveIndexByRequestId.Contains(Task.DemandRequestId)
-            ? RequestSaveIndexByRequestId.FindRef(Task.DemandRequestId)
-            : INDEX_NONE;
+                                           ? RequestSaveIndexByRequestId.FindRef(Task.DemandRequestId)
+                                           : INDEX_NONE;
         SavedTask.DeviceType = static_cast<uint8>(Task.DeviceType);
         SavedTask.DeviceIndex = DroneSaveIndexByPoolIndex.Contains(Task.DevicePoolIndex)
-            ? DroneSaveIndexByPoolIndex.FindRef(Task.DevicePoolIndex)
-            : INDEX_NONE;
+                                    ? DroneSaveIndexByPoolIndex.FindRef(Task.DevicePoolIndex)
+                                    : INDEX_NONE;
         SavedTask.State = static_cast<uint8>(Task.State);
         SavedTask.PickupLocation = Task.PickupLocation;
         SavedTask.DeliveryLocation = Task.DeliveryLocation;
@@ -775,8 +780,8 @@ void UMassDspLogisticsSubsystem::CollectSaveData(FMassDspLogisticsSaveChunk& Out
     for (FMassDspDroneSaveData& SavedDrone : OutSaveData.Drones)
     {
         SavedDrone.CurrentTaskIndex = TaskSaveIndexByTaskId.Contains(SavedDrone.CurrentTaskIndex)
-            ? TaskSaveIndexByTaskId.FindRef(SavedDrone.CurrentTaskIndex)
-            : INDEX_NONE;
+                                          ? TaskSaveIndexByTaskId.FindRef(SavedDrone.CurrentTaskIndex)
+                                          : INDEX_NONE;
     }
 
     for (const auto& [TowerEntity, RuntimeData] : TowerRuntimeData)
@@ -815,8 +820,8 @@ void UMassDspLogisticsSubsystem::CollectSaveData(FMassDspLogisticsSaveChunk& Out
         }
 
         SavedTower.CachedRequestIndex = RequestSaveIndexByRequestId.Contains(RuntimeData.CachedReqId)
-            ? RequestSaveIndexByRequestId.FindRef(RuntimeData.CachedReqId)
-            : INDEX_NONE;
+                                            ? RequestSaveIndexByRequestId.FindRef(RuntimeData.CachedReqId)
+                                            : INDEX_NONE;
 
         OutSaveData.Towers.Add(MoveTemp(SavedTower));
     }
@@ -917,15 +922,15 @@ bool UMassDspLogisticsSubsystem::RestoreSaveData(const FMassDspLogisticsSaveChun
         const FMassDspLogisticsTaskSaveData& SavedTask = InSaveData.Tasks[TaskSaveIndex];
         FLogisticsTask Task;
         Task.SupplyRequestId = RequestIdBySaveIndex.IsValidIndex(SavedTask.SupplyRequestIndex)
-            ? RequestIdBySaveIndex[SavedTask.SupplyRequestIndex]
-            : INDEX_NONE;
+                                   ? RequestIdBySaveIndex[SavedTask.SupplyRequestIndex]
+                                   : INDEX_NONE;
         Task.DemandRequestId = RequestIdBySaveIndex.IsValidIndex(SavedTask.DemandRequestIndex)
-            ? RequestIdBySaveIndex[SavedTask.DemandRequestIndex]
-            : INDEX_NONE;
+                                   ? RequestIdBySaveIndex[SavedTask.DemandRequestIndex]
+                                   : INDEX_NONE;
         Task.DeviceType = static_cast<ELogisticsDeviceType>(SavedTask.DeviceType);
         Task.DevicePoolIndex = DronePoolIndexBySaveIndex.IsValidIndex(SavedTask.DeviceIndex)
-            ? DronePoolIndexBySaveIndex[SavedTask.DeviceIndex]
-            : INDEX_NONE;
+                                   ? DronePoolIndexBySaveIndex[SavedTask.DeviceIndex]
+                                   : INDEX_NONE;
         Task.State = static_cast<ELogisticsTaskState>(SavedTask.State);
         Task.PickupLocation = SavedTask.PickupLocation;
         Task.DeliveryLocation = SavedTask.DeliveryLocation;
@@ -952,8 +957,8 @@ bool UMassDspLogisticsSubsystem::RestoreSaveData(const FMassDspLogisticsSaveChun
         const FMassDspDroneSaveData& SavedDrone = InSaveData.Drones[DroneSaveIndex];
         FDroneData& Drone = DronePool[DronePoolIndex];
         Drone.CurrentTaskId = TaskIdBySaveIndex.IsValidIndex(SavedDrone.CurrentTaskIndex)
-            ? TaskIdBySaveIndex[SavedDrone.CurrentTaskIndex]
-            : INDEX_NONE;
+                                  ? TaskIdBySaveIndex[SavedDrone.CurrentTaskIndex]
+                                  : INDEX_NONE;
     }
 
     TowerRuntimeData.Reset();
@@ -1000,8 +1005,8 @@ bool UMassDspLogisticsSubsystem::RestoreSaveData(const FMassDspLogisticsSaveChun
         }
 
         RuntimeData.CachedReqId = RequestIdBySaveIndex.IsValidIndex(SavedTower.CachedRequestIndex)
-            ? RequestIdBySaveIndex[SavedTower.CachedRequestIndex]
-            : INDEX_NONE;
+                                      ? RequestIdBySaveIndex[SavedTower.CachedRequestIndex]
+                                      : INDEX_NONE;
     }
 
     DirtyTowerQueue.Reset();
@@ -2063,8 +2068,8 @@ void UMassDspLogisticsSubsystem::RebuildDroneISMInstances()
     {
         FDroneData& Drone = *It;
         const FVector InstanceAnchor = !Drone.HomeLocation.IsNearlyZero()
-            ? Drone.HomeLocation
-            : GetDroneCurrentLocation(Drone);
+                                           ? Drone.HomeLocation
+                                           : GetDroneCurrentLocation(Drone);
         Drone.ISMInstanceIndex = AllocateDroneISMInstance(InstanceAnchor);
         if (Drone.ISMInstanceIndex >= 0)
         {
