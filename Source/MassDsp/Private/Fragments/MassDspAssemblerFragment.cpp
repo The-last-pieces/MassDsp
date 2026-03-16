@@ -34,11 +34,6 @@ bool FMassDspAssemblerFragment::TryConsumeItemFromSlot(EItemType ItemType, const
 
 void FMassDspAssemblerFragment::TickExecute(float WorldTime, const FRecipeDataForFragment& Recipe)
 {
-    // 输入未满足：一个 bool 判断立即返回，零额外开销
-    if (!bInputSatisfied) return;
-
-    if (WorldTime < NextCraftWorldTime) return;
-
     const float Interval = Recipe.CraftingTime / FMath::Max(CraftingSpeedMultiplier, KINDA_SMALL_NUMBER);
 
     // 首次就绪时初始化计时器
@@ -47,6 +42,18 @@ void FMassDspAssemblerFragment::TickExecute(float WorldTime, const FRecipeDataFo
         NextCraftWorldTime = WorldTime + Interval;
         return;
     }
+
+    // 输入不足或输出阻塞时暂停计时，但保留已到点状态，解除阻塞后可立即恢复。
+    if (!bInputSatisfied || !bOutputSatisfied)
+    {
+        if (NextCraftWorldTime < WorldTime)
+        {
+            NextCraftWorldTime = WorldTime;
+        }
+        return;
+    }
+
+    if (WorldTime < NextCraftWorldTime) return;
 
     // 计算本帧应批量生产多少次（追帧补产）
     int32 BatchCount = FMath::FloorToInt((WorldTime - NextCraftWorldTime) / Interval) + 1;
@@ -78,13 +85,17 @@ void FMassDspAssemblerFragment::TickExecute(float WorldTime, const FRecipeDataFo
                 OutputBuffers[i].ItemType = Recipe.Outputs[i].ItemType;
             OutputBuffers[i].Amount += BatchCount * Recipe.Outputs[i].Amount;
         }
+        NextCraftWorldTime += BatchCount * Interval;
+        if (NextCraftWorldTime < WorldTime)
+        {
+            NextCraftWorldTime = WorldTime;
+        }
         UpdateSatisfied(Recipe);
-        NextCraftWorldTime = 0.f;
     }
     else
     {
-        // 输出满导致阻塞：推进计时器避免下帧空转
-        NextCraftWorldTime = WorldTime + Interval;
+        // 到点但当前无法执行时，保持在“已就绪”状态，解除阻塞后立即恢复。
+        NextCraftWorldTime = WorldTime;
     }
 }
 

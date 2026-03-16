@@ -17,16 +17,20 @@ bool FMassDspMinerFragment::TryConsumeItemFromSlot(EItemType ItemType)
 
 void FMassDspMinerFragment::TickExecute(float WorldTime)
 {
-    if (InventoryCount >= MaxInventory)
-    {
-        NextProductionWorldTime = 0.f;
-        return;
-    }
-
     // 第一帧初始化计时器，避免放置时立即产出
     if (NextProductionWorldTime <= 0.f)
     {
         NextProductionWorldTime = WorldTime + ProductionInterval;
+        return;
+    }
+
+    // 满仓时暂停产出，但不再重置时钟；若已到点则保持“随时可产”状态，解除阻塞后可立即恢复。
+    if (InventoryCount >= MaxInventory)
+    {
+        if (NextProductionWorldTime < WorldTime)
+        {
+            NextProductionWorldTime = WorldTime;
+        }
         return;
     }
 
