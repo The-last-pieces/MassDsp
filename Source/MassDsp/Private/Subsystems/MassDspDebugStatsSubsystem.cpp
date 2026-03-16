@@ -7,6 +7,9 @@
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspWarehouseFragment.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspManager.h"
 
@@ -15,15 +18,99 @@
 namespace
 {
     constexpr int32 MaxTrackedItemTypes = 256;
+    constexpr int32 MaxRateBucketCount = 120;
+
+    UMassDspPlayerInventoryComponent* GetPlayerInventoryComponent(UWorld* World)
+    {
+        if (!World)
+        {
+            return nullptr;
+        }
+
+        APlayerController* PlayerController = World->GetFirstPlayerController();
+        APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
+        return Pawn ? Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>() : nullptr;
+    }
+
+    int32 ResolveRateBucketCount(float WindowSeconds, float BucketDurationSeconds)
+    {
+        const float SafeBucketDuration = FMath::Max(BucketDurationSeconds, KINDA_SMALL_NUMBER);
+        return FMath::Clamp(FMath::CeilToInt(WindowSeconds / SafeBucketDuration), 1, MaxRateBucketCount);
+    }
+
+    int64 ResolveCurrentBucketIndex(float WorldTimeSeconds, float BucketDurationSeconds)
+    {
+        const float SafeBucketDuration = FMath::Max(BucketDurationSeconds, KINDA_SMALL_NUMBER);
+        return static_cast<int64>(FMath::FloorToDouble(WorldTimeSeconds / SafeBucketDuration));
+    }
+
+    void AdvanceRateWindow(FMassDspItemRateWindow& Window, int64 CurrentBucketIndex, int32 MaxBucketCount)
+    {
+        if (MaxBucketCount <= 0)
+        {
+            Window.Reset();
+            return;
+        }
+
+        if (Window.Buckets.IsEmpty())
+        {
+            Window.Buckets.PushLast({CurrentBucketIndex, 0});
+            return;
+        }
+
+        int64 LastBucketIndex = Window.Buckets[Window.Buckets.Num() - 1].BucketIndex;
+        if (CurrentBucketIndex <= LastBucketIndex)
+        {
+            return;
+        }
+
+        if (CurrentBucketIndex - LastBucketIndex >= MaxBucketCount)
+        {
+            Window.Reset();
+            Window.Buckets.PushLast({CurrentBucketIndex, 0});
+            return;
+        }
+
+        while (LastBucketIndex < CurrentBucketIndex)
+        {
+            Window.Buckets.PushLast({++LastBucketIndex, 0});
+            if (Window.Buckets.Num() > MaxBucketCount)
+            {
+                Window.RollingQuantity -= Window.Buckets[0].Quantity;
+                Window.Buckets.PopFirst();
+            }
+        }
+    }
+
+    void AddSampleToRateWindow(FMassDspItemRateWindow& Window, int64 CurrentBucketIndex, int32 Quantity, int32 MaxBucketCount)
+    {
+        AdvanceRateWindow(Window, CurrentBucketIndex, MaxBucketCount);
+        if (Quantity <= 0 || Window.Buckets.IsEmpty())
+        {
+            return;
+        }
+
+        Window.Buckets[Window.Buckets.Num() - 1].Quantity += Quantity;
+        Window.RollingQuantity += Quantity;
+    }
+
+    float CalculateRatePerSecond(const FMassDspItemRateWindow& Window, float BucketDurationSeconds)
+    {
+        if (Window.Buckets.IsEmpty())
+        {
+            return 0.f;
+        }
+
+        const float DurationSeconds = FMath::Max(static_cast<float>(Window.Buckets.Num()) * BucketDurationSeconds, BucketDurationSeconds);
+        return static_cast<float>(Window.RollingQuantity) / DurationSeconds;
+    }
 }
 
 void UMassDspDebugStatsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
-    PreviousItemTotals.Init(0, MaxTrackedItemTypes);
-    SmoothedItemProductionRates.Init(0.f, MaxTrackedItemTypes);
-    SmoothedItemConsumptionRates.Init(0.f, MaxTrackedItemTypes);
-    SmoothedItemNetGrowthRates.Init(0.f, MaxTrackedItemTypes);
+    ItemProductionWindows.SetNum(MaxTrackedItemTypes);
+    ItemConsumptionWindows.SetNum(MaxTrackedItemTypes);
     PendingProducedItemCounts.Init(0, MaxTrackedItemTypes);
     PendingConsumedItemCounts.Init(0, MaxTrackedItemTypes);
     CachedSnapshot.ItemStats.Reserve(MaxTrackedItemTypes);
@@ -32,15 +119,12 @@ void UMassDspDebugStatsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 void UMassDspDebugStatsSubsystem::Deinitialize()
 {
     CachedSnapshot = FMassDspDebugStatsSnapshot();
-    PreviousItemTotals.Empty();
-    SmoothedItemProductionRates.Empty();
-    SmoothedItemConsumptionRates.Empty();
-    SmoothedItemNetGrowthRates.Empty();
+    ItemProductionWindows.Empty();
+    ItemConsumptionWindows.Empty();
     PendingProducedItemCounts.Empty();
     PendingConsumedItemCounts.Empty();
     CachedManager.Reset();
     CachedLogistics.Reset();
-    bHasValidDeltaHistory = false;
     Super::Deinitialize();
 }
 
@@ -222,6 +306,21 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
     Snapshot.PendingRequests = Logistics->GetPendingRequestCount();
     Snapshot.ActiveTasks = Logistics->GetActiveTaskCount();
 
+    for (const FDroneData& Drone : Logistics->DronePool)
+    {
+        AccumulateItemCount(CurrentItemTotals, Drone.CarriedItemType, Drone.CarriedQuantity);
+    }
+
+    if (UMassDspPlayerInventoryComponent* PlayerInventory = GetPlayerInventoryComponent(World))
+    {
+        TArray<FInventoryEntryView> PlayerEntries;
+        PlayerInventory->GetActiveEntries(PlayerEntries);
+        for (const FInventoryEntryView& Entry : PlayerEntries)
+        {
+            AccumulateItemCount(CurrentItemTotals, Entry.ItemType, Entry.Quantity);
+        }
+    }
+
     struct FSortableDelta
     {
         EItemType ItemType = EItemType::None;
@@ -231,40 +330,23 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
         int32 CurrentCount = 0;
     };
 
-    const float SmoothingAlpha = GetDeltaSmoothingAlpha(SampleDeltaTime);
+    const float BucketDurationSeconds = FMath::Max(RateBucketDurationSeconds, KINDA_SMALL_NUMBER);
+    const int32 WindowBucketCount = ResolveRateBucketCount(DeltaSmoothingWindowSeconds, BucketDurationSeconds);
+    const int64 CurrentBucketIndex = ResolveCurrentBucketIndex(World->GetTimeSeconds(), BucketDurationSeconds);
     TArray<FSortableDelta> SortedDeltas;
     SortedDeltas.Reserve(MaxTrackedItemTypes);
     for (int32 ItemIndex = 0; ItemIndex < CurrentItemTotals.Num(); ++ItemIndex)
     {
         const int32 CurrentCount = CurrentItemTotals[ItemIndex];
-        const int32 PreviousCount = PreviousItemTotals.IsValidIndex(ItemIndex) ? PreviousItemTotals[ItemIndex] : 0;
-        const int32 DeltaCount = CurrentCount - PreviousCount;
         const EItemType ItemType = static_cast<EItemType>(ItemIndex);
         if (ItemType == EItemType::None) continue;
 
-        const float InstantProductionRate = static_cast<float>(ProducedItemCounts[ItemIndex]) / SampleDeltaTime;
-        const float InstantConsumptionRate = static_cast<float>(ConsumedItemCounts[ItemIndex]) / SampleDeltaTime;
-        const float InstantNetGrowthRate = static_cast<float>(DeltaCount) / SampleDeltaTime;
+        AddSampleToRateWindow(ItemProductionWindows[ItemIndex], CurrentBucketIndex, ProducedItemCounts[ItemIndex], WindowBucketCount);
+        AddSampleToRateWindow(ItemConsumptionWindows[ItemIndex], CurrentBucketIndex, ConsumedItemCounts[ItemIndex], WindowBucketCount);
 
-        if (SmoothedItemProductionRates.IsValidIndex(ItemIndex))
-        {
-            if (!bHasValidDeltaHistory)
-            {
-                SmoothedItemProductionRates[ItemIndex] = InstantProductionRate;
-                SmoothedItemConsumptionRates[ItemIndex] = InstantConsumptionRate;
-                SmoothedItemNetGrowthRates[ItemIndex] = InstantNetGrowthRate;
-            }
-            else
-            {
-                SmoothedItemProductionRates[ItemIndex] = FMath::Lerp(SmoothedItemProductionRates[ItemIndex], InstantProductionRate, SmoothingAlpha);
-                SmoothedItemConsumptionRates[ItemIndex] = FMath::Lerp(SmoothedItemConsumptionRates[ItemIndex], InstantConsumptionRate, SmoothingAlpha);
-                SmoothedItemNetGrowthRates[ItemIndex] = FMath::Lerp(SmoothedItemNetGrowthRates[ItemIndex], InstantNetGrowthRate, SmoothingAlpha);
-            }
-        }
-
-        const float SmoothedProductionRate = SmoothedItemProductionRates.IsValidIndex(ItemIndex) ? SmoothedItemProductionRates[ItemIndex] : InstantProductionRate;
-        const float SmoothedConsumptionRate = SmoothedItemConsumptionRates.IsValidIndex(ItemIndex) ? SmoothedItemConsumptionRates[ItemIndex] : InstantConsumptionRate;
-        const float SmoothedNetGrowthRate = SmoothedItemNetGrowthRates.IsValidIndex(ItemIndex) ? SmoothedItemNetGrowthRates[ItemIndex] : InstantNetGrowthRate;
+        const float SmoothedProductionRate = CalculateRatePerSecond(ItemProductionWindows[ItemIndex], BucketDurationSeconds);
+        const float SmoothedConsumptionRate = CalculateRatePerSecond(ItemConsumptionWindows[ItemIndex], BucketDurationSeconds);
+        const float SmoothedNetGrowthRate = SmoothedProductionRate - SmoothedConsumptionRate;
         if (CurrentCount <= 0
             && FMath::Abs(SmoothedProductionRate) < 0.01f
             && FMath::Abs(SmoothedConsumptionRate) < 0.01f
@@ -308,8 +390,6 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
 
     Snapshot.BottleneckSummary = BuildBottleneckSummary(Snapshot);
 
-    PreviousItemTotals = MoveTemp(CurrentItemTotals);
-    bHasValidDeltaHistory = true;
     CachedSnapshot = MoveTemp(Snapshot);
 }
 
@@ -351,10 +431,4 @@ FString UMassDspDebugStatsSubsystem::BuildBottleneckSummary(const FMassDspDebugS
         return FString::Printf(TEXT("库存满载: %d 个节点需要疏通"), FullNodes);
     }
     return TEXT("系统运行稳定，没有明显瓶颈");
-}
-
-float UMassDspDebugStatsSubsystem::GetDeltaSmoothingAlpha(float SampleDeltaTime) const
-{
-    const float Window = FMath::Max(DeltaSmoothingWindowSeconds, KINDA_SMALL_NUMBER);
-    return FMath::Clamp(SampleDeltaTime / Window, 0.05f, 1.0f);
 }

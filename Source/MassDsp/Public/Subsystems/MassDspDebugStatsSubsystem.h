@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Containers/Deque.h"
 #include "CoreMinimal.h"
 #include "GameConst.h"
 #include "HAL/CriticalSection.h"
@@ -8,6 +9,24 @@
 
 class UMassDspManager;
 class UMassDspLogisticsSubsystem;
+
+struct FMassDspItemRateBucket
+{
+    int64 BucketIndex = 0;
+    int32 Quantity = 0;
+};
+
+struct FMassDspItemRateWindow
+{
+    TDeque<FMassDspItemRateBucket> Buckets;
+    int32 RollingQuantity = 0;
+
+    void Reset()
+    {
+        Buckets.Empty();
+        RollingQuantity = 0;
+    }
+};
 
 USTRUCT(BlueprintType)
 struct MASSDSP_API FMassDspItemDeltaStat
@@ -125,20 +144,15 @@ private:
     void AccumulateItemEvent(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
     FString BuildBottleneckSummary(const FMassDspDebugStatsSnapshot& Snapshot) const;
 
-    float GetDeltaSmoothingAlpha(float SampleDeltaTime) const;
-
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.1"))
     float UpdateInterval = 0.5f;
 
     float UpdateAccum = 0.f;
     float TimeSinceLastRefresh = 0.f;
-    bool bHasValidDeltaHistory = false;
 
     FMassDspDebugStatsSnapshot CachedSnapshot;
-    TArray<int32> PreviousItemTotals;
-    TArray<float> SmoothedItemProductionRates;
-    TArray<float> SmoothedItemConsumptionRates;
-    TArray<float> SmoothedItemNetGrowthRates;
+    TArray<FMassDspItemRateWindow> ItemProductionWindows;
+    TArray<FMassDspItemRateWindow> ItemConsumptionWindows;
     TArray<int32> PendingProducedItemCounts;
     TArray<int32> PendingConsumedItemCounts;
     mutable FCriticalSection PendingItemEventMutex;
@@ -147,7 +161,10 @@ private:
     TWeakObjectPtr<UMassDspLogisticsSubsystem> CachedLogistics;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.5"))
-    float DeltaSmoothingWindowSeconds = 30.0f;
+    float DeltaSmoothingWindowSeconds = 120.0f;
+
+    UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.1"))
+    float RateBucketDurationSeconds = 1.0f;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0"))
     int32 MaxDisplayedItemStats = 0;
