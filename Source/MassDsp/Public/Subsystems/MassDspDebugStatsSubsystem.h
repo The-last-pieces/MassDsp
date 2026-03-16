@@ -141,7 +141,6 @@ protected:
 private:
     void RebuildSnapshot(float SampleDeltaTime);
     void AccumulateItemCount(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
-    void AccumulateItemEvent(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
     FString BuildBottleneckSummary(const FMassDspDebugStatsSnapshot& Snapshot) const;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.1"))
@@ -153,18 +152,16 @@ private:
     FMassDspDebugStatsSnapshot CachedSnapshot;
     TArray<FMassDspItemRateWindow> ItemProductionWindows;
     TArray<FMassDspItemRateWindow> ItemConsumptionWindows;
-    TArray<int32> PendingProducedItemCounts;
-    TArray<int32> PendingConsumedItemCounts;
     mutable FCriticalSection PendingItemEventMutex;
 
     TWeakObjectPtr<UMassDspManager> CachedManager;
     TWeakObjectPtr<UMassDspLogisticsSubsystem> CachedLogistics;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.5"))
-    float DeltaSmoothingWindowSeconds = 120.0f;
+    float DeltaSmoothingWindowSeconds = 60;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.1"))
-    float RateBucketDurationSeconds = 1.0f;
+    float RateBucketDurationSeconds = 0.25f;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0"))
     int32 MaxDisplayedItemStats = 0;

@@ -40,6 +40,16 @@ struct MASSDSP_API FMassDspMinerFragment : public FMassFragment
     // 参数为当前世界绝对时间（World->GetTimeSeconds()）
     // 大多数帧内因未到触发时刻而立即返回，避免无意义的浮点除法
     void TickExecute(float WorldTime);
+
+    float GetTheoreticalProductionRate() const
+    {
+        if (StoredItemType == EItemType::None || ProductionInterval <= KINDA_SMALL_NUMBER || InventoryCount >= MaxInventory)
+        {
+            return 0.f;
+        }
+        return 1.f / ProductionInterval;
+    }
+
     // 返回 [0,1] 的生产进度（供 UI 进度条使用），WorldTime = World->GetTimeSeconds()
     float GetProductionProgress(float WorldTime) const
     {

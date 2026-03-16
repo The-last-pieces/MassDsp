@@ -98,6 +98,37 @@ struct MASSDSP_API FMassDspAssemblerFragment : public FMassFragment
 
     bool IsRunning() const;
 
+    float GetCraftInterval(const FRecipeDataForFragment& Recipe) const
+    {
+        return Recipe.CraftingTime / FMath::Max(CraftingSpeedMultiplier, KINDA_SMALL_NUMBER);
+    }
+
+    bool CanSustainTheoreticalRate(const FRecipeDataForFragment& Recipe) const
+    {
+        return ActiveRecipeType != ERecipeType::None
+            && Recipe.CraftingTime > KINDA_SMALL_NUMBER
+            && bInputSatisfied
+            && bOutputSatisfied;
+    }
+
+    float GetTheoreticalInputRate(const FRecipeDataForFragment& Recipe, int32 InputIndex) const
+    {
+        if (!CanSustainTheoreticalRate(Recipe) || Recipe.InputsCount <= InputIndex)
+        {
+            return 0.f;
+        }
+        return static_cast<float>(Recipe.Inputs[InputIndex].Amount) / GetCraftInterval(Recipe);
+    }
+
+    float GetTheoreticalOutputRate(const FRecipeDataForFragment& Recipe, int32 OutputIndex) const
+    {
+        if (!CanSustainTheoreticalRate(Recipe) || Recipe.OutputsCount <= OutputIndex)
+        {
+            return 0.f;
+        }
+        return static_cast<float>(Recipe.Outputs[OutputIndex].Amount) / GetCraftInterval(Recipe);
+    }
+
     void UpdateSatisfied(const FRecipeDataForFragment& Recipe);
 
     void ResetForRecipeChange()
