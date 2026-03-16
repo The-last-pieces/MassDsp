@@ -59,6 +59,7 @@
 #include "Components/TextBlock.h"
 #include "Components/ProgressBar.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
 #include "Components/Border.h"
 #include "Components/Image.h"
 #include "Components/HorizontalBox.h"
@@ -544,7 +545,7 @@ struct FWidgetBuilder
 
 // ─── 单个蓝图生成 ─────────────────────────────────────────────────────────────
 
-// 接受外部创建的 Package，封装工厂创建 + Existing Rename
+// 接受外部创建的 Package，封装工厂创建
 static UWidgetBlueprint* MakeWidgetBP(UPackage* Package, const FString& AssetName, UClass* ParentClass)
 {
     UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
@@ -748,8 +749,8 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
     BuildCommonHeader(B, TEXT("矿机"), CW);
 
     BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
-        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
-        20.f, 60.f, 320.f, 420.f, 4, 4, 68.f, 8.f);
+                     TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+                     20.f, 60.f, 320.f, 420.f, 4, 4, 68.f, 8.f);
 
     B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 420.f, WidgetColors::Divider);
 
@@ -782,8 +783,8 @@ static void BuildMinerLayout(UWidgetBlueprint* WBP)
            IX, 260.f, IW, 20.f, WidgetColors::TextLabel, 11);
 
     BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
-        TEXT("矿机缓存"), TEXT("矿机缓存 0 / 50"), TEXT("点击右侧格子取回背包"),
-        IX, 292.f, IW, 248.f, 4, 2, 72.f, 8.f);
+                     TEXT("矿机缓存"), TEXT("矿机缓存 0 / 50"), TEXT("点击右侧格子取回背包"),
+                     IX, 292.f, IW, 248.f, 4, 2, 72.f, 8.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -807,8 +808,8 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
     BuildCommonHeader(B, TEXT("仓库"), CW);
 
     BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
-        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
-        20.f, 60.f, 320.f, 400.f, 4, 4, 68.f, 8.f);
+                     TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+                     20.f, 60.f, 320.f, 400.f, 4, 4, 68.f, 8.f);
 
     B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 400.f, WidgetColors::Divider);
 
@@ -833,8 +834,8 @@ static void BuildStorageLayout(UWidgetBlueprint* WBP)
            IX, 220.f, IW, 20.f, WidgetColors::TextLabel, 11);
 
     BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
-        TEXT("仓库库存"), TEXT("建筑库存 0 / 50"), TEXT("点击右侧格子取回背包"),
-        IX, 252.f, IW, 248.f, 4, 2, 72.f, 8.f);
+                     TEXT("仓库库存"), TEXT("建筑库存 0 / 50"), TEXT("点击右侧格子取回背包"),
+                     IX, 252.f, IW, 248.f, 4, 2, 72.f, 8.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -858,8 +859,8 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
     BuildCommonHeader(B, TEXT("合成台"), CW);
 
     BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
-        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
-        20.f, 60.f, 320.f, 560.f, 4, 4, 68.f, 8.f);
+                     TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+                     20.f, 60.f, 320.f, 560.f, 4, 4, 68.f, 8.f);
 
     B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 560.f, WidgetColors::Divider);
 
@@ -922,8 +923,8 @@ static void BuildAssemblerLayout(UWidgetBlueprint* WBP)
            IX, 430.f, IW, 20.f, WidgetColors::TextLabel, 11);
 
     BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
-        TEXT("合成台缓存"), TEXT("输入/输出缓冲 0"), TEXT("点击右侧格子取回背包"),
-        IX, 462.f, IW, 218.f, 4, 2, 72.f, 8.f);
+                     TEXT("合成台缓存"), TEXT("输入/输出缓冲 0"), TEXT("点击右侧格子取回背包"),
+                     IX, 462.f, IW, 218.f, 4, 2, 72.f, 8.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -947,8 +948,8 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
     BuildCommonHeader(B, TEXT("物流塔"), CW);
 
     BuildGridSection(B, TEXT("PlayerSlot"), FName("TextBlock_PlayerSummary"), FName("TextBlock_PlayerHint"),
-        TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
-        20.f, 60.f, 320.f, 480.f, 4, 4, 68.f, 8.f);
+                     TEXT("玩家背包"), TEXT("背包 0 / 2000"), TEXT("点击左侧格子存入建筑"),
+                     20.f, 60.f, 320.f, 480.f, 4, 4, 68.f, 8.f);
 
     B.Rect(FName("Border_ColumnSep"), 350.f, 60.f, 1.f, 480.f, WidgetColors::Divider);
 
@@ -1010,8 +1011,8 @@ static void BuildLogisticsTowerLayout(UWidgetBlueprint* WBP)
            IX, 404.f, IW, 20.f, WidgetColors::TextLabel, 11);
 
     BuildGridSection(B, TEXT("BuildingSlot"), FName("TextBlock_BuildingSummary"), FName("TextBlock_BuildingHint"),
-        TEXT("物流塔库存"), TEXT("建筑库存 0 / 50"), TEXT("点击右侧格子取回背包"),
-        IX, 436.f, IW, 164.f, 4, 2, 72.f, 8.f);
+                     TEXT("物流塔库存"), TEXT("建筑库存 0 / 50"), TEXT("点击右侧格子取回背包"),
+                     IX, 436.f, IW, 164.f, 4, 2, 72.f, 8.f);
 }
 
 static void BuildInventoryLayout(UWidgetBlueprint* WBP)
@@ -1031,8 +1032,8 @@ static void BuildInventoryLayout(UWidgetBlueprint* WBP)
     BuildCommonHeader(B, TEXT("玩家背包"), CW);
 
     BuildGridSection(B, TEXT("InventorySlot"), FName("TextBlock_Capacity"), FName("TextBlock_Hint"),
-        TEXT("网格背包"), TEXT("容量: 0 / 200"), TEXT("I 关闭。建筑面板内会同时显示背包网格并支持点击转移"),
-        20.f, 60.f, 480.f, 460.f, 4, 4, 82.f, 10.f);
+                     TEXT("网格背包"), TEXT("容量: 0 / 200"), TEXT("I 关闭。建筑面板内会同时显示背包网格并支持点击转移"),
+                     20.f, 60.f, 480.f, 460.f, 4, 4, 82.f, 10.f);
 }
 
 static void BuildSystemStatsLayout(UWidgetBlueprint* WBP)
@@ -1141,9 +1142,9 @@ static void BuildTechTreeLayout(UWidgetBlueprint* WBP)
     B.Rect(FName("Border_Card"), 0.f, 0.f, CW, CH, WidgetColors::CardBg);
     BuildCommonHeader(B, TEXT("科技树 / 成长系统"), CW);
     B.Text(FName("TextBlock_Summary"), TEXT("已解锁 0 个节点。当前可先研究“基础熔炼”来解锁合成台与铁板配方。"),
-        20.f, 60.f, CW - 40.f, 22.f, WidgetColors::TextValue, 12);
+           20.f, 60.f, CW - 40.f, 22.f, WidgetColors::TextValue, 12);
     B.Text(FName("TextBlock_Hint"), TEXT("T 关闭。当前第一版支持研究节点并解锁建筑、配方与传送带能力。"),
-        20.f, 86.f, CW - 40.f, 20.f, WidgetColors::TextLabel, 11);
+           20.f, 86.f, CW - 40.f, 20.f, WidgetColors::TextLabel, 11);
 
     UBorder* Panel = B.Rect(FName("Border_TechPanel"), 20.f, 120.f, CW - 40.f, CH - 140.f, WidgetColors::PanelBg);
     Panel->SetPadding(FMargin(12.f));
@@ -1203,37 +1204,52 @@ static void BuildHotbarLayout(UWidgetBlueprint* WBP)
         Btn->SetStyle(BtnStyle);
         Border->AddChild(Btn);
 
-        UOverlay* Overlay = Tree->ConstructWidget<UOverlay>(
-            UOverlay::StaticClass(), *FString::Printf(TEXT("Overlay_Slot%d"), i));
-        Btn->AddChild(Overlay);
+        UCanvasPanel* SlotCanvas = Tree->ConstructWidget<UCanvasPanel>(
+            UCanvasPanel::StaticClass(), *FString::Printf(TEXT("Canvas_Slot%d"), i));
+        if (UButtonSlot* ButtonSlot = Cast<UButtonSlot>(Btn->AddChild(SlotCanvas)))
+        {
+            ButtonSlot->SetHorizontalAlignment(HAlign_Fill);
+            ButtonSlot->SetVerticalAlignment(VAlign_Fill);
+            ButtonSlot->SetPadding(FMargin(0.f));
+        }
 
         UTextBlock* ShortText = Tree->ConstructWidget<UTextBlock>(
             UTextBlock::StaticClass(), *FString::Printf(TEXT("Text_Slot%d"), i));
         ShortText->SetText(FText::FromString(ShortNames[i]));
         ShortText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
         ShortText->SetJustification(ETextJustify::Center);
+        ShortText->SetAutoWrapText(false);
         {
             FSlateFontInfo F = ShortText->GetFont();
-            F.Size = 14;
+            F.Size = 12;
             ShortText->SetFont(F);
         }
-        UOverlaySlot* ShortSlot = Overlay->AddChildToOverlay(ShortText);
-        ShortSlot->SetHorizontalAlignment(HAlign_Center);
-        ShortSlot->SetVerticalAlignment(VAlign_Center);
+        UCanvasPanelSlot* ShortSlot = SlotCanvas->AddChildToCanvas(ShortText);
+        ShortSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+        ShortSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+        ShortSlot->SetPosition(FVector2D(0.f, 10.f));
+        ShortSlot->SetAutoSize(true);
+        ShortSlot->SetZOrder(0);
 
         UTextBlock* NumText = Tree->ConstructWidget<UTextBlock>(
             UTextBlock::StaticClass(), *FString::Printf(TEXT("Num_Slot%d"), i));
         NumText->SetText(FText::FromString(FString::FromInt(i + 1)));
-        NumText->SetColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f, 0.9f)));
+        NumText->SetColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.92f, 0.92f, 0.96f)));
+        NumText->SetJustification(ETextJustify::Left);
+        NumText->SetShadowOffset(FVector2D(1.f, 1.f));
+        NumText->SetShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.9f));
         {
             FSlateFontInfo F = NumText->GetFont();
-            F.Size = 9;
+            F.Size = 10;
+            F.TypefaceFontName = FName("Bold");
             NumText->SetFont(F);
         }
-        UOverlaySlot* NumSlot = Overlay->AddChildToOverlay(NumText);
-        NumSlot->SetHorizontalAlignment(HAlign_Left);
-        NumSlot->SetVerticalAlignment(VAlign_Top);
-        NumSlot->SetPadding(FMargin(4.f, 2.f, 0.f, 0.f));
+        UCanvasPanelSlot* NumSlot = SlotCanvas->AddChildToCanvas(NumText);
+        NumSlot->SetAnchors(FAnchors(0.f, 0.f, 0.f, 0.f));
+        NumSlot->SetAlignment(FVector2D::ZeroVector);
+        NumSlot->SetPosition(FVector2D(6.f, 3.f));
+        NumSlot->SetAutoSize(true);
+        NumSlot->SetZOrder(10);
 
         const bool bLast = (i == UMassDspHotbarWidget::TotalSlots - 1);
         UHorizontalBoxSlot* HBSlot = HBox->AddChildToHorizontalBox(SizeBox);
@@ -1328,7 +1344,7 @@ void FUMaterialGeneratorUtils::CreateBuildingWidgets()
 {
     static const FString UIRoot = TEXT("/Game/Assets/UI");
 
-    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Hotbar"), TEXT("v2"), &ImpBuildHotbarWidget);
+    FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Hotbar"), TEXT("v8"), &ImpBuildHotbarWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Miner"), TEXT("v5"), &ImpBuildMinerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Maker"), TEXT("v5"), &ImpBuildMakerWidget);
     FProceduralAssetBuilder::GenerateAsset(UIRoot + TEXT("/BP_Storage"), TEXT("v4"), &ImpBuildStorageWidget);
