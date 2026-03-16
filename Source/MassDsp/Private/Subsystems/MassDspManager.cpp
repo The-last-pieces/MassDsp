@@ -204,8 +204,8 @@ namespace
         }
 
         TArrayView<FBuildingSlotState> Slots = SlotType == EBuildingSlotType::Output
-            ? SlotsFragment->GetOutputSlots()
-            : SlotsFragment->GetInputSlots();
+                                                   ? SlotsFragment->GetOutputSlots()
+                                                   : SlotsFragment->GetInputSlots();
         return Slots.IsValidIndex(SlotIndex) ? &Slots[SlotIndex] : nullptr;
     }
 
@@ -1376,13 +1376,25 @@ TArray<FMassEntityHandle> UMassDspManager::BatchSpawnBuildings(const TArray<FBui
                 }
             }
 
-            ++BuildingEntityCount;
             ++SuccessCount;
             CreatedEntities[Indices[j]] = EntityHandle; // 按原始输入下标回写，保证顺序
-            SpawnedBuildingEntities.Add(EntityHandle);
-            BuildingEntityTypeRegistry.Add(EntityHandle, BuildingType);
-            RegisterBuildingInGrid(EntityHandle, SpawnData.WorldTransform.GetLocation());
         }
+    }
+
+    // 运行时注册表必须与输入顺序一致；存档中的 building index 依赖这个顺序稳定。
+    for (int32 Index = 0; Index < SpawnDataList.Num(); ++Index)
+    {
+        const FMassEntityHandle EntityHandle = CreatedEntities[Index];
+        if (!EntityHandle.IsValid())
+        {
+            continue;
+        }
+
+        const FBuildingSpawnData& SpawnData = SpawnDataList[Index];
+        ++BuildingEntityCount;
+        SpawnedBuildingEntities.Add(EntityHandle);
+        BuildingEntityTypeRegistry.Add(EntityHandle, SpawnData.BuildingType);
+        RegisterBuildingInGrid(EntityHandle, SpawnData.WorldTransform.GetLocation());
     }
 
     UE_LOG(LogTemp, Log, TEXT("BatchSpawnBuildings: Created %d / %d building entities"), SuccessCount, SpawnDataList.Num());
@@ -1601,6 +1613,7 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
     UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
     if (!EntitySubsystem)
     {
+        UE_LOG(LogTemp, Error, TEXT("[SaveDebug] RestoreBuildingSaveData failed: MassEntitySubsystem is null"));
         return false;
     }
 
@@ -1618,8 +1631,11 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
     BuildingHashGrid.Reset();
     BuildingEntityCount = 0;
 
+    UE_LOG(LogTemp, Log, TEXT("[SaveDebug] RestoreBuildingSaveData: begin buildingCount=%d"), InSaveData.Num());
+
     if (InSaveData.IsEmpty())
     {
+        UE_LOG(LogTemp, Log, TEXT("[SaveDebug] RestoreBuildingSaveData: no buildings to restore"));
         return true;
     }
 
@@ -1633,6 +1649,12 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
     const TArray<FMassEntityHandle> CreatedEntities = BatchSpawnBuildings(SpawnDataList);
     if (CreatedEntities.Num() != InSaveData.Num())
     {
+        UE_LOG(
+            LogTemp,
+            Error,
+            TEXT("[SaveDebug] RestoreBuildingSaveData failed: created entity count mismatch expected=%d actual=%d"),
+            InSaveData.Num(),
+            CreatedEntities.Num());
         return false;
     }
 
@@ -1641,6 +1663,12 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
         const FMassEntityHandle Entity = CreatedEntities[Index];
         if (!EntityManager.IsEntityValid(Entity))
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("[SaveDebug] RestoreBuildingSaveData failed: invalid entity at index=%d buildingType=%s"),
+                Index,
+                *StaticEnum<EBuildingType>()->GetNameStringByValue(static_cast<int64>(InSaveData[Index].BuildingType)));
             return false;
         }
 
@@ -1661,6 +1689,16 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
                 Miner->MaxInventory = SaveData.MinerData.MaxInventory;
                 Miner->StoredItemType = SaveData.MinerData.StoredItemType;
             }
+            else
+            {
+                UE_LOG(
+                    LogTemp,
+                    Error,
+                    TEXT("[SaveDebug] RestoreBuildingSaveData failed: missing MinerFragment at index=%d buildingType=%s"),
+                    Index,
+                    *StaticEnum<EBuildingType>()->GetNameStringByValue(static_cast<int64>(SaveData.BuildingType)));
+                return false;
+            }
         }
 
         if (SaveData.bHasStorageFragment)
@@ -1670,6 +1708,16 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
                 Storage->InventoryCount = SaveData.StorageData.InventoryCount;
                 Storage->MaxInventory = SaveData.StorageData.MaxInventory;
                 Storage->StoredItemType = SaveData.StorageData.StoredItemType;
+            }
+            else
+            {
+                UE_LOG(
+                    LogTemp,
+                    Error,
+                    TEXT("[SaveDebug] RestoreBuildingSaveData failed: missing StorageFragment at index=%d buildingType=%s"),
+                    Index,
+                    *StaticEnum<EBuildingType>()->GetNameStringByValue(static_cast<int64>(SaveData.BuildingType)));
+                return false;
             }
         }
 
@@ -1710,6 +1758,17 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
                     }
                 }
             }
+            else
+            {
+                UE_LOG(
+                    LogTemp,
+                    Error,
+                    TEXT("[SaveDebug] RestoreBuildingSaveData failed: missing AssemblerFragment at index=%d buildingType=%s recipeType=%s"),
+                    Index,
+                    *StaticEnum<EBuildingType>()->GetNameStringByValue(static_cast<int64>(SaveData.BuildingType)),
+                    *StaticEnum<ERecipeType>()->GetNameStringByValue(static_cast<int64>(SaveData.AssemblerData.ActiveRecipeType)));
+                return false;
+            }
         }
 
         if (SaveData.bHasLogisticsTowerFragment)
@@ -1726,8 +1785,26 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
                 Tower->bDirty = SaveData.LogisticsTowerData.bDirty;
                 Tower->bAcceptsRequests = SaveData.LogisticsTowerData.bAcceptsRequests;
             }
+            else
+            {
+                UE_LOG(
+                    LogTemp,
+                    Error,
+                    TEXT("[SaveDebug] RestoreBuildingSaveData failed: missing LogisticsTowerFragment at index=%d buildingType=%s itemType=%s"),
+                    Index,
+                    *StaticEnum<EBuildingType>()->GetNameStringByValue(static_cast<int64>(SaveData.BuildingType)),
+                    *StaticEnum<EItemType>()->GetNameStringByValue(static_cast<int64>(SaveData.LogisticsTowerData.ItemType)));
+                return false;
+            }
         }
     }
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[SaveDebug] RestoreBuildingSaveData: success restored=%d spawnedRegistryCount=%d"),
+        InSaveData.Num(),
+        SpawnedBuildingEntities.Num());
 
     return true;
 }
@@ -1979,7 +2056,7 @@ bool UMassDspManager::FindDemolishTargetByRay(
         float DistanceSq = 0.0f;
         const FVector BuildingLocation = TransformFragment->GetTransform().GetLocation();
         if (!ProjectPointOntoRay(NormalizedRayDir.IsNormalized() ? RayOrigin : RayOrigin, NormalizedRayDir, MaxDistance, BuildingLocation,
-            ProjectedPoint, ViewDistance, DistanceSq))
+                                 ProjectedPoint, ViewDistance, DistanceSq))
         {
             continue;
         }
@@ -2015,7 +2092,7 @@ bool UMassDspManager::FindDemolishTargetByRay(
         float BroadPhaseDistance = 0.0f;
         float BroadPhaseDistanceSq = 0.0f;
         if (!ProjectPointOntoRay(RayOrigin, NormalizedRayDir, MaxDistance, Trajectory.RepresentativePosition,
-            BroadPhasePoint, BroadPhaseDistance, BroadPhaseDistanceSq))
+                                 BroadPhasePoint, BroadPhaseDistance, BroadPhaseDistanceSq))
         {
             continue;
         }
@@ -2046,7 +2123,7 @@ bool UMassDspManager::FindDemolishTargetByRay(
             float ViewDistance = 0.0f;
             float DistanceSq = 0.0f;
             if (!ProjectPointOntoRay(RayOrigin, NormalizedRayDir, MaxDistance, Sample.Position,
-                ProjectedPoint, ViewDistance, DistanceSq))
+                                     ProjectedPoint, ViewDistance, DistanceSq))
             {
                 continue;
             }
@@ -2086,8 +2163,17 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
     UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
     if (!EntitySubsystem)
     {
+        UE_LOG(LogTemp, Error, TEXT("[SaveDebug] RestoreBeltSaveData failed: MassEntitySubsystem is null"));
         return false;
     }
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[SaveDebug] RestoreBeltSaveData: begin beltCount=%d flatItemCount=%d buildingCount=%d"),
+        InSaveData.Belts.Num(),
+        InSaveData.FlatItemCache.Num(),
+        SpawnedBuildingEntities.Num());
 
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
     ResetBuildingSlotConnections(EntityManager, SpawnedBuildingEntities);
@@ -2130,20 +2216,38 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
 
     if (InSaveData.Belts.IsEmpty())
     {
+        UE_LOG(LogTemp, Log, TEXT("[SaveDebug] RestoreBeltSaveData: no belts to restore"));
         return true;
     }
 
-    for (const FMassDspBeltEntrySaveData& SavedBelt : InSaveData.Belts)
+    for (int32 BeltIndex = 0; BeltIndex < InSaveData.Belts.Num(); ++BeltIndex)
     {
+        const FMassDspBeltEntrySaveData& SavedBelt = InSaveData.Belts[BeltIndex];
         if (!SpawnedBuildingEntities.IsValidIndex(SavedBelt.StartBuildingIndex) ||
             !SpawnedBuildingEntities.IsValidIndex(SavedBelt.EndBuildingIndex))
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("[SaveDebug] RestoreBeltSaveData failed: building index out of range beltIndex=%d startBuildingIndex=%d endBuildingIndex=%d buildingCount=%d"),
+                BeltIndex,
+                SavedBelt.StartBuildingIndex,
+                SavedBelt.EndBuildingIndex,
+                SpawnedBuildingEntities.Num());
             return false;
         }
 
         if (SavedBelt.ItemCacheStartIndex < 0 || SavedBelt.ItemCacheCount < 0 ||
             SavedBelt.ItemCacheStartIndex + SavedBelt.ItemCacheCount > InSaveData.FlatItemCache.Num())
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("[SaveDebug] RestoreBeltSaveData failed: invalid item cache range beltIndex=%d start=%d count=%d flatItemCount=%d"),
+                BeltIndex,
+                SavedBelt.ItemCacheStartIndex,
+                SavedBelt.ItemCacheCount,
+                InSaveData.FlatItemCache.Num());
             return false;
         }
 
@@ -2151,6 +2255,15 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
         const FMassEntityHandle EndBuilding = SpawnedBuildingEntities[SavedBelt.EndBuildingIndex];
         if (!EntityManager.IsEntityValid(StartBuilding) || !EntityManager.IsEntityValid(EndBuilding))
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("[SaveDebug] RestoreBeltSaveData failed: building entity invalid beltIndex=%d startBuildingIndex=%d startValid=%s endBuildingIndex=%d endValid=%s"),
+                BeltIndex,
+                SavedBelt.StartBuildingIndex,
+                EntityManager.IsEntityValid(StartBuilding) ? TEXT("true") : TEXT("false"),
+                SavedBelt.EndBuildingIndex,
+                EntityManager.IsEntityValid(EndBuilding) ? TEXT("true") : TEXT("false"));
             return false;
         }
 
@@ -2160,31 +2273,75 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
         FBuildingSlotState* EndSlot = ResolveBuildingSlot(EntityManager, EndBuilding, SavedBelt.EndSlotIndex, EBuildingSlotType::Input);
         if (!StartSlots || !EndSlots || !StartSlot || !EndSlot)
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT(
+                    "[SaveDebug] RestoreBeltSaveData failed: slot resolution failed beltIndex=%d startBuildingIndex=%d startSlotIndex=%d endBuildingIndex=%d endSlotIndex=%d hasStartSlots=%s hasEndSlots=%s hasStartSlot=%s hasEndSlot=%s"
+                ),
+                BeltIndex,
+                SavedBelt.StartBuildingIndex,
+                SavedBelt.StartSlotIndex,
+                SavedBelt.EndBuildingIndex,
+                SavedBelt.EndSlotIndex,
+                StartSlots ? TEXT("true") : TEXT("false"),
+                EndSlots ? TEXT("true") : TEXT("false"),
+                StartSlot ? TEXT("true") : TEXT("false"),
+                EndSlot ? TEXT("true") : TEXT("false"));
             return false;
         }
 
         if (StartSlot->ConnectedLaneHandle.IsValid() || EndSlot->ConnectedLaneHandle.IsValid())
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT(
+                    "[SaveDebug] RestoreBeltSaveData failed: slot already connected beltIndex=%d startConnected=%s endConnected=%s startBuildingIndex=%d startSlotIndex=%d endBuildingIndex=%d endSlotIndex=%d"
+                ),
+                BeltIndex,
+                StartSlot->ConnectedLaneHandle.IsValid() ? TEXT("true") : TEXT("false"),
+                EndSlot->ConnectedLaneHandle.IsValid() ? TEXT("true") : TEXT("false"),
+                SavedBelt.StartBuildingIndex,
+                SavedBelt.StartSlotIndex,
+                SavedBelt.EndBuildingIndex,
+                SavedBelt.EndSlotIndex);
             return false;
         }
 
         FBeltRebuildData RebuildData;
         RebuildData.BeltType = SavedBelt.BeltType;
         RebuildData.RebuildType = SavedBelt.RebuildType == static_cast<uint8>(EBeltRebuildType::Hermite)
-            ? EBeltRebuildType::Hermite
-            : EBeltRebuildType::Dubins;
+                                      ? EBeltRebuildType::Hermite
+                                      : EBeltRebuildType::Dubins;
         RebuildData.DubinsData = FromDubinsSaveData(SavedBelt.DubinsData);
         RebuildData.HermiteData = FromHermiteSaveData(SavedBelt.HermiteData);
 
         const FBeltHandle NewHandle = CreateRuntimeBelt(RebuildData, SavedBelt.BeltType);
         if (!NewHandle.IsValid())
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("[SaveDebug] RestoreBeltSaveData failed: CreateRuntimeBelt returned invalid handle beltIndex=%d beltType=%s rebuildType=%d length=%.2f speed=%.2f"),
+                BeltIndex,
+                *StaticEnum<EBeltType>()->GetNameStringByValue(static_cast<int64>(SavedBelt.BeltType)),
+                SavedBelt.RebuildType,
+                SavedBelt.BeltLength,
+                SavedBelt.BeltSpeed);
             return false;
         }
 
         FBeltData* BeltData = BeltEntityRegistry.Find(NewHandle);
         if (!BeltData)
         {
+            UE_LOG(
+                LogTemp,
+                Error,
+                TEXT("[SaveDebug] RestoreBeltSaveData failed: BeltEntityRegistry missing new handle beltIndex=%d handleIndex=%d generation=%d"),
+                BeltIndex,
+                NewHandle.Index,
+                NewHandle.Generation);
             return false;
         }
 
@@ -2230,6 +2387,19 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
         PendingFlushSet.Reset();
         LodAccum = 0.f;
     }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[SaveDebug] RestoreBeltSaveData: view location unavailable after restore, deferred mesh flush will rely on later updates"));
+    }
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[SaveDebug] RestoreBeltSaveData: success restored=%d renderStates=%d chunks=%d registry=%d"),
+        InSaveData.Belts.Num(),
+        BeltRenderRegistry.Num(),
+        BeltChunks.Num(),
+        BeltEntityRegistry.Num());
 
     return true;
 }
@@ -2323,7 +2493,7 @@ void UMassDspManager::FlushChunk(FIntPoint ChunkKey, FBeltChunk& Chunk, const FV
                                       RD.HermiteData.C, RD.HermiteData.D);
 
         FChunkSectionBuildData& BuildData = SectionBuildData.AddDefaulted_GetRef();
-    BuildData.RenderId = RenderId;
+        BuildData.RenderId = RenderId;
         BuildData.BeltType = RD.BeltType;
         GenerateConveyorMesh(BuildData.MeshData, SharedSplineHelper,
                              C_Width, C_BeltThickness, C_UVScale, AngleThresh, MaxSegLen);
