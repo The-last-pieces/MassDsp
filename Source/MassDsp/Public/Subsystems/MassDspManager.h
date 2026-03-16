@@ -337,6 +337,12 @@ public:
     void FlushBeltMesh(const FVector& CameraPos = FVector::ZeroVector);
 
     /**
+     * 在当前视角下立即完成 belt 的 LOD、Chunk 可见性和网格刷新。
+     * 适用于存档恢复或批量创建后的首次显示，避免等待低频扫描和分帧队列。
+     */
+    void RefreshBeltRenderingForCurrentView();
+
+    /**
      * 低频更新（~0.5Hz）：根据相机位置懒加载/卸载各传送带的 LUT 并切换精度等级。
      * 应由 PlayerController / GameMode 在合适频率主动调用。
      */

@@ -2375,22 +2375,7 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
         EndSlots->MarkInputConnected();
     }
 
-    RebuildBeltSoA();
-
-    FVector ViewLocation = FVector::ZeroVector;
-    if (TryGetCurrentViewLocation(GetWorld(), ViewLocation))
-    {
-        UpdateBeltLODs(ViewLocation);
-        UpdateBeltChunkVisibility(ViewLocation);
-        FlushBeltMesh(ViewLocation);
-        PendingFlushQueue.Reset();
-        PendingFlushSet.Reset();
-        LodAccum = 0.f;
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[SaveDebug] RestoreBeltSaveData: view location unavailable after restore, deferred mesh flush will rely on later updates"));
-    }
+    RefreshBeltRenderingForCurrentView();
 
     UE_LOG(
         LogTemp,
@@ -2614,6 +2599,28 @@ void UMassDspManager::FlushBeltMesh(const FVector& CameraPos)
         if (Chunk.bMeshDirty)
             FlushChunk(ChunkKey, Chunk, CameraPos);
     }
+}
+
+void UMassDspManager::RefreshBeltRenderingForCurrentView()
+{
+    RebuildBeltSoA();
+
+    FVector ViewLocation = FVector::ZeroVector;
+    if (TryGetCurrentViewLocation(GetWorld(), ViewLocation))
+    {
+        UpdateBeltLODs(ViewLocation);
+        UpdateBeltChunkVisibility(ViewLocation);
+        FlushBeltMesh(ViewLocation);
+    }
+    else
+    {
+        UpdateBeltChunkVisibility(FVector::ZeroVector);
+        FlushBeltMesh();
+    }
+
+    PendingFlushQueue.Reset();
+    PendingFlushSet.Reset();
+    LodAccum = 0.f;
 }
 
 void UMassDspManager::TickBeltMeshFlush(const FVector& CameraPos)
@@ -3462,6 +3469,11 @@ int32 UMassDspManager::RegisterBeltRenderState(FBeltHandle BeltHandle, const FIn
     FBeltChunk& Chunk = BeltChunks.FindOrAdd(ChunkKey);
     Chunk.RenderIds.Add(RenderId);
     Chunk.bMeshDirty = true;
+    if (!PendingFlushSet.Contains(ChunkKey))
+    {
+        PendingFlushSet.Add(ChunkKey);
+        PendingFlushQueue.Add(ChunkKey);
+    }
 
     return RenderId;
 }
