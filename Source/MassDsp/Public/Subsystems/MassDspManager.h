@@ -165,6 +165,9 @@ public:
     float SyncAccum = 0.f;
     // LOD + Chunk 可视性更新累计时间（~1Hz）
     float LodAccum  = 1.f;
+    bool bHasLastBeltStreamingCameraPos = false;
+    bool bBeltStreamingRefreshRequested = true;
+    FVector LastBeltStreamingCameraPos = FVector::ZeroVector;
 
     // 最大渲染距离（cm）：超过此距离的传送带即使在视锥内也不渲染
     // 解决飞高时视锥覆盖大量传送带的问题，默认 500m
@@ -245,7 +248,10 @@ private:
     // 分帧 Chunk 刷新队列：UpdateBeltChunkVisibility 入队，TickBeltMeshFlush 每帧处理 ChunksPerFrame 个
     TArray<FIntPoint> PendingFlushQueue;
     TSet<FIntPoint>   PendingFlushSet;
+    int32 PendingFlushQueueHead = 0;
     static constexpr int32 ChunksPerFrame = 2; ///< 每帧最多刷新的 Chunk 数
+    static constexpr int32 PendingFlushQueueCompactThreshold = 256;
+    static constexpr float BeltStreamingRefreshMoveThreshold = 300.f;
 
     /** 根据世界位置计算所属 Chunk 的格子坐标 */
     static FORCEINLINE FIntPoint GetChunkKey(const FVector& Pos)

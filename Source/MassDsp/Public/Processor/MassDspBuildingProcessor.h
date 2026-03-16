@@ -57,7 +57,7 @@ private:
     // ── Pass-2: 输入槽（Consume）──────────────────────────────────────────
     // 每条传送带仅 1 个 Consume 方，Pass-1 全部结束后才开始，天然无锁
     template <class TT> requires IsDspBuildFragment<TT>
-    void ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig) const;
+    void ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig, UMassDspDebugStatsSubsystem* StatsSubsystem) const;
 
     // InRecipe 仅 Assembler 路径传入非 nullptr
     template <class TT> requires IsDspBuildFragment<TT>

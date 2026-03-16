@@ -121,6 +121,8 @@ class MASSDSP_API UMassDspDebugStatsSubsystem : public UTickableWorldSubsystem
     GENERATED_BODY()
 
 public:
+    static constexpr int32 TrackedItemTypeCount = 256;
+
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     virtual void Tick(float DeltaTime) override;
@@ -132,27 +134,40 @@ public:
 
     const FMassDspDebugStatsSnapshot& GetSnapshot() const { return CachedSnapshot; }
     void ForceRefresh();
+    void RegisterStatsConsumer();
+    void UnregisterStatsConsumer();
+    bool IsStatsCollectionActive() const;
     void RecordProducedItem(EItemType ItemType, int32 Quantity = 1);
     void RecordConsumedItem(EItemType ItemType, int32 Quantity = 1);
+    void ResetTheoreticalRates();
+    void AccumulateTheoreticalRates(const TArray<float>& ProductionRates, const TArray<float>& ConsumptionRates);
 
 protected:
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
 
 private:
     void RebuildSnapshot(float SampleDeltaTime);
+    void ResetSamplingState();
     void AccumulateItemCount(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
     FString BuildBottleneckSummary(const FMassDspDebugStatsSnapshot& Snapshot) const;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.1"))
     float UpdateInterval = 0.5f;
 
+    UPROPERTY(EditAnywhere, Category = "MassDsp|Stats")
+    bool bCollectStatsWithoutConsumer = false;
+
     float UpdateAccum = 0.f;
     float TimeSinceLastRefresh = 0.f;
+    int32 ActiveStatsConsumerCount = 0;
 
     FMassDspDebugStatsSnapshot CachedSnapshot;
     TArray<FMassDspItemRateWindow> ItemProductionWindows;
     TArray<FMassDspItemRateWindow> ItemConsumptionWindows;
     mutable FCriticalSection PendingItemEventMutex;
+    TArray<float> CurrentTheoreticalProductionRates;
+    TArray<float> CurrentTheoreticalConsumptionRates;
+    mutable FCriticalSection TheoreticalRateMutex;
 
     TWeakObjectPtr<UMassDspManager> CachedManager;
     TWeakObjectPtr<UMassDspLogisticsSubsystem> CachedLogistics;

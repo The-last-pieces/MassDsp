@@ -69,6 +69,10 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
         ? DebugStatsSubsystem.Get()
         : World->GetSubsystem<UMassDspDebugStatsSubsystem>();
     DebugStatsSubsystem = StatsSubsystem;
+    if (StatsSubsystem)
+    {
+        StatsSubsystem->ResetTheoreticalRates();
+    }
 
     const AMassDspGameMode* GameMode = Cast<AMassDspGameMode>(World->GetAuthGameMode());
     const UGameConfigData* GameConfig = GameMode ? GameMode->GameConfig.Get() : nullptr;
@@ -85,9 +89,9 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     // ── Pass 2: 输入槽（Consume）────────────────────────────────────────────
     // 每条传送带只有 1 个 Consume 方 → 各线程写不同 FBeltData，ParallelFor 安全
     // Pass 1 全部线程归栅后才进入 Pass 2 → Provide/Consume 时间上不重叠，无需锁
-    ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig);
-    ProcessBuildingInputs<FMassDspWarehouseFragment>(WarehouseQuery, Context, WorldTime, GameConfig);
-    ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig);
+    ProcessBuildingInputs<FMassDspStorageFragment>(StorageQuery, Context, WorldTime, GameConfig, nullptr);
+    ProcessBuildingInputs<FMassDspWarehouseFragment>(WarehouseQuery, Context, WorldTime, GameConfig, nullptr);
+    ProcessBuildingInputs<FMassDspAssemblerFragment>(AssemblerQuery, Context, WorldTime, GameConfig, StatsSubsystem);
     // 矿机无 Input Slot，不参与 Pass 2
 }
 
@@ -102,6 +106,13 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
         const int32 NumEntities = InContext.GetNumEntities();
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
         const TArrayView<FMassDspBuildingSlotsFragment> SlotsList = InContext.GetMutableFragmentView<FMassDspBuildingSlotsFragment>();
+        TArray<float> LocalProductionRates;
+        TArray<float> LocalConsumptionRates;
+        if (StatsSubsystem)
+        {
+            LocalProductionRates.Init(0.f, UMassDspDebugStatsSubsystem::TrackedItemTypeCount);
+            LocalConsumptionRates.Init(0.f, UMassDspDebugStatsSubsystem::TrackedItemTypeCount);
+        }
 
         if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
         {
@@ -143,6 +154,18 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
                 }
 
                 ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
+
+                if (StatsSubsystem && BuildingFragments[i].CanSustainTheoreticalRate(Recipe))
+                {
+                    for (int32 OutputIndex = 0; OutputIndex < Recipe.OutputsCount; ++OutputIndex)
+                    {
+                        const int32 ItemIndex = static_cast<uint8>(Recipe.Outputs[OutputIndex].ItemType);
+                        if (LocalProductionRates.IsValidIndex(ItemIndex))
+                        {
+                            LocalProductionRates[ItemIndex] += BuildingFragments[i].GetTheoreticalOutputRate(Recipe, OutputIndex);
+                        }
+                    }
+                }
             }
         }
         else if constexpr (std::is_same_v<TT, FMassDspMinerFragment>)
@@ -160,6 +183,15 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
                     }
                 }
                 ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime);
+
+                if (StatsSubsystem)
+                {
+                    const int32 ItemIndex = static_cast<uint8>(BuildingFragments[i].StoredItemType);
+                    if (LocalProductionRates.IsValidIndex(ItemIndex))
+                    {
+                        LocalProductionRates[ItemIndex] += BuildingFragments[i].GetTheoreticalProductionRate();
+                    }
+                }
             }
         }
         else
@@ -171,6 +203,11 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
                 ProcessOutputSlots(SlotsList[i], BuildingFragments[i], WorldTime);
             }
         }
+
+        if (StatsSubsystem)
+        {
+            StatsSubsystem->AccumulateTheoreticalRates(LocalProductionRates, LocalConsumptionRates);
+        }
     });
 }
 
@@ -178,13 +215,23 @@ void UMassDspBuildingProcessor::ProcessBuildingOutputs(FMassEntityQuery& Query, 
 //  Pass 2 驱动：输入槽（Consume）
 // ─────────────────────────────────────────────────────────────────────────────
 template <class TT> requires IsDspBuildFragment<TT>
-void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig) const
+void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, FMassExecutionContext& Context, float WorldTime, const UGameConfigData* GameConfig, UMassDspDebugStatsSubsystem* StatsSubsystem) const
 {
-    Query.ParallelForEachEntityChunk(Context, [this, WorldTime, GameConfig](FMassExecutionContext& InContext)
+    Query.ParallelForEachEntityChunk(Context, [this, WorldTime, GameConfig, StatsSubsystem](FMassExecutionContext& InContext)
     {
         const int32 NumEntities = InContext.GetNumEntities();
         const TArrayView<TT> BuildingFragments = InContext.GetMutableFragmentView<TT>();
         const TArrayView<FMassDspBuildingSlotsFragment> SlotsList = InContext.GetMutableFragmentView<FMassDspBuildingSlotsFragment>();
+        TArray<float> LocalProductionRates;
+        TArray<float> LocalConsumptionRates;
+        if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
+        {
+            if (StatsSubsystem)
+            {
+                LocalProductionRates.Init(0.f, UMassDspDebugStatsSubsystem::TrackedItemTypeCount);
+                LocalConsumptionRates.Init(0.f, UMassDspDebugStatsSubsystem::TrackedItemTypeCount);
+            }
+        }
 
         if constexpr (std::is_same_v<TT, FMassDspAssemblerFragment>)
         {
@@ -195,6 +242,23 @@ void UMassDspBuildingProcessor::ProcessBuildingInputs(FMassEntityQuery& Query, F
                 if (!RecipeConfig) continue;
                 const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(BuildingFragments[i].ActiveRecipeType);
                 ProcessInputSlots(SlotsList[i], BuildingFragments[i], WorldTime, &Recipe);
+
+                if (StatsSubsystem && BuildingFragments[i].CanSustainTheoreticalRate(Recipe))
+                {
+                    for (int32 InputIndex = 0; InputIndex < Recipe.InputsCount; ++InputIndex)
+                    {
+                        const int32 ItemIndex = static_cast<uint8>(Recipe.Inputs[InputIndex].ItemType);
+                        if (LocalConsumptionRates.IsValidIndex(ItemIndex))
+                        {
+                            LocalConsumptionRates[ItemIndex] += BuildingFragments[i].GetTheoreticalInputRate(Recipe, InputIndex);
+                        }
+                    }
+                }
+            }
+
+            if (StatsSubsystem)
+            {
+                StatsSubsystem->AccumulateTheoreticalRates(LocalProductionRates, LocalConsumptionRates);
             }
         }
         else

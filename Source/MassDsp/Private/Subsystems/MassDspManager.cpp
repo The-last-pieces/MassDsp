@@ -1253,14 +1253,21 @@ void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrust
         if (ISM && !CachedTransformsByType.Contains(Type) && ISM->GetInstanceCount() > 0)
             ISM->ClearInstances();
 
-    // 每帧累计到阈値后驱动一次 LOD / Chunk 可视性更新 + 分帧网格刷新
-    // 注：LodAccum 不部分被外部 DeltaTime 驱动，简化为每次调用加一个帧间隔
-    //   GameMode::SyncAccum 已保证这里 ~60fps 调用，所以 LodAccum 每帧 += 1/60
-    constexpr float LodInterval = 1.0f; // 每秒更新一次 LOD
-    LodAccum += 1.f / 60.f;
-    if (LodAccum >= LodInterval)
+    // 只在显式脏标记或相机发生足够位移时才做全量 Belt Streaming 扫描，
+    // 避免静止视角下每秒硬扫所有轨迹/Chunk 产生 1% low 尖峰。
+    constexpr float LodInterval = 1.0f;
+    const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : 1.f / 60.f;
+    LodAccum += DeltaSeconds;
+
+    const bool bCameraMovedEnough = !bHasLastBeltStreamingCameraPos
+        || FVector::DistSquared2D(CameraPos, LastBeltStreamingCameraPos)
+            >= FMath::Square(BeltStreamingRefreshMoveThreshold);
+    if (bBeltStreamingRefreshRequested || (LodAccum >= LodInterval && bCameraMovedEnough))
     {
         LodAccum = 0.f;
+        bHasLastBeltStreamingCameraPos = true;
+        LastBeltStreamingCameraPos = CameraPos;
+        bBeltStreamingRefreshRequested = false;
         UpdateBeltLODs(CameraPos);
         UpdateBeltChunkVisibility(CameraPos);
     }
@@ -1904,7 +1911,7 @@ bool UMassDspManager::DestroyBeltInternal(FBeltHandle BeltHandle, TSet<FIntPoint
 
     if (bHasRemovedChunkKey && PendingFlushSet.Remove(RemovedChunkKey) > 0)
     {
-        PendingFlushQueue.Remove(RemovedChunkKey);
+        bBeltStreamingRefreshRequested = true;
     }
 
     return true;
@@ -2620,7 +2627,9 @@ void UMassDspManager::RefreshBeltRenderingForCurrentView()
 
     PendingFlushQueue.Reset();
     PendingFlushSet.Reset();
+    PendingFlushQueueHead = 0;
     LodAccum = 0.f;
+    bBeltStreamingRefreshRequested = false;
 }
 
 void UMassDspManager::TickBeltMeshFlush(const FVector& CameraPos)
@@ -2628,12 +2637,17 @@ void UMassDspManager::TickBeltMeshFlush(const FVector& CameraPos)
     // 初始加载时队列可能很大：允许首帧多处理一些近处 Chunk，
     // 用当前队首距离决定本帧上限：距离 <5000cm → 最多 8 个，<10000cm → 4 个，否则 ChunksPerFrame
     int32 BudgetThisFrame = ChunksPerFrame;
-    if (PendingFlushQueue.Num() > 0)
+    while (PendingFlushQueueHead < PendingFlushQueue.Num() && !PendingFlushSet.Contains(PendingFlushQueue[PendingFlushQueueHead]))
     {
-        if (const FBeltChunk* First = BeltChunks.Find(PendingFlushQueue[0]))
+        ++PendingFlushQueueHead;
+    }
+
+    if (PendingFlushQueueHead < PendingFlushQueue.Num())
+    {
+        if (const FBeltChunk* First = BeltChunks.Find(PendingFlushQueue[PendingFlushQueueHead]))
         {
             // 队首 Chunk 中点距离（近似）
-            const FIntPoint& K = PendingFlushQueue[0];
+            const FIntPoint& K = PendingFlushQueue[PendingFlushQueueHead];
             const float Dx = (static_cast<float>(K.X) + 0.5f) * SpatialGridCellSize - CameraPos.X;
             const float Dy = (static_cast<float>(K.Y) + 0.5f) * SpatialGridCellSize - CameraPos.Y;
             const float QFrontDist = FMath::Sqrt(Dx * Dx + Dy * Dy);
@@ -2643,11 +2657,13 @@ void UMassDspManager::TickBeltMeshFlush(const FVector& CameraPos)
     }
 
     int32 Processed = 0;
-    while (PendingFlushQueue.Num() > 0 && Processed < BudgetThisFrame)
+    while (PendingFlushQueueHead < PendingFlushQueue.Num() && Processed < BudgetThisFrame)
     {
-        const FIntPoint Key = PendingFlushQueue[0];
-        PendingFlushQueue.RemoveAt(0, 1, EAllowShrinking::No);
-        PendingFlushSet.Remove(Key);
+        const FIntPoint Key = PendingFlushQueue[PendingFlushQueueHead++];
+        if (!PendingFlushSet.Remove(Key))
+        {
+            continue;
+        }
 
         if (FBeltChunk* Chunk = BeltChunks.Find(Key))
         {
@@ -2655,6 +2671,18 @@ void UMassDspManager::TickBeltMeshFlush(const FVector& CameraPos)
                 FlushChunk(Key, *Chunk, CameraPos);
         }
         ++Processed;
+    }
+
+    if (PendingFlushQueueHead >= PendingFlushQueue.Num())
+    {
+        PendingFlushQueue.Reset();
+        PendingFlushQueueHead = 0;
+    }
+    else if (PendingFlushQueueHead >= PendingFlushQueueCompactThreshold
+        && PendingFlushQueueHead * 2 >= PendingFlushQueue.Num())
+    {
+        PendingFlushQueue.RemoveAt(0, PendingFlushQueueHead, EAllowShrinking::No);
+        PendingFlushQueueHead = 0;
     }
 }
 
@@ -2732,10 +2760,7 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
         if (Chunk.RenderIds.IsEmpty())
         {
             ReleaseChunkPMC(Chunk);
-            if (PendingFlushSet.Remove(ChunkKey))
-            {
-                PendingFlushQueue.Remove(ChunkKey);
-            }
+            PendingFlushSet.Remove(ChunkKey);
             EmptyChunkKeys.Add(ChunkKey);
             continue;
         }
@@ -2753,8 +2778,7 @@ void UMassDspManager::UpdateBeltChunkVisibility(const FVector& CameraPos)
             // 超出卸载距离：归还 PMC 到对象池，从待刷新队列中移除
             ReleaseChunkPMC(Chunk);
             // 移出队列（如果已入队），远距离 Chunk 不应占用刷新时间片
-            if (PendingFlushSet.Remove(ChunkKey))
-                PendingFlushQueue.Remove(ChunkKey);
+            PendingFlushSet.Remove(ChunkKey);
         }
         else
         {
@@ -3474,6 +3498,7 @@ int32 UMassDspManager::RegisterBeltRenderState(FBeltHandle BeltHandle, const FIn
         PendingFlushSet.Add(ChunkKey);
         PendingFlushQueue.Add(ChunkKey);
     }
+    bBeltStreamingRefreshRequested = true;
 
     return RenderId;
 }

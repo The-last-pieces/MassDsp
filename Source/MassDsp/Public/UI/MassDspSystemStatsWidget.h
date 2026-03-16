@@ -20,6 +20,7 @@ public:
 
 protected:
     virtual void NativeConstruct() override;
+    virtual void NativeDestruct() override;
     virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
@@ -34,7 +35,7 @@ private:
     void OnRefreshButtonClicked();
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.05"))
-    float RefreshInterval = 0.2f;
+    float RefreshInterval = 0.5f;
 
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UButton> Button_Close;

@@ -7,7 +7,6 @@
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspWarehouseFragment.h"
-#include "MassDspGameMode.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
@@ -18,7 +17,7 @@
 
 namespace
 {
-    constexpr int32 MaxTrackedItemTypes = 256;
+    constexpr int32 MaxTrackedItemTypes = UMassDspDebugStatsSubsystem::TrackedItemTypeCount;
     constexpr int32 MaxRateBucketCount = 512;
 
     UMassDspPlayerInventoryComponent* GetPlayerInventoryComponent(UWorld* World)
@@ -129,6 +128,8 @@ void UMassDspDebugStatsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
     Super::Initialize(Collection);
     ItemProductionWindows.SetNum(MaxTrackedItemTypes);
     ItemConsumptionWindows.SetNum(MaxTrackedItemTypes);
+    CurrentTheoreticalProductionRates.Init(0.f, MaxTrackedItemTypes);
+    CurrentTheoreticalConsumptionRates.Init(0.f, MaxTrackedItemTypes);
     CachedSnapshot.ItemStats.Reserve(MaxTrackedItemTypes);
 }
 
@@ -137,6 +138,8 @@ void UMassDspDebugStatsSubsystem::Deinitialize()
     CachedSnapshot = FMassDspDebugStatsSnapshot();
     ItemProductionWindows.Empty();
     ItemConsumptionWindows.Empty();
+    CurrentTheoreticalProductionRates.Empty();
+    CurrentTheoreticalConsumptionRates.Empty();
     CachedManager.Reset();
     CachedLogistics.Reset();
     Super::Deinitialize();
@@ -144,6 +147,11 @@ void UMassDspDebugStatsSubsystem::Deinitialize()
 
 void UMassDspDebugStatsSubsystem::Tick(float DeltaTime)
 {
+    if (!IsStatsCollectionActive())
+    {
+        return;
+    }
+
     UpdateAccum += DeltaTime;
     TimeSinceLastRefresh += DeltaTime;
     if (UpdateAccum < UpdateInterval)
@@ -159,13 +167,49 @@ void UMassDspDebugStatsSubsystem::Tick(float DeltaTime)
 
 void UMassDspDebugStatsSubsystem::ForceRefresh()
 {
+    if (!IsStatsCollectionActive())
+    {
+        return;
+    }
+
     RebuildSnapshot(FMath::Max(TimeSinceLastRefresh, UpdateInterval));
     UpdateAccum = 0.f;
     TimeSinceLastRefresh = 0.f;
 }
 
+void UMassDspDebugStatsSubsystem::RegisterStatsConsumer()
+{
+    const int32 PreviousCount = ActiveStatsConsumerCount;
+    ++ActiveStatsConsumerCount;
+    if (PreviousCount <= 0)
+    {
+        ResetSamplingState();
+    }
+}
+
+void UMassDspDebugStatsSubsystem::UnregisterStatsConsumer()
+{
+    ActiveStatsConsumerCount = FMath::Max(0, ActiveStatsConsumerCount - 1);
+    if (ActiveStatsConsumerCount == 0 && !bCollectStatsWithoutConsumer)
+    {
+        UpdateAccum = 0.f;
+        TimeSinceLastRefresh = 0.f;
+        ResetSamplingState();
+    }
+}
+
+bool UMassDspDebugStatsSubsystem::IsStatsCollectionActive() const
+{
+    return bCollectStatsWithoutConsumer || ActiveStatsConsumerCount > 0;
+}
+
 void UMassDspDebugStatsSubsystem::RecordProducedItem(EItemType ItemType, int32 Quantity)
 {
+    if (!IsStatsCollectionActive())
+    {
+        return;
+    }
+
     UWorld* World = GetWorld();
     if (!World)
     {
@@ -182,6 +226,11 @@ void UMassDspDebugStatsSubsystem::RecordProducedItem(EItemType ItemType, int32 Q
 
 void UMassDspDebugStatsSubsystem::RecordConsumedItem(EItemType ItemType, int32 Quantity)
 {
+    if (!IsStatsCollectionActive())
+    {
+        return;
+    }
+
     UWorld* World = GetWorld();
     if (!World)
     {
@@ -194,6 +243,73 @@ void UMassDspDebugStatsSubsystem::RecordConsumedItem(EItemType ItemType, int32 Q
 
     FScopeLock ScopeLock(&PendingItemEventMutex);
     RecordRateWindowEvent(ItemConsumptionWindows, ItemType, Quantity, CurrentBucketIndex, WindowBucketCount);
+}
+
+void UMassDspDebugStatsSubsystem::ResetTheoreticalRates()
+{
+    if (!IsStatsCollectionActive())
+    {
+        return;
+    }
+
+    FScopeLock ScopeLock(&TheoreticalRateMutex);
+    for (float& Rate : CurrentTheoreticalProductionRates)
+    {
+        Rate = 0.f;
+    }
+    for (float& Rate : CurrentTheoreticalConsumptionRates)
+    {
+        Rate = 0.f;
+    }
+}
+
+void UMassDspDebugStatsSubsystem::AccumulateTheoreticalRates(const TArray<float>& ProductionRates, const TArray<float>& ConsumptionRates)
+{
+    if (!IsStatsCollectionActive())
+    {
+        return;
+    }
+
+    FScopeLock ScopeLock(&TheoreticalRateMutex);
+
+    const int32 ProductionCount = FMath::Min(CurrentTheoreticalProductionRates.Num(), ProductionRates.Num());
+    for (int32 Index = 0; Index < ProductionCount; ++Index)
+    {
+        CurrentTheoreticalProductionRates[Index] += ProductionRates[Index];
+    }
+
+    const int32 ConsumptionCount = FMath::Min(CurrentTheoreticalConsumptionRates.Num(), ConsumptionRates.Num());
+    for (int32 Index = 0; Index < ConsumptionCount; ++Index)
+    {
+        CurrentTheoreticalConsumptionRates[Index] += ConsumptionRates[Index];
+    }
+}
+
+void UMassDspDebugStatsSubsystem::ResetSamplingState()
+{
+    {
+        FScopeLock ScopeLock(&PendingItemEventMutex);
+        for (FMassDspItemRateWindow& Window : ItemProductionWindows)
+        {
+            Window.Reset();
+        }
+        for (FMassDspItemRateWindow& Window : ItemConsumptionWindows)
+        {
+            Window.Reset();
+        }
+    }
+
+    {
+        FScopeLock ScopeLock(&TheoreticalRateMutex);
+        for (float& Rate : CurrentTheoreticalProductionRates)
+        {
+            Rate = 0.f;
+        }
+        for (float& Rate : CurrentTheoreticalConsumptionRates)
+        {
+            Rate = 0.f;
+        }
+    }
 }
 
 void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
@@ -216,8 +332,6 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
     }
 
     FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-    const AMassDspGameMode* GameMode = Cast<AMassDspGameMode>(World->GetAuthGameMode());
-    const UGameConfigData* GameConfig = GameMode ? GameMode->GameConfig.Get() : nullptr;
 
     FMassDspDebugStatsSnapshot Snapshot;
     Snapshot.SampleIntervalSeconds = SampleDeltaTime;
@@ -230,6 +344,13 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
     TArray<float> TheoreticalConsumptionRates;
     TheoreticalProductionRates.Init(0.f, MaxTrackedItemTypes);
     TheoreticalConsumptionRates.Init(0.f, MaxTrackedItemTypes);
+
+    {
+        FScopeLock ScopeLock(&TheoreticalRateMutex);
+        TheoreticalProductionRates = CurrentTheoreticalProductionRates;
+        TheoreticalConsumptionRates = CurrentTheoreticalConsumptionRates;
+    }
+
     for (const TPair<FBeltHandle, FBeltData>& Pair : Manager->BeltEntityRegistry)
     {
         const FBeltData& BeltData = Pair.Value;
@@ -277,12 +398,6 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
                 ++Snapshot.FullMinerNodes;
             }
             AccumulateItemCount(CurrentItemTotals, Miner->StoredItemType, Miner->InventoryCount);
-
-            const int32 ItemIndex = static_cast<uint8>(Miner->StoredItemType);
-            if (TheoreticalProductionRates.IsValidIndex(ItemIndex))
-            {
-                TheoreticalProductionRates[ItemIndex] += Miner->GetTheoreticalProductionRate();
-            }
         }
 
         if (const FMassDspWarehouseFragment* Warehouse = EntityManager.GetFragmentDataPtr<FMassDspWarehouseFragment>(Entity))
@@ -330,34 +445,6 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
             for (const FBufferEntry& Entry : Assembler->OutputBuffers)
             {
                 AccumulateItemCount(CurrentItemTotals, Entry.ItemType, Entry.Amount);
-            }
-
-            if (GameConfig)
-            {
-                if (const FRecipeConfigData* RecipeConfig = GameConfig->GetRecipeConfig(Assembler->ActiveRecipeType))
-                {
-                    const FRecipeDataForFragment Recipe = RecipeConfig->ToFragment(Assembler->ActiveRecipeType);
-                    if (Assembler->CanSustainTheoreticalRate(Recipe))
-                    {
-                        for (int32 InputIndex = 0; InputIndex < Recipe.InputsCount; ++InputIndex)
-                        {
-                            const int32 ItemIndex = static_cast<uint8>(Recipe.Inputs[InputIndex].ItemType);
-                            if (TheoreticalConsumptionRates.IsValidIndex(ItemIndex))
-                            {
-                                TheoreticalConsumptionRates[ItemIndex] += Assembler->GetTheoreticalInputRate(Recipe, InputIndex);
-                            }
-                        }
-
-                        for (int32 OutputIndex = 0; OutputIndex < Recipe.OutputsCount; ++OutputIndex)
-                        {
-                            const int32 ItemIndex = static_cast<uint8>(Recipe.Outputs[OutputIndex].ItemType);
-                            if (TheoreticalProductionRates.IsValidIndex(ItemIndex))
-                            {
-                                TheoreticalProductionRates[ItemIndex] += Assembler->GetTheoreticalOutputRate(Recipe, OutputIndex);
-                            }
-                        }
-                    }
-                }
             }
         }
     }

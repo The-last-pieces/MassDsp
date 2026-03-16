@@ -328,11 +328,6 @@ void AMassDspHUD::ToggleSystemStatsWidget()
     TSubclassOf<UMassDspSystemStatsWidget> StatsClass = GM && GM->GameConfig ? GM->GameConfig->SystemStatsWidgetClass : nullptr;
     if (!StatsClass) return;
 
-    if (UMassDspDebugStatsSubsystem* StatsSubsystem = GetWorld()->GetSubsystem<UMassDspDebugStatsSubsystem>())
-    {
-        StatsSubsystem->ForceRefresh();
-    }
-
     SystemStatsWidget = CreateWidget<UMassDspSystemStatsWidget>(PC, StatsClass);
     if (!SystemStatsWidget) return;
 

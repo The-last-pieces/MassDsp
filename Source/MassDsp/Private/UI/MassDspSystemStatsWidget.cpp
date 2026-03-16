@@ -13,6 +13,15 @@ void UMassDspSystemStatsWidget::NativeConstruct()
 {
     Super::NativeConstruct();
 
+    if (UWorld* World = GetWorld())
+    {
+        if (UMassDspDebugStatsSubsystem* Stats = World->GetSubsystem<UMassDspDebugStatsSubsystem>())
+        {
+            Stats->RegisterStatsConsumer();
+            Stats->ForceRefresh();
+        }
+    }
+
     if (Button_Close && !Button_Close->OnClicked.IsBound())
     {
         Button_Close->OnClicked.AddDynamic(this, &UMassDspSystemStatsWidget::OnCloseButtonClicked);
@@ -35,6 +44,19 @@ void UMassDspSystemStatsWidget::NativeConstruct()
     }
 
     RefreshAccum = RefreshInterval;
+}
+
+void UMassDspSystemStatsWidget::NativeDestruct()
+{
+    if (UWorld* World = GetWorld())
+    {
+        if (UMassDspDebugStatsSubsystem* Stats = World->GetSubsystem<UMassDspDebugStatsSubsystem>())
+        {
+            Stats->UnregisterStatsConsumer();
+        }
+    }
+
+    Super::NativeDestruct();
 }
 
 void UMassDspSystemStatsWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
