@@ -2212,6 +2212,19 @@ bool UMassDspManager::RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveDat
     Belt_TrajIndex.Reset();
     Belt_CachedCount = -1;
     CachedTransformsByType.Reset();
+    PendingFlushQueueHead = 0;
+    bHasLastBeltStreamingCameraPos = false;
+    LastBeltStreamingCameraPos = FVector::ZeroVector;
+    bBeltStreamingRefreshRequested = true;
+
+    for (UProceduralMeshComponent* PooledPMC : FreePMCPool)
+    {
+        if (PooledPMC)
+        {
+            PooledPMC->DestroyComponent();
+        }
+    }
+    FreePMCPool.Reset();
 
     for (auto& [ItemType, ISM] : ItemISMPool)
     {
