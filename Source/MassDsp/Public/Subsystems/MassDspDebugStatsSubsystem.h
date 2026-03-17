@@ -50,6 +50,39 @@ struct MASSDSP_API FMassDspItemDeltaStat
 };
 
 USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspModuleProfileStat
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    FString ModuleName;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    float TotalMilliseconds = 0.f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    float AverageMilliseconds = 0.f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    float FrameSharePercent = 0.f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    int32 SampleCount = 0;
+};
+
+struct FMassDspModuleProfileAccumulator
+{
+    double TotalSeconds = 0.0;
+    int32 SampleCount = 0;
+
+    void Reset()
+    {
+        TotalSeconds = 0.0;
+        SampleCount = 0;
+    }
+};
+
+USTRUCT(BlueprintType)
 struct MASSDSP_API FMassDspDebugStatsSnapshot
 {
     GENERATED_BODY()
@@ -112,6 +145,9 @@ struct MASSDSP_API FMassDspDebugStatsSnapshot
     TArray<FMassDspItemDeltaStat> ItemStats;
 
     UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
+    TArray<FMassDspModuleProfileStat> ModuleProfileStats;
+
+    UPROPERTY(BlueprintReadOnly, Category = "MassDsp|Stats")
     float SampleIntervalSeconds = 0.f;
 };
 
@@ -139,6 +175,7 @@ public:
     bool IsStatsCollectionActive() const;
     void RecordProducedItem(EItemType ItemType, int32 Quantity = 1);
     void RecordConsumedItem(EItemType ItemType, int32 Quantity = 1);
+    void RecordModuleProfileSample(FName ModuleName, double DurationSeconds);
     void ResetTheoreticalRates();
     void AccumulateTheoreticalRates(const TArray<float>& ProductionRates, const TArray<float>& ConsumptionRates);
 
@@ -149,6 +186,7 @@ private:
     void RebuildSnapshot(float SampleDeltaTime);
     void ResetSamplingState();
     void AccumulateItemCount(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const;
+    void ConsumeModuleProfileSnapshot(TArray<FMassDspModuleProfileStat>& OutStats, float SampleIntervalSeconds);
     FString BuildBottleneckSummary(const FMassDspDebugStatsSnapshot& Snapshot) const;
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0.1"))
@@ -168,6 +206,8 @@ private:
     TArray<float> CurrentTheoreticalProductionRates;
     TArray<float> CurrentTheoreticalConsumptionRates;
     mutable FCriticalSection TheoreticalRateMutex;
+    TMap<FName, FMassDspModuleProfileAccumulator> PendingModuleProfiles;
+    mutable FCriticalSection ModuleProfileMutex;
 
     TWeakObjectPtr<UMassDspManager> CachedManager;
     TWeakObjectPtr<UMassDspLogisticsSubsystem> CachedLogistics;
@@ -180,4 +220,19 @@ private:
 
     UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0"))
     int32 MaxDisplayedItemStats = 0;
+
+    UPROPERTY(EditAnywhere, Category = "MassDsp|Stats", meta = (ClampMin = "0"))
+    int32 MaxDisplayedModuleProfiles = 8;
+};
+
+class MASSDSP_API FMassDspScopedModuleProfile final
+{
+public:
+    FMassDspScopedModuleProfile(UWorld* InWorld, FName InModuleName);
+    ~FMassDspScopedModuleProfile();
+
+private:
+    TWeakObjectPtr<UMassDspDebugStatsSubsystem> StatsSubsystem;
+    FName ModuleName;
+    double StartTimeSeconds = 0.0;
 };

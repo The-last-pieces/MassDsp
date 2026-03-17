@@ -8,6 +8,7 @@
 #include "Fragments/MassDspStorageFragment.h"
 
 #include "Subsystems/MassDspLogisticsSubsystem.h"
+#include "Subsystems/MassDspDebugStatsSubsystem.h"
 
 UMassDspLogisticsProcessor::UMassDspLogisticsProcessor()
     : TowerQuery(*this)
@@ -28,6 +29,9 @@ void UMassDspLogisticsProcessor::Execute(FMassEntityManager& EntityManager, FMas
 {
     UWorld* World = EntityManager.GetWorld();
     if (!World) return;
+
+    static const FName ProfileModuleName(TEXT("Processor.Logistics"));
+    FMassDspScopedModuleProfile ScopedProfile(World, ProfileModuleName);
 
     UMassDspLogisticsSubsystem* Logistics = GetLogisticsSubsystem(World);
     if (!Logistics) return;

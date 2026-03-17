@@ -13,6 +13,7 @@
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspManager.h"
 
+#include "HAL/PlatformTime.h"
 #include "Misc/ScopeLock.h"
 
 namespace
@@ -131,6 +132,7 @@ void UMassDspDebugStatsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
     CurrentTheoreticalProductionRates.Init(0.f, MaxTrackedItemTypes);
     CurrentTheoreticalConsumptionRates.Init(0.f, MaxTrackedItemTypes);
     CachedSnapshot.ItemStats.Reserve(MaxTrackedItemTypes);
+    CachedSnapshot.ModuleProfileStats.Reserve(MaxDisplayedModuleProfiles > 0 ? MaxDisplayedModuleProfiles : 8);
 }
 
 void UMassDspDebugStatsSubsystem::Deinitialize()
@@ -140,6 +142,7 @@ void UMassDspDebugStatsSubsystem::Deinitialize()
     ItemConsumptionWindows.Empty();
     CurrentTheoreticalProductionRates.Empty();
     CurrentTheoreticalConsumptionRates.Empty();
+    PendingModuleProfiles.Empty();
     CachedManager.Reset();
     CachedLogistics.Reset();
     Super::Deinitialize();
@@ -285,6 +288,19 @@ void UMassDspDebugStatsSubsystem::AccumulateTheoreticalRates(const TArray<float>
     }
 }
 
+void UMassDspDebugStatsSubsystem::RecordModuleProfileSample(FName ModuleName, double DurationSeconds)
+{
+    if (!IsStatsCollectionActive() || ModuleName.IsNone() || DurationSeconds <= 0.0)
+    {
+        return;
+    }
+
+    FScopeLock ScopeLock(&ModuleProfileMutex);
+    FMassDspModuleProfileAccumulator& Accumulator = PendingModuleProfiles.FindOrAdd(ModuleName);
+    Accumulator.TotalSeconds += DurationSeconds;
+    ++Accumulator.SampleCount;
+}
+
 void UMassDspDebugStatsSubsystem::ResetSamplingState()
 {
     {
@@ -310,10 +326,75 @@ void UMassDspDebugStatsSubsystem::ResetSamplingState()
             Rate = 0.f;
         }
     }
+
+    {
+        FScopeLock ScopeLock(&ModuleProfileMutex);
+        PendingModuleProfiles.Reset();
+    }
+}
+
+void UMassDspDebugStatsSubsystem::ConsumeModuleProfileSnapshot(TArray<FMassDspModuleProfileStat>& OutStats, float SampleIntervalSeconds)
+{
+    struct FSortableModuleProfile
+    {
+        FName ModuleName;
+        double TotalSeconds = 0.0;
+        int32 SampleCount = 0;
+    };
+
+    TArray<FSortableModuleProfile> SortedProfiles;
+    {
+        FScopeLock ScopeLock(&ModuleProfileMutex);
+        SortedProfiles.Reserve(PendingModuleProfiles.Num());
+        for (const TPair<FName, FMassDspModuleProfileAccumulator>& Pair : PendingModuleProfiles)
+        {
+            if (Pair.Key.IsNone() || Pair.Value.TotalSeconds <= 0.0 || Pair.Value.SampleCount <= 0)
+            {
+                continue;
+            }
+
+            FSortableModuleProfile& Entry = SortedProfiles.AddDefaulted_GetRef();
+            Entry.ModuleName = Pair.Key;
+            Entry.TotalSeconds = Pair.Value.TotalSeconds;
+            Entry.SampleCount = Pair.Value.SampleCount;
+        }
+        PendingModuleProfiles.Reset();
+    }
+
+    SortedProfiles.Sort([](const FSortableModuleProfile& A, const FSortableModuleProfile& B)
+    {
+        if (!FMath::IsNearlyEqual(A.TotalSeconds, B.TotalSeconds))
+        {
+            return A.TotalSeconds > B.TotalSeconds;
+        }
+        return A.SampleCount > B.SampleCount;
+    });
+
+    const int32 DisplayCount = MaxDisplayedModuleProfiles > 0
+                                   ? FMath::Min(MaxDisplayedModuleProfiles, SortedProfiles.Num())
+                                   : SortedProfiles.Num();
+    const float SafeIntervalSeconds = FMath::Max(SampleIntervalSeconds, KINDA_SMALL_NUMBER);
+
+    OutStats.Reset(DisplayCount);
+    for (int32 Index = 0; Index < DisplayCount; ++Index)
+    {
+        const FSortableModuleProfile& Entry = SortedProfiles[Index];
+
+        FMassDspModuleProfileStat& SnapshotEntry = OutStats.AddDefaulted_GetRef();
+        SnapshotEntry.ModuleName = Entry.ModuleName.ToString();
+        SnapshotEntry.SampleCount = Entry.SampleCount;
+        SnapshotEntry.TotalMilliseconds = static_cast<float>(Entry.TotalSeconds * 1000.0);
+        SnapshotEntry.AverageMilliseconds = Entry.SampleCount > 0
+                                                ? static_cast<float>((Entry.TotalSeconds * 1000.0) / static_cast<double>(Entry.SampleCount))
+                                                : 0.f;
+        SnapshotEntry.FrameSharePercent = static_cast<float>((Entry.TotalSeconds / static_cast<double>(SafeIntervalSeconds)) * 100.0);
+    }
 }
 
 void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
 {
+    const double RebuildStartTimeSeconds = FPlatformTime::Seconds();
+
     UWorld* World = GetWorld();
     UMassDspManager* Manager = CachedManager.IsValid() ? CachedManager.Get() : (World ? World->GetSubsystem<UMassDspManager>() : nullptr);
     UMassDspLogisticsSubsystem* Logistics = CachedLogistics.IsValid() ? CachedLogistics.Get() : (World ? World->GetSubsystem<UMassDspLogisticsSubsystem>() : nullptr);
@@ -545,7 +626,37 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
 
     Snapshot.BottleneckSummary = BuildBottleneckSummary(Snapshot);
 
+    RecordModuleProfileSample(TEXT("Stats.RebuildSnapshot"), FPlatformTime::Seconds() - RebuildStartTimeSeconds);
+    ConsumeModuleProfileSnapshot(Snapshot.ModuleProfileStats, Snapshot.SampleIntervalSeconds);
+
     CachedSnapshot = MoveTemp(Snapshot);
+}
+
+FMassDspScopedModuleProfile::FMassDspScopedModuleProfile(UWorld* InWorld, FName InModuleName)
+    : ModuleName(InModuleName)
+{
+    if (!InWorld || InModuleName.IsNone())
+    {
+        return;
+    }
+
+    StatsSubsystem = InWorld->GetSubsystem<UMassDspDebugStatsSubsystem>();
+    if (!StatsSubsystem.IsValid())
+    {
+        return;
+    }
+
+    StartTimeSeconds = FPlatformTime::Seconds();
+}
+
+FMassDspScopedModuleProfile::~FMassDspScopedModuleProfile()
+{
+    if (!StatsSubsystem.IsValid() || ModuleName.IsNone() || StartTimeSeconds <= 0.0)
+    {
+        return;
+    }
+
+    StatsSubsystem->RecordModuleProfileSample(ModuleName, FPlatformTime::Seconds() - StartTimeSeconds);
 }
 
 void UMassDspDebugStatsSubsystem::AccumulateItemCount(TArray<int32>& TotalsByItem, EItemType ItemType, int32 Quantity) const

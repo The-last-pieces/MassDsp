@@ -30,6 +30,7 @@
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Save/MassDspSaveData.h"
+#include "Subsystems/MassDspDebugStatsSubsystem.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspTechTreeSubsystem.h"
 
@@ -1091,6 +1092,9 @@ UInstancedStaticMeshComponent* UMassDspManager::GetOrCreateIsmForItemType(EItemT
 
 void UMassDspManager::UpdateAllBeltItemTransforms(const FConvexVolume& ViewFrustum, const FVector& CameraPos)
 {
+    static const FName ProfileModuleName(TEXT("Manager.BeltItems"));
+    FMassDspScopedModuleProfile ScopedProfile(GetWorld(), ProfileModuleName);
+
     // 确保 SoA 与 BeltEntityRegistry 同步（ProcessConveyor 通常已提前同步）
     if (BeltEntityRegistry.Num() != Belt_CachedCount)
         RebuildBeltSoA();
@@ -2623,6 +2627,9 @@ void UMassDspManager::FlushBeltMesh(const FVector& CameraPos)
 
 void UMassDspManager::RefreshBeltRenderingForCurrentView()
 {
+    static const FName ProfileModuleName(TEXT("Manager.BeltRefresh"));
+    FMassDspScopedModuleProfile ScopedProfile(GetWorld(), ProfileModuleName);
+
     RebuildBeltSoA();
 
     FVector ViewLocation = FVector::ZeroVector;

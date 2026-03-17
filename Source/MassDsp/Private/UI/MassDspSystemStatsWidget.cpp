@@ -127,6 +127,28 @@ void UMassDspSystemStatsWidget::RefreshStats()
         FText::FromString(Snapshot.BottleneckSummary),
         FText::FromString(TEXT("优先关注上方物流和库存态势指标")));
 
+    for (const FMassDspModuleProfileStat& ModuleStat : Snapshot.ModuleProfileStats)
+    {
+        AddStatRow(
+            FText::FromString(FString::Printf(TEXT("模块 Profile · %s"), *ModuleStat.ModuleName)),
+            FText::FromString(FString::Printf(
+                TEXT("窗口 %.2f ms | 帧占比 %.1f%%"),
+                ModuleStat.TotalMilliseconds,
+                ModuleStat.FrameSharePercent)),
+            FText::FromString(FString::Printf(
+                TEXT("平均 %.3f ms / 次 | 调用 %d 次"),
+                ModuleStat.AverageMilliseconds,
+                ModuleStat.SampleCount)));
+    }
+
+    if (Snapshot.ModuleProfileStats.IsEmpty())
+    {
+        AddStatRow(
+            FText::FromString(TEXT("模块 Profile")),
+            FText::FromString(TEXT("当前采样窗口暂无模块耗时数据")),
+            FText::FromString(TEXT("保持面板开启一小段时间后会显示主要模块的耗时与帧占比")));
+    }
+
     const UEnum* ItemEnum = StaticEnum<EItemType>();
     for (const FMassDspItemDeltaStat& Delta : Snapshot.ItemStats)
     {

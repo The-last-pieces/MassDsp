@@ -58,6 +58,9 @@ void UMassDspBuildingProcessor::Execute(FMassEntityManager& EntityManager, FMass
     UWorld* World = EntityManager.GetWorld();
     if (!World) return;
 
+    static const FName ProfileModuleName(TEXT("Processor.Building"));
+    FMassDspScopedModuleProfile ScopedProfile(World, ProfileModuleName);
+
     if (!DspManager.IsValid())
     {
         DspManager = World->GetSubsystem<UMassDspManager>();

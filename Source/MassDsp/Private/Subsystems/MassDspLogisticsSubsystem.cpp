@@ -12,6 +12,7 @@
 #include "Components/SceneComponent.h"
 #include "Misc/ScopeLock.h"         // FScopeLock / FCriticalSection
 #include "MassDspGameMode.h"
+#include "Subsystems/MassDspDebugStatsSubsystem.h"
 
 // 安全获取 FMassEntityManager 指针（启动阶段 UMassEntitySubsystem 可能尚未就绪）
 static FMassEntityManager* GetEntityManagerSafe(UWorld* World)
@@ -210,6 +211,9 @@ void UMassDspLogisticsSubsystem::EnsureDefaultDispatchStrategies()
 
 void UMassDspLogisticsSubsystem::Tick(float DeltaTime)
 {
+    static const FName ProfileModuleName(TEXT("Logistics.Tick"));
+    FMassDspScopedModuleProfile ScopedProfile(GetWorld(), ProfileModuleName);
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 渲染层 Bug 修复：执行顺序必须是「先派遣，再写 CustomData」
     //
