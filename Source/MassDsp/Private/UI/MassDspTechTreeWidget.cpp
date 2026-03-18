@@ -18,14 +18,6 @@
 #include "Subsystems/MassDspTechTreeSubsystem.h"
 #include "UI/MassDspTechNodeButton.h"
 
-namespace
-{
-    FString GetEnumDisplayName(const UEnum* EnumPtr, int64 Value, const FString& Fallback)
-    {
-        return EnumPtr ? EnumPtr->GetDisplayNameTextByValue(Value).ToString() : Fallback;
-    }
-}
-
 void UMassDspTechTreeWidget::NativeConstruct()
 {
     Super::NativeConstruct();
@@ -230,7 +222,7 @@ void UMassDspTechTreeWidget::RebuildNodeCards()
 
         UTextBlock* TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
         TitleText->SetText(NodeConfig->DisplayName.IsEmpty()
-            ? FText::FromString(GetEnumDisplayName(TechEnum, static_cast<int64>(NodeId), TEXT("科技节点")))
+            ? MassDspEnumText::GetTechNodeId(NodeId)
             : NodeConfig->DisplayName);
         TitleText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
         HeaderRow->AddChildToHorizontalBox(TitleText);
@@ -314,11 +306,10 @@ FString UMassDspTechTreeWidget::BuildPrerequisiteText(const FTechNodeConfig& Con
         return TEXT("前置：无");
     }
 
-    const UEnum* TechEnum = StaticEnum<ETechNodeId>();
     TArray<FString> Names;
     for (const ETechNodeId NodeId : Config.Prerequisites)
     {
-        Names.Add(GetEnumDisplayName(TechEnum, static_cast<int64>(NodeId), TEXT("未知前置")));
+        Names.Add(MassDspEnumText::GetTechNodeId(NodeId).ToString());
     }
 
     return FString::Printf(TEXT("前置：%s"), *FString::Join(Names, TEXT("、")));
@@ -331,14 +322,13 @@ FString UMassDspTechTreeWidget::BuildCostText(const FTechNodeConfig& Config) con
         return TEXT("材料：无");
     }
 
-    const UEnum* ItemEnum = StaticEnum<EItemType>();
     TArray<FString> CostEntries;
     for (const FRecipeEntry& Entry : Config.ResearchCost)
     {
         if (!Entry.IsValid()) continue;
 
         CostEntries.Add(FString::Printf(TEXT("%s x%d"),
-            *GetEnumDisplayName(ItemEnum, static_cast<int64>(Entry.ItemType), TEXT("未知物品")),
+            *MassDspEnumText::GetItemType(Entry.ItemType).ToString(),
             Entry.Amount));
     }
 
@@ -347,23 +337,19 @@ FString UMassDspTechTreeWidget::BuildCostText(const FTechNodeConfig& Config) con
 
 FString UMassDspTechTreeWidget::BuildRewardText(const FTechNodeConfig& Config) const
 {
-    const UEnum* BuildingEnum = StaticEnum<EBuildingType>();
-    const UEnum* RecipeEnum = StaticEnum<ERecipeType>();
-    const UEnum* BeltEnum = StaticEnum<EBeltType>();
-
     TArray<FString> RewardEntries;
     for (const FTechReward& Reward : Config.Rewards)
     {
         switch (Reward.RewardType)
         {
         case ETechRewardType::UnlockBuilding:
-            RewardEntries.Add(FString::Printf(TEXT("建筑：%s"), *GetEnumDisplayName(BuildingEnum, static_cast<int64>(Reward.BuildingType), TEXT("未知建筑"))));
+            RewardEntries.Add(FString::Printf(TEXT("建筑：%s"), *MassDspEnumText::GetBuildingType(Reward.BuildingType).ToString()));
             break;
         case ETechRewardType::UnlockRecipe:
-            RewardEntries.Add(FString::Printf(TEXT("配方：%s"), *GetEnumDisplayName(RecipeEnum, static_cast<int64>(Reward.RecipeType), TEXT("未知配方"))));
+            RewardEntries.Add(FString::Printf(TEXT("配方：%s"), *MassDspEnumText::GetRecipeType(Reward.RecipeType).ToString()));
             break;
         case ETechRewardType::UnlockBelt:
-            RewardEntries.Add(FString::Printf(TEXT("传送带：%s"), *GetEnumDisplayName(BeltEnum, static_cast<int64>(Reward.BeltType), TEXT("未知传送带"))));
+            RewardEntries.Add(FString::Printf(TEXT("传送带：%s"), *MassDspEnumText::GetBeltType(Reward.BeltType).ToString()));
             break;
         default:
             break;

@@ -103,7 +103,7 @@ bool UMassDspTechTreeSubsystem::CanUnlockNode(ETechNodeId NodeId, FText* OutFail
             if (OutFailureReason)
             {
                 *OutFailureReason = FText::FromString(FString::Printf(TEXT("研究材料不足：%s x%d"),
-                                                                      *StaticEnum<EItemType>()->GetDisplayNameTextByValue(static_cast<int64>(CostEntry.ItemType)).ToString(),
+                                                                      *MassDspEnumText::GetItemType(CostEntry.ItemType).ToString(),
                                                                       CostEntry.Amount));
             }
             return false;

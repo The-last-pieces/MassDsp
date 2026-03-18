@@ -149,12 +149,9 @@ void UMassDspSystemStatsWidget::RefreshStats()
             FText::FromString(TEXT("保持面板开启一小段时间后会显示主要模块的耗时与帧占比")));
     }
 
-    const UEnum* ItemEnum = StaticEnum<EItemType>();
     for (const FMassDspItemDeltaStat& Delta : Snapshot.ItemStats)
     {
-        const FString ItemName = ItemEnum
-                                     ? ItemEnum->GetDisplayNameTextByValue(static_cast<int64>(Delta.ItemType)).ToString()
-                                     : TEXT("Unknown");
+        const FString ItemName = MassDspEnumText::GetItemType(Delta.ItemType).ToString();
         AddStatRow(
             FText::FromString(FString::Printf(TEXT("物品指标 · %s"), *ItemName)),
             FText::FromString(FString::Printf(

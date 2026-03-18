@@ -78,10 +78,7 @@ FText MassDspItemGridUtils::GetItemDisplayName(const UGameConfigData* GameConfig
         }
     }
 
-    const UEnum* ItemEnum = StaticEnum<EItemType>();
-    return ItemEnum
-        ? ItemEnum->GetDisplayNameTextByValue(static_cast<int64>(ItemType))
-        : FText::FromString(TEXT("Unknown"));
+    return MassDspEnumText::GetItemType(ItemType);
 }
 
 void MassDspItemGridUtils::ApplyGridEntries(const UGameConfigData* GameConfig,

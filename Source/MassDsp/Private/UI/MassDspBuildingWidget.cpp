@@ -76,11 +76,7 @@ void UMassDspBuildingWidget::InitWidget(FMassEntityHandle InEntity, EBuildingTyp
     // 写入标题（若蓝图放置了 TextBlock_Title）
     if (TextBlock_Title)
     {
-        const UEnum* Enum = StaticEnum<EBuildingType>();
-        FText Title = Enum
-                          ? Enum->GetDisplayNameTextByValue(static_cast<int64>(BuildingType))
-                          : FText::FromString(TEXT("Building"));
-        TextBlock_Title->SetText(Title);
+        TextBlock_Title->SetText(MassDspEnumText::GetBuildingType(BuildingType));
     }
 
     // 立即刷新一次，避免第一帧空白
@@ -119,18 +115,12 @@ int32 UMassDspBuildingWidget::TryTakeItemsForPlayer(EItemType ItemType, int32 Qu
 
 FText UMassDspBuildingWidget::GetItemTypeDisplayName(EItemType ItemType)
 {
-    const UEnum* Enum = StaticEnum<EItemType>();
-    return Enum
-               ? Enum->GetDisplayNameTextByValue(static_cast<int64>(ItemType))
-               : FText::FromString(TEXT("Unknown"));
+    return MassDspEnumText::GetItemType(ItemType);
 }
 
 FText UMassDspBuildingWidget::GetRecipeTypeDisplayName(ERecipeType RecipeType)
 {
-    const UEnum* Enum = StaticEnum<ERecipeType>();
-    return Enum
-               ? Enum->GetDisplayNameTextByValue(static_cast<int64>(RecipeType))
-               : FText::FromString(TEXT("None"));
+    return MassDspEnumText::GetRecipeType(RecipeType);
 }
 
 UMassDspManager* UMassDspBuildingWidget::GetDspManager() const

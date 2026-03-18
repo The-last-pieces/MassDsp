@@ -142,6 +142,101 @@ enum class ETechRewardType : uint8
     UnlockBelt = 2 UMETA(DisplayName = "解锁传送带"),
 };
 
+namespace MassDspEnumText
+{
+    inline FText GetItemType(EItemType ItemType)
+    {
+        switch (ItemType)
+        {
+        case EItemType::None: return NSLOCTEXT("MassDspEnum", "EItemType_None", "无");
+        case EItemType::IronOre: return NSLOCTEXT("MassDspEnum", "EItemType_IronOre", "铁矿石");
+        case EItemType::CopperOre: return NSLOCTEXT("MassDspEnum", "EItemType_CopperOre", "铜矿石");
+        case EItemType::Stone: return NSLOCTEXT("MassDspEnum", "EItemType_Stone", "石头");
+        case EItemType::Coal: return NSLOCTEXT("MassDspEnum", "EItemType_Coal", "煤炭");
+        case EItemType::IronPlate: return NSLOCTEXT("MassDspEnum", "EItemType_IronPlate", "铁板");
+        case EItemType::CopperPlate: return NSLOCTEXT("MassDspEnum", "EItemType_CopperPlate", "铜板");
+        case EItemType::SteelPlate: return NSLOCTEXT("MassDspEnum", "EItemType_SteelPlate", "钢板");
+        case EItemType::IronGear: return NSLOCTEXT("MassDspEnum", "EItemType_IronGear", "铁齿轮");
+        case EItemType::CopperWire: return NSLOCTEXT("MassDspEnum", "EItemType_CopperWire", "铜线");
+        case EItemType::Circuit: return NSLOCTEXT("MassDspEnum", "EItemType_Circuit", "电路板");
+        case EItemType::AdvancedCircuit: return NSLOCTEXT("MassDspEnum", "EItemType_AdvancedCircuit", "高级电路板");
+        case EItemType::ProcessingUnit: return NSLOCTEXT("MassDspEnum", "EItemType_ProcessingUnit", "处理器");
+        default: return NSLOCTEXT("MassDspEnum", "EItemType_Unknown", "未知物品");
+        }
+    }
+
+    inline FText GetRecipeType(ERecipeType RecipeType)
+    {
+        switch (RecipeType)
+        {
+        case ERecipeType::None: return NSLOCTEXT("MassDspEnum", "ERecipeType_None", "无");
+        case ERecipeType::IronPlate: return NSLOCTEXT("MassDspEnum", "ERecipeType_IronPlate", "烧制铁板");
+        default: return NSLOCTEXT("MassDspEnum", "ERecipeType_Unknown", "未知配方");
+        }
+    }
+
+    inline FText GetBuildingType(EBuildingType BuildingType)
+    {
+        switch (BuildingType)
+        {
+        case EBuildingType::None: return NSLOCTEXT("MassDspEnum", "EBuildingType_None", "无");
+        case EBuildingType::Miner: return NSLOCTEXT("MassDspEnum", "EBuildingType_Miner", "矿机");
+        case EBuildingType::Storage: return NSLOCTEXT("MassDspEnum", "EBuildingType_Storage", "仓库");
+        case EBuildingType::Assembler: return NSLOCTEXT("MassDspEnum", "EBuildingType_Assembler", "合成台");
+        case EBuildingType::LogisticsTower: return NSLOCTEXT("MassDspEnum", "EBuildingType_LogisticsTower", "物流塔");
+        default: return NSLOCTEXT("MassDspEnum", "EBuildingType_Unknown", "未知建筑");
+        }
+    }
+
+    inline FText GetLogisticsTowerMode(ELogisticsTowerMode TowerMode)
+    {
+        switch (TowerMode)
+        {
+        case ELogisticsTowerMode::Supply: return NSLOCTEXT("MassDspEnum", "ELogisticsTowerMode_Supply", "供应");
+        case ELogisticsTowerMode::Demand: return NSLOCTEXT("MassDspEnum", "ELogisticsTowerMode_Demand", "需求");
+        case ELogisticsTowerMode::Storage: return NSLOCTEXT("MassDspEnum", "ELogisticsTowerMode_Storage", "仓储");
+        default: return NSLOCTEXT("MassDspEnum", "ELogisticsTowerMode_Unknown", "未知模式");
+        }
+    }
+
+    inline FText GetBeltType(EBeltType BeltType)
+    {
+        switch (BeltType)
+        {
+        case EBeltType::None: return NSLOCTEXT("MassDspEnum", "EBeltType_None", "无");
+        case EBeltType::Normal: return NSLOCTEXT("MassDspEnum", "EBeltType_Normal", "普通传送带");
+        case EBeltType::Fast: return NSLOCTEXT("MassDspEnum", "EBeltType_Fast", "快速传送带");
+        case EBeltType::Express: return NSLOCTEXT("MassDspEnum", "EBeltType_Express", "极速传送带");
+        default: return NSLOCTEXT("MassDspEnum", "EBeltType_Unknown", "未知传送带");
+        }
+    }
+
+    inline FText GetTechNodeId(ETechNodeId NodeId)
+    {
+        switch (NodeId)
+        {
+        case ETechNodeId::None: return NSLOCTEXT("MassDspEnum", "ETechNodeId_None", "无");
+        case ETechNodeId::BasicMining: return NSLOCTEXT("MassDspEnum", "ETechNodeId_BasicMining", "基础采矿");
+        case ETechNodeId::BasicSmelting: return NSLOCTEXT("MassDspEnum", "ETechNodeId_BasicSmelting", "基础熔炼");
+        case ETechNodeId::LogisticsBasic: return NSLOCTEXT("MassDspEnum", "ETechNodeId_LogisticsBasic", "基础物流");
+        case ETechNodeId::BeltFast: return NSLOCTEXT("MassDspEnum", "ETechNodeId_BeltFast", "高速传输");
+        case ETechNodeId::BeltExpress: return NSLOCTEXT("MassDspEnum", "ETechNodeId_BeltExpress", "极速传输");
+        default: return NSLOCTEXT("MassDspEnum", "ETechNodeId_Unknown", "未知科技");
+        }
+    }
+
+    inline FText GetTechRewardType(ETechRewardType RewardType)
+    {
+        switch (RewardType)
+        {
+        case ETechRewardType::UnlockBuilding: return NSLOCTEXT("MassDspEnum", "ETechRewardType_UnlockBuilding", "解锁建筑");
+        case ETechRewardType::UnlockRecipe: return NSLOCTEXT("MassDspEnum", "ETechRewardType_UnlockRecipe", "解锁配方");
+        case ETechRewardType::UnlockBelt: return NSLOCTEXT("MassDspEnum", "ETechRewardType_UnlockBelt", "解锁传送带");
+        default: return NSLOCTEXT("MassDspEnum", "ETechRewardType_Unknown", "未知奖励");
+        }
+    }
+}
+
 // 配方输入输出项
 USTRUCT(BlueprintType)
 struct FRecipeEntry
@@ -495,7 +590,7 @@ public:
             {
                 FItemConfigData DefaultData;
                 // 从枚举元数据自动获取显示名称
-                DefaultData.DisplayName = EnumPtr->GetDisplayNameTextByValue(EnumValue);
+                DefaultData.DisplayName = MassDspEnumText::GetItemType(ItemType);
                 ItemConfigs.Add(ItemType, DefaultData);
             }
         }
@@ -516,7 +611,7 @@ public:
             if (!RecipeConfigs.Contains(RecipeType))
             {
                 FRecipeConfigData DefaultData;
-                DefaultData.DisplayName = EnumPtr->GetDisplayNameTextByValue(EnumValue);
+                DefaultData.DisplayName = MassDspEnumText::GetRecipeType(RecipeType);
                 RecipeConfigs.Add(RecipeType, DefaultData);
             }
         }
@@ -579,7 +674,7 @@ public:
             }
 
             FTechNodeConfig DefaultData;
-            DefaultData.DisplayName = EnumPtr->GetDisplayNameTextByValue(EnumValue);
+            DefaultData.DisplayName = MassDspEnumText::GetTechNodeId(NodeId);
 
             switch (NodeId)
             {
