@@ -95,10 +95,11 @@ private:
     void ShowSaveDebugMessage(const FString& Message, const FColor& Color, float DurationSeconds = 5.0f);
     void TickSaveDebugMessages();
     void CompactSaveDebugMessageOrder();
-    void DrawSaveDebugMessages();
+    void DrawSaveDebugMessages(float StartY);
 
     //  Canvas 绘制（只负责绘制，业务状态读取 HotbarWidget）
     void DrawPersistentFps();
+    float DrawBoundKeyHints(float StartY);
     void DrawBuildSystemHint();
     void DrawDemolishTargetHint();
     void DrawBuildingPreviewSlots();

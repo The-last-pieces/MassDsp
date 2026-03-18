@@ -468,7 +468,7 @@ void AMassDspHUD::CompactSaveDebugMessageOrder()
     bSaveDebugOrderDirty = false;
 }
 
-void AMassDspHUD::DrawSaveDebugMessages()
+void AMassDspHUD::DrawSaveDebugMessages(float StartY)
 {
     if (!Canvas || !GEngine || !GEngine->GetSmallFont() || SaveDebugMessageOrder.IsEmpty())
     {
@@ -476,7 +476,6 @@ void AMassDspHUD::DrawSaveDebugMessages()
     }
 
     constexpr float StartX = 18.f;
-    constexpr float StartY = 54.f;
     constexpr float VerticalSpacing = 8.f;
     constexpr float PaddingX = 12.f;
     constexpr float PaddingY = 7.f;
@@ -508,6 +507,60 @@ void AMassDspHUD::DrawSaveDebugMessages()
 
         CurrentY += TextH + PaddingY * 2.f + VerticalSpacing;
     }
+}
+
+float AMassDspHUD::DrawBoundKeyHints(float StartY)
+{
+    if (!Canvas || !GEngine || !GEngine->GetSmallFont())
+    {
+        return StartY;
+    }
+
+    const TCHAR* HintLines[] =
+    {
+        TEXT("1-9 选择快捷栏"),
+        TEXT("鼠标左键 放置/确认  |  右键 取消/返回"),
+        TEXT("F 交互  |  B 背包  |  P 统计  |  T 科技树"),
+        TEXT("O 快速保存  |  L 快速读档  |  X 拆除模式")
+    };
+
+    constexpr float StartX = 18.f;
+    constexpr float PaddingX = 12.f;
+    constexpr float PaddingY = 8.f;
+    constexpr float LineSpacing = 5.f;
+    constexpr float SectionSpacing = 12.f;
+    constexpr float Scale = 0.95f;
+
+    float MaxTextWidth = 0.f;
+    float LineHeight = 0.f;
+    for (const TCHAR* HintLine : HintLines)
+    {
+        float TextWidth = 0.f;
+        float TextHeight = 0.f;
+        GetTextSize(HintLine, TextWidth, TextHeight, GEngine->GetSmallFont(), Scale);
+        MaxTextWidth = FMath::Max(MaxTextWidth, TextWidth);
+        LineHeight = FMath::Max(LineHeight, TextHeight);
+    }
+
+    const int32 LineCount = UE_ARRAY_COUNT(HintLines);
+    const float BoxHeight = PaddingY * 2.f + LineHeight * LineCount + LineSpacing * (LineCount - 1);
+
+    FCanvasTileItem Background(
+        FVector2D(StartX - PaddingX, StartY - PaddingY),
+        FVector2D(MaxTextWidth + PaddingX * 2.f, BoxHeight),
+        FLinearColor(0.03f, 0.04f, 0.06f, 0.68f));
+    Background.BlendMode = SE_BLEND_Translucent;
+    Canvas->DrawItem(Background);
+
+    float CurrentY = StartY;
+    for (const TCHAR* HintLine : HintLines)
+    {
+        DrawText(HintLine, FLinearColor::Black, StartX + 1.f, CurrentY + 1.f, GEngine->GetSmallFont(), Scale);
+        DrawText(HintLine, FLinearColor(0.82f, 0.9f, 0.98f), StartX, CurrentY, GEngine->GetSmallFont(), Scale);
+        CurrentY += LineHeight + LineSpacing;
+    }
+
+    return StartY + BoxHeight + SectionSpacing;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -615,8 +668,10 @@ void AMassDspHUD::DrawHUD()
     // ── 常驻 FPS（左上角） ──
     DrawPersistentFps();
 
+    const float TopLeftHintStartY = DrawBoundKeyHints(54.f);
+
     // ── Save / Load 调试消息（Shipping 可用） ──
-    DrawSaveDebugMessages();
+    DrawSaveDebugMessages(TopLeftHintStartY);
 
     // ── 建造模式提示 ──
     DrawBuildSystemHint();

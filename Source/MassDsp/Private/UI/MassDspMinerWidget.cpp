@@ -71,9 +71,8 @@ void UMassDspMinerWidget::RefreshWidgets()
     // 生产间隔（可选）
     if (TextBlock_Interval)
     {
-        TextBlock_Interval->SetText(
-            FText::Format(NSLOCTEXT("MassDsp", "MinerInterval", "每 {0} 秒产出 1 个"),
-                FText::AsNumber(FMath::RoundToInt(F->ProductionInterval))));
+        auto Num = FText::AsNumber(FMath::RoundToInt(1.0 / F->ProductionInterval));
+        TextBlock_Interval->SetText(FText::Format(NSLOCTEXT("MassDsp", "MinerInterval", "每秒产出 {0} 个"), Num));
     }
 }
 

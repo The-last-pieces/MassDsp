@@ -70,23 +70,6 @@ namespace
         ConnectedCount = FMath::Max(0, ConnectedCount - 1);
     }
 
-    UMassDspPlayerInventoryComponent* GetPlayerInventoryComponent(UWorld* World)
-    {
-        if (!World) return nullptr;
-        APlayerController* PC = World->GetFirstPlayerController();
-        if (APawn* Pawn = PC ? PC->GetPawn() : nullptr)
-        {
-            UMassDspPlayerInventoryComponent* InvComp = Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>();
-            if (!InvComp)
-            {
-                InvComp = NewObject<UMassDspPlayerInventoryComponent>(Pawn);
-                InvComp->RegisterComponent();
-            }
-            return InvComp;
-        }
-        return nullptr;
-    }
-
     bool TryGetCurrentViewLocation(UWorld* World, FVector& OutViewLocation)
     {
         if (!World)
@@ -383,11 +366,39 @@ bool UMassDspManager::SetLogisticsTowerMode(FMassEntityHandle Entity, ELogistics
     return true;
 }
 
+UMassDspPlayerInventoryComponent* UMassDspManager::GetOrCreatePlayerInventoryComponent() const
+{
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return nullptr;
+    }
+
+    APlayerController* PlayerController = World->GetFirstPlayerController();
+    APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
+    if (!Pawn)
+    {
+        return nullptr;
+    }
+
+    UMassDspPlayerInventoryComponent* InventoryComponent = Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>();
+    if (!InventoryComponent)
+    {
+        InventoryComponent = NewObject<UMassDspPlayerInventoryComponent>(Pawn);
+        if (InventoryComponent)
+        {
+            InventoryComponent->RegisterComponent();
+        }
+    }
+
+    return InventoryComponent;
+}
+
 int32 UMassDspManager::TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity)
 {
     if (!Entity.IsValid() || ItemType == EItemType::None || Quantity <= 0) return 0;
 
-    UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventoryComponent(GetWorld());
+    UMassDspPlayerInventoryComponent* Inventory = GetOrCreatePlayerInventoryComponent();
     if (!Inventory) return 0;
 
     UMassEntitySubsystem* ESub = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
@@ -433,7 +444,7 @@ int32 UMassDspManager::TryTakeItemsForPlayer(FMassEntityHandle Entity, EItemType
 {
     if (!Entity.IsValid() || ItemType == EItemType::None || Quantity <= 0) return 0;
 
-    UMassDspPlayerInventoryComponent* Inventory = GetPlayerInventoryComponent(GetWorld());
+    UMassDspPlayerInventoryComponent* Inventory = GetOrCreatePlayerInventoryComponent();
     if (!Inventory) return 0;
 
     const int32 Requested = FMath::Min(Quantity, Inventory->GetFreeCapacity());

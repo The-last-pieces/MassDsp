@@ -7,8 +7,6 @@
 #include "Fragments/MassDspMinerFragment.h"
 #include "Fragments/MassDspStorageFragment.h"
 #include "Fragments/MassDspWarehouseFragment.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/PlayerController.h"
 #include "Inventory/MassDspPlayerInventoryComponent.h"
 #include "Subsystems/MassDspLogisticsSubsystem.h"
 #include "Subsystems/MassDspManager.h"
@@ -20,18 +18,6 @@ namespace
 {
     constexpr int32 MaxTrackedItemTypes = UMassDspDebugStatsSubsystem::TrackedItemTypeCount;
     constexpr int32 MaxRateBucketCount = 512;
-
-    UMassDspPlayerInventoryComponent* GetPlayerInventoryComponent(UWorld* World)
-    {
-        if (!World)
-        {
-            return nullptr;
-        }
-
-        APlayerController* PlayerController = World->GetFirstPlayerController();
-        APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
-        return Pawn ? Pawn->FindComponentByClass<UMassDspPlayerInventoryComponent>() : nullptr;
-    }
 
     int32 ResolveRateBucketCount(float WindowSeconds, float BucketDurationSeconds)
     {
@@ -540,7 +526,7 @@ void UMassDspDebugStatsSubsystem::RebuildSnapshot(float SampleDeltaTime)
         AccumulateItemCount(CurrentItemTotals, Drone.CarriedItemType, Drone.CarriedQuantity);
     }
 
-    if (UMassDspPlayerInventoryComponent* PlayerInventory = GetPlayerInventoryComponent(World))
+    if (UMassDspPlayerInventoryComponent* PlayerInventory = Manager->GetOrCreatePlayerInventoryComponent())
     {
         TArray<FInventoryEntryView> PlayerEntries;
         PlayerInventory->GetActiveEntries(PlayerEntries);

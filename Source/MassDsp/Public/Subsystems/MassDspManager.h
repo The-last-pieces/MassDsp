@@ -17,6 +17,7 @@
 class UProceduralMeshComponent;
 class AMassDspGameMode;
 class UMassEntityConfigAsset;
+class UMassDspPlayerInventoryComponent;
 class UMassDspTechTreeSubsystem;
 struct FMassDspBuildingSaveData;
 struct FMassDspBeltSaveChunk;
@@ -311,6 +312,8 @@ public:
     bool SetAssemblerRecipe(FMassEntityHandle Entity, ERecipeType NewRecipeType);
 
     bool SetLogisticsTowerMode(FMassEntityHandle Entity, ELogisticsTowerMode NewMode);
+
+    UMassDspPlayerInventoryComponent* GetOrCreatePlayerInventoryComponent() const;
 
     int32 TryStoreItemsFromPlayer(FMassEntityHandle Entity, EItemType ItemType, int32 Quantity);
 
