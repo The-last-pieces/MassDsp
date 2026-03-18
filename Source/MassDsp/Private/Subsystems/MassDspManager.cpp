@@ -36,6 +36,34 @@
 
 namespace
 {
+    static float ComputeRemainingDelay(float ScheduledWorldTime, float CurrentWorldTime)
+    {
+        if (ScheduledWorldTime <= 0.f)
+        {
+            return 0.f;
+        }
+
+        return FMath::Max(0.f, ScheduledWorldTime - CurrentWorldTime);
+    }
+
+    static float ResolveRestoredScheduleTime(float LegacyAbsoluteWorldTime,
+                                             bool bUseRelativeDelay,
+                                             float RelativeDelaySeconds,
+                                             float CurrentWorldTime)
+    {
+        if (bUseRelativeDelay)
+        {
+            return CurrentWorldTime + FMath::Max(0.f, RelativeDelaySeconds);
+        }
+
+        if (LegacyAbsoluteWorldTime <= 0.f)
+        {
+            return 0.f;
+        }
+
+        return FMath::Max(LegacyAbsoluteWorldTime, CurrentWorldTime);
+    }
+
     static bool ProjectPointOntoRay(
         const FVector& RayOrigin,
         const FVector& RayDirection,
@@ -1428,6 +1456,9 @@ void UMassDspManager::CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& 
 {
     OutSaveData.Reset();
 
+    const UWorld* World = GetWorld();
+    const float CurrentWorldTime = World ? World->GetTimeSeconds() : 0.f;
+
     UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
     if (!EntitySubsystem)
     {
@@ -1458,6 +1489,8 @@ void UMassDspManager::CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& 
         {
             SaveData.bHasMinerFragment = true;
             SaveData.MinerData.NextProductionWorldTime = Miner->NextProductionWorldTime;
+            SaveData.MinerData.bUseRelativeProductionDelay = true;
+            SaveData.MinerData.RemainingProductionDelaySeconds = ComputeRemainingDelay(Miner->NextProductionWorldTime, CurrentWorldTime);
             SaveData.MinerData.ProductionInterval = Miner->ProductionInterval;
             SaveData.MinerData.InventoryCount = Miner->InventoryCount;
             SaveData.MinerData.MaxInventory = Miner->MaxInventory;
@@ -1472,11 +1505,35 @@ void UMassDspManager::CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& 
             SaveData.StorageData.StoredItemType = Storage->StoredItemType;
         }
 
+        if (const FMassDspWarehouseFragment* Warehouse = EntityManager.GetFragmentDataPtr<FMassDspWarehouseFragment>(Entity))
+        {
+            SaveData.bHasWarehouseFragment = true;
+            SaveData.WarehouseData.MaxInventoryItems = Warehouse->GetMaxInventory();
+            SaveData.WarehouseData.ItemStacks.Reset();
+
+            TArray<FInventoryEntryView> Entries;
+            Warehouse->GetActiveEntries(Entries);
+            for (const FInventoryEntryView& Entry : Entries)
+            {
+                if (Entry.ItemType == EItemType::None || Entry.Quantity <= 0)
+                {
+                    continue;
+                }
+
+                FMassDspItemStackSaveData Stack;
+                Stack.ItemType = Entry.ItemType;
+                Stack.Quantity = Entry.Quantity;
+                SaveData.WarehouseData.ItemStacks.Add(Stack);
+            }
+        }
+
         if (const FMassDspAssemblerFragment* Assembler = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity))
         {
             SaveData.bHasAssemblerFragment = true;
             SaveData.AssemblerData.ActiveRecipeType = Assembler->ActiveRecipeType;
             SaveData.AssemblerData.NextCraftWorldTime = Assembler->NextCraftWorldTime;
+            SaveData.AssemblerData.bUseRelativeCraftDelay = true;
+            SaveData.AssemblerData.RemainingCraftDelaySeconds = ComputeRemainingDelay(Assembler->NextCraftWorldTime, CurrentWorldTime);
             SaveData.AssemblerData.CraftingSpeedMultiplier = Assembler->CraftingSpeedMultiplier;
             SaveData.AssemblerData.InputBufferCapacity = Assembler->InputBufferCapacity;
             SaveData.AssemblerData.OutputBufferCapacity = Assembler->OutputBufferCapacity;
@@ -1630,8 +1687,11 @@ void UMassDspManager::CollectBeltSaveData(FMassDspBeltSaveChunk& OutSaveData) co
     }
 }
 
-bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData)
+bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData, int32 SaveVersion)
 {
+    const UWorld* World = GetWorld();
+    const float CurrentWorldTime = World ? World->GetTimeSeconds() : 0.f;
+
     UMassEntitySubsystem* EntitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassEntitySubsystem>() : nullptr;
     if (!EntitySubsystem)
     {
@@ -1705,7 +1765,11 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
         {
             if (FMassDspMinerFragment* Miner = EntityManager.GetFragmentDataPtr<FMassDspMinerFragment>(Entity))
             {
-                Miner->NextProductionWorldTime = SaveData.MinerData.NextProductionWorldTime;
+                Miner->NextProductionWorldTime = ResolveRestoredScheduleTime(
+                    SaveData.MinerData.NextProductionWorldTime,
+                    SaveVersion >= 2 && SaveData.MinerData.bUseRelativeProductionDelay,
+                    SaveData.MinerData.RemainingProductionDelaySeconds,
+                    CurrentWorldTime);
                 Miner->ProductionInterval = SaveData.MinerData.ProductionInterval;
                 Miner->InventoryCount = SaveData.MinerData.InventoryCount;
                 Miner->MaxInventory = SaveData.MinerData.MaxInventory;
@@ -1743,12 +1807,43 @@ bool UMassDspManager::RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveD
             }
         }
 
+        if (SaveData.bHasWarehouseFragment)
+        {
+            if (FMassDspWarehouseFragment* Warehouse = EntityManager.GetFragmentDataPtr<FMassDspWarehouseFragment>(Entity))
+            {
+                Warehouse->Inventory.Initialize(SaveData.WarehouseData.MaxInventoryItems);
+                for (const FMassDspItemStackSaveData& Stack : SaveData.WarehouseData.ItemStacks)
+                {
+                    if (Stack.ItemType == EItemType::None || Stack.Quantity <= 0)
+                    {
+                        continue;
+                    }
+
+                    Warehouse->TryConsumeItems(Stack.ItemType, Stack.Quantity);
+                }
+            }
+            else
+            {
+                UE_LOG(
+                    LogTemp,
+                    Error,
+                    TEXT("[SaveDebug] RestoreBuildingSaveData failed: missing WarehouseFragment at index=%d buildingType=%s"),
+                    Index,
+                    *StaticEnum<EBuildingType>()->GetNameStringByValue(static_cast<int64>(SaveData.BuildingType)));
+                return false;
+            }
+        }
+
         if (SaveData.bHasAssemblerFragment)
         {
             if (FMassDspAssemblerFragment* Assembler = EntityManager.GetFragmentDataPtr<FMassDspAssemblerFragment>(Entity))
             {
                 Assembler->ActiveRecipeType = SaveData.AssemblerData.ActiveRecipeType;
-                Assembler->NextCraftWorldTime = SaveData.AssemblerData.NextCraftWorldTime;
+                Assembler->NextCraftWorldTime = ResolveRestoredScheduleTime(
+                    SaveData.AssemblerData.NextCraftWorldTime,
+                    SaveVersion >= 2 && SaveData.AssemblerData.bUseRelativeCraftDelay,
+                    SaveData.AssemblerData.RemainingCraftDelaySeconds,
+                    CurrentWorldTime);
                 Assembler->CraftingSpeedMultiplier = SaveData.AssemblerData.CraftingSpeedMultiplier;
                 Assembler->InputBufferCapacity = SaveData.AssemblerData.InputBufferCapacity;
                 Assembler->OutputBufferCapacity = SaveData.AssemblerData.OutputBufferCapacity;
@@ -1938,6 +2033,11 @@ void UMassDspManager::FinalizeBeltMutations(const TSet<FIntPoint>& AffectedChunk
 
     RebuildBeltSoA();
 
+    if (BeltEntityRegistry.IsEmpty())
+    {
+        ClearAllBeltItemInstances();
+    }
+
     for (const FIntPoint& ChunkKey : AffectedChunkKeys)
     {
         if (FBeltChunk* Chunk = BeltChunks.Find(ChunkKey))
@@ -1946,6 +2046,20 @@ void UMassDspManager::FinalizeBeltMutations(const TSet<FIntPoint>& AffectedChunk
             {
                 FlushChunk(ChunkKey, *Chunk, FVector::ZeroVector);
             }
+        }
+    }
+}
+
+void UMassDspManager::ClearAllBeltItemInstances()
+{
+    CachedTransformsByType.Reset();
+
+    for (auto& [ItemType, ISM] : ItemISMPool)
+    {
+        if (ISM && ISM->GetInstanceCount() > 0)
+        {
+            ISM->ClearInstances();
+            ISM->MarkRenderStateDirty();
         }
     }
 }

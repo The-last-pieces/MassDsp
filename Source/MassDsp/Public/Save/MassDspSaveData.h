@@ -72,6 +72,12 @@ struct MASSDSP_API FMassDspMinerFragmentSaveData
     float NextProductionWorldTime = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    bool bUseRelativeProductionDelay = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float RemainingProductionDelaySeconds = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     float ProductionInterval = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
@@ -100,6 +106,18 @@ struct MASSDSP_API FMassDspStorageFragmentSaveData
 };
 
 USTRUCT(BlueprintType)
+struct MASSDSP_API FMassDspWarehouseFragmentSaveData
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    int32 MaxInventoryItems = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    TArray<FMassDspItemStackSaveData> ItemStacks;
+};
+
+USTRUCT(BlueprintType)
 struct MASSDSP_API FMassDspAssemblerFragmentSaveData
 {
     GENERATED_BODY()
@@ -109,6 +127,12 @@ struct MASSDSP_API FMassDspAssemblerFragmentSaveData
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     float NextCraftWorldTime = 0.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    bool bUseRelativeCraftDelay = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    float RemainingCraftDelaySeconds = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     float CraftingSpeedMultiplier = 1.0f;
@@ -187,6 +211,12 @@ struct MASSDSP_API FMassDspBuildingSaveData
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     FMassDspStorageFragmentSaveData StorageData;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    bool bHasWarehouseFragment = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
+    FMassDspWarehouseFragmentSaveData WarehouseData;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     bool bHasAssemblerFragment = false;
@@ -549,7 +579,7 @@ class MASSDSP_API UMassDspSaveGame : public USaveGame
     GENERATED_BODY()
 
 public:
-    static constexpr int32 CurrentSaveVersion = 1;
+    static constexpr int32 CurrentSaveVersion = 2;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|Save")
     FMassDspSaveHeader Header;

@@ -207,6 +207,7 @@ private:
     void UnregisterBeltRenderState(int32 RenderId);
     int32 EnsureBeltRenderSectionIndex(FBeltRenderState& RenderState, FBeltChunk& Chunk);
     void ClearBeltRenderSection(const FBeltRenderState& RenderState, FBeltChunk& Chunk);
+    void ClearAllBeltItemInstances();
 
     // ── 传送带网格分块（Chunk）管理 ──────────────────────────────────────────────
     // 以 SpatialGridCellSize 为格子边长将世界划分为块，每块独立 PMC。
@@ -449,7 +450,7 @@ public:
     TArray<FMassEntityHandle> BatchSpawnBuildings(const TArray<FBuildingSpawnData>& SpawnDataList);
     void CollectBuildingSaveData(TArray<FMassDspBuildingSaveData>& OutSaveData) const;
     void CollectBeltSaveData(FMassDspBeltSaveChunk& OutSaveData) const;
-    bool RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData);
+    bool RestoreBuildingSaveData(const TArray<FMassDspBuildingSaveData>& InSaveData, int32 SaveVersion);
     bool RestoreBeltSaveData(const FMassDspBeltSaveChunk& InSaveData);
     bool DestroyBelt(FBeltHandle BeltHandle);
     bool DestroyBuilding(FMassEntityHandle BuildingEntity);

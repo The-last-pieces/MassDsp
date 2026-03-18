@@ -453,7 +453,7 @@ bool UMassDspGameInstance::RestoreCurrentState(const UMassDspSaveGame& InSaveGam
         return false;
     }
 
-    if (!Manager->RestoreBuildingSaveData(InSaveGame.Buildings))
+    if (!Manager->RestoreBuildingSaveData(InSaveGame.Buildings, InSaveGame.Header.SaveVersion))
     {
         return false;
     }
@@ -505,6 +505,9 @@ bool UMassDspGameInstance::UpgradeSaveGameToCurrentVersion(UMassDspSaveGame& InO
         {
         case 0:
             InOutSaveGame.Header.SaveVersion = 1;
+            break;
+        case 1:
+            InOutSaveGame.Header.SaveVersion = 2;
             break;
         default:
             return false;
