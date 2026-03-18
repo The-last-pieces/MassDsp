@@ -10,9 +10,9 @@
 
 完整视频: [GitHub Release](https://github.com/The-last-pieces/MassDsp/releases/download/1.0.0/Demo.mp4)
 
-![Demo Preview](GitDoc/preview.gif)
+![Demo Preview](https://github.com/The-last-pieces/MassDsp/blob/v1/GitDoc/Preview.gif)
 
-![Demo Preview](GitDoc/preview.png)
+![Demo Preview](https://github.com/The-last-pieces/MassDsp/blob/v1/GitDoc/preview.png)
 
 ## 项目简介
 
