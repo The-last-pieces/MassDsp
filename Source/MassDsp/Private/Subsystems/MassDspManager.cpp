@@ -3824,7 +3824,30 @@ FMassEntityHandle UMassDspManager::ConfirmPreviewBuilding()
     SpawnList.Add(FBuildingSpawnData(FinalTransform, BuildingType));
     TArray<FMassEntityHandle> Results = BatchSpawnBuildings(SpawnList);
 
-    return Results.IsEmpty() ? FMassEntityHandle() : Results[0];
+    if (Results.IsEmpty())
+    {
+        return FMassEntityHandle();
+    }
+
+    const FMassEntityHandle SpawnedEntity = Results[0];
+    if (BuildingType == EBuildingType::LogisticsTower)
+    {
+        if (UMassDspLogisticsSubsystem* LogisticsSubsystem = GetWorld() ? GetWorld()->GetSubsystem<UMassDspLogisticsSubsystem>() : nullptr)
+        {
+            const FVector TowerLocation = FinalTransform.GetLocation();
+            constexpr int32 InitialDroneCount = 100;
+            for (int32 DroneIndex = 0; DroneIndex < InitialDroneCount; ++DroneIndex)
+            {
+                LogisticsSubsystem->CreateDrone(
+                    SpawnedEntity,
+                    TowerLocation,
+                    FGameConst::DefaultDroneFlightSpeed,
+                    FGameConst::DroneCarryCapacity);
+            }
+        }
+    }
+
+    return SpawnedEntity;
 }
 
 void UMassDspManager::CancelBuildingPreview()

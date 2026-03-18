@@ -89,8 +89,8 @@ public:
         meta = (ClampMin = "0.1"))
     float ScanInterval = FGameConst::DefaultLogisticsScanInterval;
 
-    /** 归属此塔的无人机上限数量（用于 GameMode 初始化时批量 CreateDrone） */
+    /** 归属此塔的默认无人机数量（用于初始化或手动放置后的批量 CreateDrone） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassDsp|LogisticsTower",
         meta = (ClampMin = "0", ClampMax = "500"))
-    int32 MaxAffiliatedDrones = 3;
+    int32 MaxAffiliatedDrones = 100;
 };
