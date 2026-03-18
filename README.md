@@ -8,11 +8,11 @@
 
 演示结果: 在极端测试场景 5w建筑+4w传送带+30w传送带物体+3w物流无人机 下, 平均帧在100FPS附近, 读/存档无明显卡顿
 
-完整视频: [GitHub Release](https://github.com/The-last-pieces/MassDsp/releases)
+完整视频: [GitHub Release](https://github.com/The-last-pieces/MassDsp/releases/download/1.0.0/Demo.mp4)
 
-![Demo Preview](./GitDoc/preview.gif)
+![Demo Preview](GitDoc/preview.gif)
 
-![Demo Preview](./GitDoc/preview.png)
+![Demo Preview](GitDoc/preview.png)
 
 ## 项目简介
 
